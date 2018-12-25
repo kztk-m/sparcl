@@ -1,0 +1,75 @@
+cabal-version: 1.12
+
+name:           sparcl
+version:        0.1.0.0
+synopsis:       A language for partial reversible computation with linear types
+description:    
+author:         Kazutaka Matsuda
+maintainer:     kztk@ecei.tohoku.ac.jp
+copyright:      2018 Kazutaka Matsuda
+license:        BSD3
+license-file:   LICENSE
+build-type:     Simple
+
+extra-source-files:
+    README.md
+    ChangeLog.md
+
+library
+  exposed-modules:
+      Language.Sparcl.SrcLoc,
+      Language.Sparcl.Untyped.Syntax,
+      Language.Sparcl.Untyped.Parser
+
+  other-modules:
+
+  hs-source-dirs:
+      src
+  build-depends:
+      base >=4.7 && <5,
+      mtl,
+      containers, 
+      megaparsec, 
+      ansi-wl-pprint
+
+  ghc_options: 
+      -Wall -Wno-name-shadowing -Wno-unticked-promoted-constructors
+
+  default-language: Haskell2010
+
+  default-extensions:
+     FlexibleContexts, FlexibleInstances, 
+     MultiParamTypeClasses, FunctionalDependencies, 
+     MultiWayIf, LambdaCase, TupleSections, 
+     RankNTypes, GADTs, ScopedTypeVariables, 
+     TypeApplications, TypeOperators, 
+     KindSignatures, DataKinds, 
+     BangPatterns, PatternSynonyms, 
+     DeriveFunctor, DeriveFoldable, DeriveTraversable, 
+     GeneralizedNewtypeDeriving
+
+     
+  
+executable sparcl-exe
+  main-is: Main.hs
+  other-modules:
+
+  hs-source-dirs:
+      app
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      base >=4.7 && <5
+    , sparcl
+  default-language: Haskell2010
+
+-- test-suite sparcl-test
+--   type: exitcode-stdio-1.0
+--   main-is: Spec.hs
+--   other-modules:
+--   hs-source-dirs:
+--       test
+--   ghc-options: -threaded -rtsopts -with-rtsopts=-N
+--   build-depends:
+--       base >=4.7 && <5
+--     , sparcl
+--   default-language: Haskell2010
