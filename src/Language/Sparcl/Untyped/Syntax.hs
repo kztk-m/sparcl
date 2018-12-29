@@ -4,24 +4,21 @@ import Language.Sparcl.SrcLoc
 
 -- Surface Syntax
 
-data Name = NormalName String
-          | MixFix [String] Bool Bool
-          | Generated  Int
-  deriving (Ord, Eq, Show) 
+import Language.Sparcl.Name
 
--- "if_then_else_" is represented by MixFix ["if", "then", "else"] False True 
+makeTupleExp :: [LExp] -> LExp
+makeTupleExp [e] = e
+makeTupleExp es  = noLoc $ Con (tupleName $ length es) es
 
-
-
-type ModuleName = [String]
-
-data QName = QName ModuleName Name -- qualified name (for global names)
-           | BName Name            -- bare name
+makeTuplePat :: [LPat] -> LPat
+makeTuplePat [p] = p
+makeTuplePat ps = noLoc $ PCon (tupleName $ length ps) ps 
 
 data Literal
   = LitInt    Int
   | LitDouble Double
   | LitChar   Char 
+  deriving Show
 
 type LTyp = Loc Typ -- located types (not linear) 
 
@@ -32,35 +29,40 @@ data Typ
   | TRev    LTyp
   | TArr    Typ  LTyp
   | TForall Name LTyp
+  deriving Show
 
 type LExp = Loc Exp 
 
+-- TODO: add "if" expression 
 data Exp
   = Lit Literal
   | Var QName
   | App LExp   LExp
-  | Abs [Pat] LExp
+  | Abs [LPat] LExp
   | Con QName [LExp]
   | Bang LExp 
-  | Case LExp [ (Pat, Clause) ]
+  | Case LExp [ (LPat, Clause) ]
   | Lift LExp LExp
   | Sig  LExp Typ
   | Let  [LDecl] LExp 
 
   | RCon QName [LExp]
-  | RCase LExp [ (Pat, Clause) ]
+--  | RCase LExp [ (LPat, Clause) ]
   | RPin  LExp LExp
+  deriving Show -- for debugging
 
 type LPat = Loc Pat
 data Pat = PVar Name
          | PCon QName [LPat]
          | PBang LPat
          | PREV  LPat
+  deriving Show 
 
 data Clause = Clause { body :: LExp, whereClause :: [LDecl], withExp :: Maybe LExp } 
+  deriving Show 
 
 newtype Prec  = Prec Int
-  deriving (Eq, Ord) 
+  deriving (Eq, Ord, Show) 
 
 instance Bounded Prec where
   minBound = Prec 0
@@ -71,15 +73,19 @@ instance Enum Prec where
   fromEnum (Prec n) = n 
 
 data Assoc = L | R | N 
+  deriving (Eq, Ord, Show)
 
 type LDecl = Loc Decl 
 
 data Decl
-  = DDef QName [ ([LPat],  Clause) ] 
-  | DSig QName Typ
+  = DDef Name [ ([LPat],  Clause) ] 
+  | DSig Name Typ
   | DFixity QName Prec Assoc
   | DMutual [LDecl] 
-  -- | Modules are not supported yet.
-  | DModule QName [LDecl]
-  | DImport QName 
-  | DOpen   QName 
+   deriving Show 
+
+-- data Module
+--   = Module ModuleName [Export] [Import]  [Decl]
+
+type Export = QName
+data Import = Import { importModuleName :: ModuleName, importingNames ::  [QName] }

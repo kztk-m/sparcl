@@ -18,8 +18,10 @@ extra-source-files:
 library
   exposed-modules:
       Language.Sparcl.SrcLoc,
+      Language.Sparcl.Name,
       Language.Sparcl.Untyped.Syntax,
-      Language.Sparcl.Untyped.Parser
+      Language.Sparcl.Untyped.Parser,
+      Language.Sparcl.Untyped.Desugar
 
   other-modules:
 
@@ -30,6 +32,9 @@ library
       mtl,
       containers, 
       megaparsec, 
+      parser-combinators, 
+      directory, 
+      filepath, 
       ansi-wl-pprint
 
   ghc_options: 
