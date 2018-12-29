@@ -2,6 +2,8 @@ module Language.Sparcl.Untyped.Parser where
 
 import Language.Sparcl.Untyped.Syntax
 import Language.Sparcl.SrcLoc
+import Language.Sparcl.Name
+import Language.Sparcl.Literal 
 
 import qualified Text.Megaparsec.Char.Lexer as L
 import qualified Text.Megaparsec.Char as P
@@ -16,7 +18,7 @@ import Data.Map (Map)
 import Data.Void 
 import Data.Char
 import qualified Data.List.NonEmpty ( fromList )
-import Data.List.NonEmpty ( NonEmpty(..) )
+-- import Data.List.NonEmpty ( NonEmpty(..) )
 
 import Data.List (nub) 
 
@@ -31,8 +33,8 @@ import qualified Control.Monad.Fail as Fail
 -- import qualified Text.PrettyPrint.ANSI.Leijen as D
 -- import Text.PrettyPrint.ANSI.Leijen (Doc)
 
-import System.Directory as Dir
-import System.FilePath as FP 
+-- import System.Directory as Dir
+-- import System.FilePath as FP 
 
 type ModuleParser = Parsec Void String 
 type PM = ParsecT Void String (State PInfo)
@@ -87,7 +89,7 @@ refineName (BName n) = do
     _    -> Fail.fail $ "Ambiguous name `" ++ show n ++ "' " ++ show (nub res) 
   where
     checkNames :: ModuleName -> Name -> [QName] -> [ModuleName]
-    checkNames cm n [] = []
+    checkNames _cm _n [] = []
     checkNames cm n (BName n' : ns) =
       if n == n' then cm : checkNames cm n ns else checkNames cm n ns
     checkNames cm n (QName m n' : ns) =
@@ -240,7 +242,7 @@ defP = ddefP
   where
     ddefP :: PM Decl
     ddefP = do
-      symbol "def"
+      _ <- symbol "def"
       f <- rawVarIdentP  
       pcs <- P.sepBy1 decBodyP (symbol "|")
       ns <- gets piBoundNames
@@ -249,7 +251,7 @@ defP = ddefP
 
     decBodyP = do
       ps <- P.many (loc simplePatP)
-      symbol "="
+      _ <- symbol "="
       c <- clauseP 
       return $ (ps , c)
 
@@ -275,7 +277,7 @@ clauseP = do
 
 fixityP :: PM Decl
 fixityP = do
-  symbol "fixity"
+  _ <- symbol "fixity"
   f <- rawVarIdentP
   n <- fmap Prec intP
   tbl <- gets piOpTable
@@ -394,23 +396,24 @@ expP = caseExpP <|> absExpP <|> opExpP
 
 caseExpP :: PM Exp
 caseExpP = do
-  symbol "case"
+  _ <- symbol "case"
   e0 <- lexpP
-  symbol "of"
+  _ <- symbol "of"
   pcs <- brackets $ flip P.sepEndBy (symbol ";") $ do
     p <- lpatP
-    symbol "->"
+    _ <- symbol "->"
     e <- clauseP
     return (p, e)
   return $ Case e0 pcs 
 
 absExpP :: PM Exp
 absExpP = do
-  symbol "\\"
+  _ <- symbol "\\"
   ps <- P.someTill (loc simplePatP) (symbol "->")
   e <- lexpP
   return $ Abs ps e 
 
+lapp :: Loc Exp -> Loc Exp -> Loc Exp
 lapp a b = Loc (location a <> location b) (App a b)
 
 opExpP :: PM Exp
@@ -437,7 +440,7 @@ opExpP = do
       where
         infixOf L = P.InfixL
         infixOf R = P.InfixR
-        infoxOf _ = P.InfixN
+        infixOf _ = P.InfixN
 
 lappExpP :: PM LExp
 lappExpP =
@@ -496,9 +499,12 @@ simplePatP =
   <|> (PREV <$> loc (symbol "rev" *> simplePatP))
   <|> parens patP
   <|> varP
+  <|> conP 
   where
     varP = PVar <$> rawVarIdentP
-
+    conP = do
+      c <- refineName =<< conIdentP
+      return $ PCon c [] 
 
 {-
 In the context k, the operators of precedence >= k can only occur without parens.

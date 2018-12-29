@@ -19,9 +19,12 @@ library
   exposed-modules:
       Language.Sparcl.SrcLoc,
       Language.Sparcl.Name,
+      Language.Sparcl.Literal,
+      Language.Sparcl.Pretty,
       Language.Sparcl.Untyped.Syntax,
       Language.Sparcl.Untyped.Parser,
-      Language.Sparcl.Untyped.Desugar
+      Language.Sparcl.Untyped.Desugar,
+      Language.Sparcl.Untyped.Eval
 
   other-modules:
 
@@ -37,7 +40,7 @@ library
       filepath, 
       ansi-wl-pprint
 
-  ghc_options: 
+  ghc-options: 
       -Wall -Wno-name-shadowing -Wno-unticked-promoted-constructors
 
   default-language: Haskell2010
@@ -67,14 +70,14 @@ executable sparcl-exe
     , sparcl
   default-language: Haskell2010
 
--- test-suite sparcl-test
---   type: exitcode-stdio-1.0
---   main-is: Spec.hs
---   other-modules:
---   hs-source-dirs:
---       test
---   ghc-options: -threaded -rtsopts -with-rtsopts=-N
---   build-depends:
---       base >=4.7 && <5
---     , sparcl
---   default-language: Haskell2010
+test-suite sparcl-test
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  other-modules:
+  hs-source-dirs:
+      test
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      base >=4.7 && <5
+    , sparcl
+  default-language: Haskell2010
