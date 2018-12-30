@@ -256,10 +256,10 @@ defP = ddefP
       return $ (ps , c)
 
 whereP :: PM [LDecl]
-whereP = P.option [] (symbol "where" *> braces ldeclsP) 
+whereP = P.option [] (P.try $ symbol "where" *> braces ldeclsP) 
 
 withP :: PM (Maybe LExp)
-withP = P.option Nothing (symbol "with" *> fmap Just lexpP)
+withP = P.option Nothing (P.try $ symbol "with" *> fmap Just lexpP)
 
 normalClauseP :: PM Clause
 normalClauseP = do
@@ -300,11 +300,11 @@ reservedOp :: [String]
 reservedOp = ["->", "!", "<-", "=>", "\\"]
 
 reservedIdent :: [String]
-reservedIdent = ["let", "in", "case", "of", "with", "def", "fixity", "sig", "type", "data", "where"]
+reservedIdent = ["let", "in", "case", "of", "with", "def", "fixity", "sig", "type", "data", "where", "unlift", "lift", "forward", "backward" ]
 
 assertNonReserved :: MonadParsec e String m => String -> [String] -> m String
 assertNonReserved s ss
-  | s `elem` ss = P.unexpected (P.Tokens $ Data.List.NonEmpty.fromList s)
+  | s `elem` ss = P.unexpected (P.Tokens $ Data.List.NonEmpty.fromList $ "reserved " ++ s)
   | otherwise   = return s 
 
 moduleNameP :: MonadParsec e String m => m [String]
@@ -444,6 +444,11 @@ opExpP = do
 
 lappExpP :: PM LExp
 lappExpP =
+  liftP
+  <|> unliftP 
+  <|> forwardP
+  <|> backwardP
+  <|> 
   (do Loc l n <- loc varIdentP
       n' <- refineName n 
       es <- P.many lsimpleExpP
@@ -455,7 +460,17 @@ lappExpP =
   <|> bangExpP
   <|> parens lexpP
   <|> loc literalP 
-  
+  where 
+    forwardP  = parseAppLike ((\[x] -> Fwd x) <$ symbol "forward")  1
+    backwardP = parseAppLike ((\[x] -> Bwd x) <$ symbol "backward") 1
+    liftP     = parseAppLike ((\[x,y] -> Lift x y) <$ symbol "lift") 2
+    unliftP   = parseAppLike ((\[x] -> Unlift x) <$ symbol "unlift") 1
+
+    parseAppLike :: PM ([LExp] -> a) -> Int -> PM (Loc a) 
+    parseAppLike e n = do
+      Loc l f <- loc e
+      es <- mapM (const lsimpleExpP) [1..n]
+      return $ Loc (l <> mconcat [location e | e <- es]) (f es) 
 
 lsimpleExpP :: PM LExp
 lsimpleExpP =

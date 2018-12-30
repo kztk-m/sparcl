@@ -51,10 +51,10 @@ nameTyTuple :: Int -> QName
 nameTyTuple = nameTuple
 
 nameTyBang :: QName
-nameTyBang = QName baseModule (NormalName "Bang")
+nameTyBang = QName baseModule (NormalName "bang")
 
 nameTyRev :: QName
-nameTyRev = QName baseModule (NormalName "Rev")
+nameTyRev = QName baseModule (NormalName "rev")
 
 nameTyInt :: QName
 nameTyInt = QName baseModule (NormalName "Int")

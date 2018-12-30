@@ -3,7 +3,7 @@
 
 module Language.Sparcl.Untyped.Eval where
 
-import Language.Sparcl.Untyped.Desugar
+import Language.Sparcl.Untyped.Desugar.Syntax
 
 import Language.Sparcl.Name 
 import Language.Sparcl.Literal
@@ -13,24 +13,84 @@ import qualified Data.Map as M
 import Data.Map (Map)
 
 import Control.Monad.Except 
-import Control.Monad.State
+-- import Control.Monad.State
+import Control.Monad.Reader
+
+-- import qualified Control.Monad.Fail as Fail
+
+import Language.Sparcl.Pretty 
+import qualified Text.PrettyPrint.ANSI.Leijen as D
+
+import Control.Exception (Exception, throw)
+data RunTimeException = RunTimeException Doc
+
+instance Show RunTimeException where
+  show (RunTimeException d) =
+    show (D.text "Runtime Error:" D.</> D.nest 2 d)
+
+instance Exception RunTimeException
+
+rtError :: Doc -> a
+rtError d = throw (RunTimeException d)
+
 
 type Env = Map QName Value
 
-type Eval = StateT Int (Either String) 
+-- type Eval = ReaderT Int (Either String)
+type Eval = Reader Int 
+
+extendsEnv :: [(Name, Value)] -> Env -> Env
+extendsEnv nvs env = foldr (uncurry (extendEnv . BName)) env nvs 
+   
+lookupEnv :: QName -> Env -> Eval Value
+lookupEnv n env = case M.lookup n env of
+  Nothing -> rtError $ D.text "Undefined variable:" D.<+> ppr n
+                       D.</> D.text "Searched through: " D.<+>
+                       ppr [ k | k <- M.keys env ]
+    -- -- if nothing, we treat the variable were reversible one. 
+    -- return $ VRes (lookupEnvR n) (return . singletonEnv n)
+  Just v  -> return v
+
+singletonEnv :: QName -> Value -> Env
+singletonEnv = M.singleton 
+
+extendEnv :: QName -> Value -> Env -> Env
+extendEnv q v env = M.insert q v env 
+
+unionEnv :: Env -> Env -> Env
+unionEnv env1 env2 = M.union env1 env2 
+
+emptyEnv :: Env
+emptyEnv = M.empty 
+
+pprEnv :: Env -> Doc
+pprEnv env =
+  D.sep [ ppr k D.<+> D.text "=" D.<+> ppr v
+        | (k, v) <- M.toList env ] 
+
+evalTest :: Eval a -> IO a
+evalTest a = return $ runReader a 0 
+  -- case runReaderT a 0 of
+  --   Left  s -> Fail.fail s
+  --   Right v -> return v 
+
 type Addr = Int 
+type Heap = Map Addr Value 
 
-newAddr :: Eval Addr
-newAddr = do
-  i <- get
-  put $! i + 1
-  return i
+newAddr :: (Addr -> Eval a) -> Eval a
+newAddr f = do
+  i <- ask
+  local (+1) $ f i 
 
-type Heap = Map Int Value 
+newAddrs :: Int -> ([Addr] -> Eval a) -> Eval a
+newAddrs n f = do
+  i <- ask
+  local (+n) $ f [i..i+n]
+
 
 lookupHeap :: Addr -> Heap -> Eval Value 
 lookupHeap n heap = case M.lookup n heap of
-  Nothing -> throwError "Undefined addr"
+  Nothing -> rtError $ D.text "Undefined addr"
   Just v  -> return v
 
 extendHeap :: Addr -> Value -> Heap -> Heap
@@ -51,24 +111,6 @@ removesHeap xs h = foldl (\h x -> removeHeap x h) h xs
 singletonHeap :: Addr -> Value -> Heap 
 singletonHeap = M.singleton 
 
-lookupEnv :: QName -> Env -> Eval Value
-lookupEnv n env = case M.lookup n env of
-  Nothing -> throwError $ "Undefined value: " ++ show n 
-    -- -- if nothing, we treat the variable were reversible one. 
-    -- return $ VRes (lookupEnvR n) (return . singletonEnv n)
-  Just v  -> return v
-
-singletonEnv :: QName -> Value -> Env
-singletonEnv = M.singleton 
-
-extendEnv :: QName -> Value -> Env -> Env
-extendEnv q v env = M.insert q v env 
-
-unionEnv :: Env -> Env -> Env
-unionEnv env1 env2 = M.union env1 env2 
-
-emptyEnv :: Env
-emptyEnv = M.empty 
 
 -- lookupEnvR :: QName -> Env -> Eval Value
 -- lookupEnvR n env = case M.lookup n env of
@@ -80,8 +122,26 @@ data Value = VCon QName [Value]
            | VBang Value
            | VLit Literal
            | VFun (Value -> Eval Value) 
-           | VLift Value Value
            | VRes (Heap -> Eval Value) (Value -> Eval Heap) 
+
+instance Pretty Value where
+  pprPrec _ (VCon c []) = ppr c 
+  pprPrec k (VCon c vs) = parensIf (k > 9) $ 
+    ppr c D.<+> D.hsep [ pprPrec 10 v | v <- vs ]
+
+  pprPrec k (VBang e) = parensIf (k > 9) $
+    D.text "!" D.<+> pprPrec 9 e 
+  pprPrec _ (VLit l) = ppr l
+  pprPrec _ (VFun _) = D.text "<function>"
+  pprPrec _ (VRes _ _) = D.text "<reversible computation>"
+
+    
+
+evalUDecls :: Env -> [LDecl] -> Eval Env
+evalUDecls env ds = do
+    rec ev  <- mapM (evalD env') ds
+        let env' = extendsEnv ev env
+    return env' 
 
 evalU :: Env -> LExp -> Eval Value
 evalU env (Loc _loc exp) = case exp of
@@ -95,7 +155,7 @@ evalU env (Loc _loc exp) = case exp of
         v2 <- evalU env e2
         f v2
       _ ->
-        throwError $ "the first component of application must be a function."
+        rtError $ D.text "the first component of application must be a function."
   Abs n e ->
     return $ VFun (\v -> evalU (extendEnv (BName n) v env) e)
 
@@ -119,9 +179,20 @@ evalU env (Loc _loc exp) = case exp of
     evalU env e
 
   Let ds e -> do
-    rec ev  <- mapM (evalD env') ds
-        let env' = extends ev env
+    env' <- evalUDecls env ds 
     evalU env' e
+
+  Unlift e -> do
+    VFun f <- evalU env e
+    newAddr $ \a -> do
+      VRes f0 b0 <- f (VRes (\hp -> lookupHeap a hp)
+                        (\v  -> return $ singletonHeap a v))
+      let f0' v = f0 (singletonHeap a v)
+      let b0' v = do hp <- b0 v
+                     lookupHeap a hp 
+      let c = nameTuple 2
+      return $ VCon c [VFun f0', VFun b0'] 
+  
 
   RCon q es -> do 
     vs <- mapM (evalU env) es
@@ -134,7 +205,7 @@ evalU env (Loc _loc exp) = case exp of
                                        envs <- zipWithM (\v u -> runBwd v u) vs us'
                                        return $ foldr unionHeap emptyHeap envs
                        _ ->
-                         throwError "out of the range.")
+                         rtError $ D.text "out of the range.")
   
   RCase e0 pes -> do
     VRes f0 b0 <- evalU env e0
@@ -165,17 +236,17 @@ evalU env (Loc _loc exp) = case exp of
                                              hp2 <- b2 b
                                              hp1 <- b1 a
                                              return $ unionHeap hp1 hp2
-                           _ -> throwError "Expected a pair" 
+                           _ -> rtError $ D.text "Expected a pair" 
                   )
                            
 
 
     
 evalCase :: Env -> Value -> [ (LPat, LExp) ] -> Eval Value
-evalCase _   _ [] = throwError "pattern match error"
+evalCase _   _ [] = rtError $ D.text "pattern match error"
 evalCase env v ((p, e):pes) =
   case findMatch v p of
-    Just binds -> evalU (extends binds env) e
+    Just binds -> evalU (extendsEnv binds env) e
     _          -> evalCase env v pes 
 
 findMatch :: Value -> LPat -> Maybe [ (Name, Value) ]
@@ -191,25 +262,25 @@ evalCaseF env hp f pes = do
   go v0 [] pes
   where
     go :: Value -> [Value -> Eval Bool] -> [ (LPat, LExp, Value -> Eval Bool) ] -> Eval Value
-    go _  _       [] = throwError "pattern match failure (fwd)"
+    go _  _       [] = rtError $ D.text "pattern match failure (fwd)"
     go v0 checker ((p,e,ch) : pes) =
       case findMatch v0 p of
         Nothing -> do
           go v0 (ch:checker) pes
-        Just binds -> do
-          as <- mapM (const newAddr) binds
-          let hbinds = zipWith (\a (_, v) -> (a, v)) as binds 
-          let binds' = zipWith (\a (x, _) ->
-                                  (x, VRes (lookupHeap a) (return . singletonHeap a))) as binds
-          VRes f _ <- evalU (extends binds' env) e
-          res <- f (foldr (\(a,v) -> extendHeap a v) hp hbinds)
-          checkAssert ch checker res
+        Just binds ->
+          newAddrs (length binds) $ \as -> do 
+             let hbinds = zipWith (\a (_, v) -> (a, v)) as binds 
+             let binds' = zipWith (\a (x, _) ->
+                                     (x, VRes (lookupHeap a) (return . singletonHeap a))) as binds
+             VRes f _ <- evalU (extendsEnv binds' env) e
+             res <- f (foldr (\(a,v) -> extendHeap a v) hp hbinds)
+             checkAssert ch checker res
 
     checkAssert ch checker res = do
       v  <- ch res
       vs <- mapM (\c -> c res) checker
       when (v && not (or vs)) $
-        throwError "Assertion failed (fwd)"        
+        rtError (D.text "Assertion failed (fwd)")
       return res
 
 
@@ -224,29 +295,23 @@ evalCaseB env vres b pes = do
                          Just _ -> True
                          _      -> False 
     
-    go _ [] = throwError "pattern match failure (bwd)"
+    go _ [] = rtError $ D.text "pattern match failure (bwd)"
     go checker ((p,e,ch):pes) = do
       flg <- ch vres
       case not flg of
         False -> go (mkAssert p:checker) pes
         True -> do
           let xs = freeVarsP (unLoc p)
-          as <- mapM (const newAddr) xs
-          let binds' = zipWith (\x a ->
-                                  (x, VRes (lookupHeap a) (return . singletonHeap a))) xs as
-          VRes _ b <- evalU (extends binds' env) e
-          hpBr <- b vres
-          v0 <- fillPat (unLoc p) <$> zipWithM (\x a -> (x,) <$> lookupHeap a hpBr) xs as
-          when (not (or $ map ($ v0) checker)) $
-            throwError "Assertion failed (bwd)"
-          return $ (v0, removesHeap as hpBr)
-          
-
-    freeVarsP :: Pat -> [Name]
-    freeVarsP (PVar n) = [n]
-    freeVarsP (PCon _ ps) = concatMap (freeVarsP . unLoc) ps
-    freeVarsP (PBang p)   = freeVarsP $ unLoc p 
-    
+          newAddrs (length xs) $ \as -> do 
+            let binds' = zipWith (\x a ->
+                                    (x, VRes (lookupHeap a) (return . singletonHeap a))) xs as
+            VRes _ b <- evalU (extendsEnv binds' env) e
+            hpBr <- b vres
+            v0 <- fillPat (unLoc p) <$> zipWithM (\x a -> (x,) <$> lookupHeap a hpBr) xs as
+            when (not (or $ map ($ v0) checker)) $
+              rtError $ D.text "Assertion failed (bwd)"
+            return $ (v0, removesHeap as hpBr)
+              
     fillPat :: Pat -> [ (Name, Value) ] -> Value
     fillPat (PVar n) bs = case lookup n bs of
       Just v -> v
@@ -260,22 +325,17 @@ evalCaseB env vres b pes = do
 
 runFwd :: Value -> Heap -> Eval Value
 runFwd (VRes f _) = f
-runFwd _          = \_ -> throwError "expected a reversible comp."
+runFwd _          = \_ -> rtError $ D.text "expected a reversible comp."
 
 runBwd :: Value -> Value -> Eval Heap
 runBwd (VRes _ b) = b 
-runBwd _          = \_ -> throwError "expected a reversible comp." 
+runBwd _          = \_ -> rtError $ D.text "expected a reversible comp." 
   
   
 evalD :: Env -> LDecl -> Eval (Name, Value)
-evalD = undefined
+evalD env (unLoc -> DDef n _ e) = do
+  (n,) <$> evalU env e
 
 
-extends :: [(Name, Value)] -> Env -> Env
-extends []          env = env
-extends ((n,v):nvs) env = extendEnv (BName n) v (extends nvs env) 
-   
-      
-  
-  
+
   

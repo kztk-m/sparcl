@@ -53,3 +53,7 @@ instance Monoid SrcSpan where
 data Loc a = Loc {location :: SrcSpan, unLoc :: a}
   deriving (Eq, Ord, Show, Functor, Foldable, Traversable) 
 
+
+instance Applicative Loc where
+  pure a = Loc NoLoc a
+  Loc l1 a <*> Loc l2 b = Loc (l1 <> l2) (a b) 

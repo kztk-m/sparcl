@@ -1,9 +1,13 @@
 module Language.Sparcl.Pretty (
-  Doc, Precedence, Pretty(..), prettyShow, prettyPut, parensIf 
+  Doc, Precedence, Pretty(..), prettyShow,
+  prettyPut, prettyPutLn,
+  hPrettyPut, hPrettyPutLn, 
+  parensIf 
   ) where
 
 import qualified Text.PrettyPrint.ANSI.Leijen as D
 import Text.PrettyPrint.ANSI.Leijen (Doc)
+import System.IO (Handle)
 
 type Precedence = Int 
 
@@ -26,6 +30,15 @@ prettyShow x = show (ppr x)
 
 prettyPut :: Pretty t => t -> IO ()
 prettyPut x = D.putDoc (ppr x) 
+
+prettyPutLn :: Pretty t => t -> IO ()
+prettyPutLn x = D.putDoc (ppr x <> D.line) 
+
+hPrettyPut :: Pretty t => Handle -> t -> IO ()
+hPrettyPut h x = D.hPutDoc h (ppr x) 
+
+hPrettyPutLn :: Pretty t => Handle -> t -> IO ()
+hPrettyPutLn h x = D.hPutDoc h (ppr x <> D.line) 
 
 parensIf :: Bool -> Doc -> Doc 
 parensIf b d = if b then D.parens d else d 

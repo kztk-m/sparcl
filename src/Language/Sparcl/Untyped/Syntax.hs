@@ -49,7 +49,14 @@ data Exp
   | Case LExp [ (LPat, Clause) ]
   | Lift LExp LExp
   | Sig  LExp LTy
-  | Let  [LDecl] LExp 
+  | Let  [LDecl] LExp
+
+  | Parens LExp -- for operators
+  | Op  QName LExp LExp 
+
+  | Unlift LExp
+  | Fwd    LExp
+  | Bwd    LExp 
 
   | RCon QName [LExp]
 --  | RCase LExp [ (LPat, Clause) ]
@@ -85,6 +92,19 @@ instance Pretty Exp where
   pprPrec k (Lift e1 e2) = parensIf (k > 9) $
     D.text "lift" D.<+> D.align (pprPrec 10 e1 D.</> pprPrec 10 e2)
 
+  pprPrec k (Unlift e) = parensIf (k > 9) $
+    D.text "unlift" D.<+> D.align (pprPrec 10 e) 
+
+  pprPrec k (Fwd e) = parensIf (k > 9) $
+    D.text "forward" D.<+> D.align (pprPrec 10 e)
+
+  pprPrec k (Bwd e) = parensIf (k > 9) $
+    D.text "backward" D.<+> D.align (pprPrec 10 e) 
+
+  pprPrec _ (Parens e) = D.parens (pprPrec 0 e)
+  pprPrec k (Op q e1 e2) = parensIf (k > 8) $
+    pprPrec 8 e1 D.<+> ppr q D.<+> pprPrec 9 e2 
+
   pprPrec k (Sig e t) = parensIf (k > 0) $
     pprPrec 0 e D.<+> D.colon D.<+> ppr t
 
@@ -107,6 +127,8 @@ data Pat = PVar Name
          | PCon QName [LPat]
          | PBang LPat
          | PREV  LPat
+         | PWild 
+         -- TODO: Add literal pattern
   deriving Show
 
 instance Pretty (Loc Pat) where
@@ -123,7 +145,7 @@ instance Pretty Pat where
   pprPrec k (PREV p) = parensIf (k > 0) $
     D.text "rev" D.<+> pprPrec 1 p 
   
-    
+  pprPrec _ PWild = D.text "_" 
 
 data Clause = Clause { body :: LExp, whereClause :: [LDecl], withExp :: Maybe LExp } 
   deriving Show 
@@ -137,7 +159,8 @@ instance Pretty Clause where
     where
       pprWhere [] = D.empty 
       pprWhere ds = 
-        D.nest 2 (D.line D.<> D.text "where" D.<+> D.align (D.semiBraces $ map ppr ds)) 
+        D.nest 2 (D.line D.<> D.text "where" D.<+> D.align (D.semiBraces $ map ppr ds))
+       
 
 newtype Prec  = Prec Int
   deriving (Eq, Ord, Show) 
@@ -165,9 +188,9 @@ type LDecl = Loc Decl
 
 data Decl
   = DDef Name [ ([LPat],  Clause) ] 
-  | DSig Name Ty
-  | DFixity QName Prec Assoc -- TODO: will be replaced with "DDefOp" 
-  | DMutual [LDecl] 
+  | DSig Name LTy
+  | DFixity Name Prec Assoc -- TODO: will be replaced with "DDefOp" 
+  -- | DMutual [LDecl] 
    deriving Show
 
 instance Pretty Decl where
@@ -187,8 +210,8 @@ instance Pretty Decl where
   ppr (DFixity n k a) =
     D.text "fixity" D.<+> ppr n D.<+> ppr k D.<+> ppr a
 
-  ppr (DMutual ds) =
-    D.text "mutual" D.<+> D.semiBraces (map ppr ds) 
+  -- ppr (DMutual ds) =
+  --   D.text "mutual" D.<+> D.semiBraces (map ppr ds) 
             
   pprList _ ds =
     D.vsep (map ppr ds) 
@@ -201,8 +224,8 @@ instance Pretty (Loc Decl) where
     D.vsep (map ppr ds) 
     
 
--- data Module
---   = Module ModuleName [Export] [Import]  [Decl]
+data Module
+  = Module ModuleName [Export] [Import] [LDecl]
 
 type Export = QName
-data Import = Import { importModuleName :: ModuleName, importingNames ::  [QName] }
+data Import = Import { importModuleName :: ModuleName, importingNames :: Maybe [QName] }
