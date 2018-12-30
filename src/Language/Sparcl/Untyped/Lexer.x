@@ -16,7 +16,7 @@ import Data.List (break)
   if | then | else | case | of | let | in | with | where | abort
   | import | module | with | lift | unlift | forward | backward
   | def | sig
-  | rev 
+  | rev | end 
   | qualified | as | forall
 
 @punct =

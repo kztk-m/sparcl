@@ -85,9 +85,11 @@ instance Pretty Exp where
 
   pprPrec k (Case e ps) = parensIf (k > 0) $ 
     D.text "case" D.<+> pprPrec 0 e D.<+> D.text "of" D.</>
-    D.semiBraces (map pprPs ps)
+    D.vcat (map pprPs ps) D.</>
+    D.text "end" 
     where
-      pprPs (p, c) = D.align $ pprPrec 1 p D.<+> D.text "->" D.<+> (D.nest 2 $ ppr c)
+      pprPs (p, c) = D.text "|" D.<+>
+                     D.align (pprPrec 1 p D.<+> D.text "->" D.<+> (D.nest 2 $ ppr c))
 
   pprPrec k (Lift e1 e2) = parensIf (k > 9) $
     D.text "lift" D.<+> D.align (pprPrec 10 e1 D.</> pprPrec 10 e2)
@@ -159,7 +161,8 @@ instance Pretty Clause where
     where
       pprWhere [] = D.empty 
       pprWhere ds = 
-        D.nest 2 (D.line D.<> D.text "where" D.<+> D.align (D.semiBraces $ map ppr ds))
+        D.nest 2 (D.line D.<> D.nest 2 (D.text "where" D.</>
+                                         D.align (D.vcat $ map ppr ds)) D.</> D.text "end")
        
 
 newtype Prec  = Prec Int

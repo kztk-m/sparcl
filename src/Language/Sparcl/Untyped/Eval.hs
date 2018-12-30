@@ -85,7 +85,7 @@ newAddr f = do
 newAddrs :: Int -> ([Addr] -> Eval a) -> Eval a
 newAddrs n f = do
   i <- ask
-  local (+n) $ f [i..i+n]
+  local (+n) $ f [i..i+n-1]
 
 
 lookupHeap :: Addr -> Heap -> Eval Value 

@@ -88,11 +88,13 @@ instance Pretty Exp where
   pprPrec _ (Bang e) =
     D.text "!" D.<> pprPrec 10 e
 
-  pprPrec k (Case e ps) = parensIf (k > 0) $ 
-    D.text "case" D.<+> pprPrec 0 e D.<+> D.text "of" D.</>
-    D.semiBraces (map pprPs ps)
+  pprPrec k (Case e ps) = parensIf (k > 0) $ D.group $ D.align $ 
+    D.text "case" D.<+> pprPrec 0 e D.<+> D.text "of" D.<$>
+    D.vcat (map pprPs ps) D.<$>
+    D.text "end"
     where
-      pprPs (p, c) = D.align $ pprPrec 1 p D.<+> D.text "->" D.<+> (D.nest 2 $ ppr c)
+      pprPs (p, c) =
+        D.group $ D.text "|" D.<+> D.align (pprPrec 1 p D.<+> D.text "->" D.<> (D.nest 2 $ D.line D.<> ppr c))
 
   pprPrec k (Lift e1 e2) = parensIf (k > 9) $
     D.text "lift" D.<+> D.align (pprPrec 10 e1 D.</> pprPrec 10 e2)
@@ -112,11 +114,13 @@ instance Pretty Exp where
     D.text "rev" D.<+> ppr c D.<+>
      D.hsep (map (pprPrec 10) es)
 
-  pprPrec k (RCase e ps) = parensIf (k > 0) $ 
-    D.text "case" D.<+> pprPrec 0 e D.<+> D.text "of" D.</>
-    D.semiBraces (map pprPs ps)
+  pprPrec k (RCase e ps) = parensIf (k > 0) $ D.group $ D.align $ 
+    D.text "case" D.<+> pprPrec 0 e D.<+> D.text "of" D.<$>
+    D.vcat (map pprPs ps) D.<$> 
+    D.text "end"
     where
-      pprPs (p, c, e) = D.align $ D.text "rev" D.<+> pprPrec 1 p D.<+> D.text "->" D.<+> (D.nest 2 $ ppr c D.</> D.text "with" D.<+> D.align (ppr e))
+      pprPs (p, c, e) =
+        D.text "|" D.<+> D.align (D.text "rev" D.<+> pprPrec 1 p D.<+> D.text "->" D.<+> (D.nest 2 $ ppr c D.</> D.text "with" D.<+> D.align (ppr e)))
 
   pprPrec k (RPin e1 e2) = parensIf (k > 9) $
     D.text "pin" D.<+> pprPrec 10 e1 D.<+> pprPrec 10 e2 

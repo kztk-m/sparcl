@@ -50,7 +50,8 @@ import Language.Sparcl.Literal
   "case" { Loc _ (TkKey "case") }
   "of"   { Loc _ (TkKey "of") }
   "with" { Loc _ (TkKey "with") }
-
+  "end"  { Loc _ (TkKey "end") } 
+  
   "rev"  { Loc _ (TkKey "rev") }
   "fixity" { Loc _ (TkKey "fixity") } 
   "forward"  { Loc _ (TkKey "forward") }
@@ -63,6 +64,7 @@ import Language.Sparcl.Literal
   "sig"    { Loc _ (TkKey "sig") }
 
   "where"  { Loc _ (TkKey "where") } 
+
 
   "module" { Loc _ (TkKey "module") } 
   "import" { Loc _ (TkKey "import") } 
@@ -145,10 +147,13 @@ Def :: { ([LPat], Clause) }
   : sequence(SimplePat) "=" Clause { ($1, $3) } 
   
 Exp :: { Loc Exp }
-  : "\\" nonEmptySequence(SimplePat) "->" Exp { expandLoc $1 $ labs $2 $4 }
-  | "case" Exp "of" Braces(Alts)  { expandLoc $1 $ lcase $2 $4 }
-  | "let" sequence(LocalDecl) "in" Exp { expandLoc $1 $ Loc (location $4) $ Let $2 $4 } 
-  | OpExp                         { $1 }
+  : "\\" nonEmptySequence(SimplePat) "->" Exp
+    { expandLoc $1 $ labs $2 $4 }
+  | "let" sequence(LocalDecl) "in" Exp
+    { expandLoc $1 $ Loc (location $4) $ Let $2 $4 }
+  | "case" Exp "of" Alts "end"  { expandLoc $1 $ lcase $2 $4 }
+  | OpExp            { $1 }
+
 
 OpExp :: { Loc Exp }
   : OpExp op AppExp { expandLoc $2 $ lop (fmap qnameTk $2) $1 $3 }
@@ -177,18 +182,24 @@ Literal :: { Loc Literal }
   : int  { fmap (LitInt . intTk) $1 }
   | char { fmap (LitChar . charTk) $1 }
 
-Alts :: { [ (LPat, Clause ) ] }
-  : sepEndBy(Alt, ";") { $1 }
 
-Alt :: { (LPat , Clause) }
-  : Pat "->" Clause { ($1, $3) }
+Alts :: { [ (LPat, Clause) ] }
+  : MaybeBar sepBy(Alt,"|") {$2}
+
+MaybeBar
+  : "|" {} 
+  |     {}
+
+Alt :: { (LPat, Clause) }
+  : Pat "->" Clause { ($1, $3) } 
+
 
 Clause :: { Clause }
   : Exp With Where { Clause $1 $3 $2 }
 
 Where :: { [LDecl] }
-  : "where" Braces( sequence( LocalDecl ) ) { $2 } 
-  |                                         { [] }
+  : "where" sequence( LocalDecl ) "end" { $2 } 
+  |                                     { [] }
 
 With :: { Maybe LExp }
   : "with" Exp { Just $2 }

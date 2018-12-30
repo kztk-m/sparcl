@@ -1,3 +1,4 @@
+{-# LANGUAGE ViewPatterns #-}
 module Language.Sparcl.Untyped.Desugar where
 
 import qualified Language.Sparcl.Untyped.Syntax as S
@@ -19,12 +20,19 @@ import Data.List (sort, group, groupBy, nub)
 import Data.Function (on) 
 
 -- Monad for desugaring 
-type Desugar = ReaderT NameInfo (StateT Int (Either [(SrcSpan, String)]))
+type Desugar = ReaderT NameInfo (Either [(SrcSpan, String)])
 
+type AlphaEnv = M.Map Name Name 
+
+data NameInfo = NameInfo { niDefinedNames  :: [QName],
+                           niCurrentModule :: ModuleName,
+                           niNameCounter   :: Int,
+                           niAlphaEnv      :: AlphaEnv, 
+                           niOpTable       :: M.Map QName (S.Prec, S.Assoc) }
 
 desugarTest :: NameInfo -> Desugar a -> IO a
 desugarTest ni d =
-  case evalStateT (runReaderT d ni) 0 of
+  case runReaderT d ni of
     Left ls ->
       Fail.fail $ unlines [ show l ++ ": " ++ s | (l,s) <- ls ]
     Right v -> return v 
@@ -42,6 +50,8 @@ defaultNameInfo =
                         nameTyChar, nameTyDouble, nameTyInt,
                         nameTyList, nameTyRev, conTrue, conFalse ] ++ M.keys tbl ,
     niCurrentModule = ["Main"],
+    niNameCounter = 1,
+    niAlphaEnv = M.empty, 
     niOpTable = tbl
     }
   where
@@ -49,10 +59,13 @@ defaultNameInfo =
     base s = QName baseModule (NormalName s) 
 
 
+withAlphaEntry :: Name -> Name -> Desugar a -> Desugar a
+withAlphaEntry n1 n2 =
+  local (\ni -> ni { niAlphaEnv = M.insert n1 n2 $ niAlphaEnv ni })
 
-data NameInfo = NameInfo { niDefinedNames  :: [QName],
-                           niCurrentModule :: ModuleName,
-                           niOpTable       :: M.Map QName (S.Prec, S.Assoc) }
+withAlphaEntries :: [(Name, Name)] -> Desugar a -> Desugar a
+withAlphaEntries ns m =
+  foldr (uncurry withAlphaEntry) m ns 
 
 withName :: Name -> Desugar a -> Desugar a
 withName n m = 
@@ -106,7 +119,11 @@ refineName l (BName n) = do
   let res = checkNames cm n ns
   case filter (/=cm) res of
     [m]  -> return (QName m n)
-    []   -> return (BName n)
+    []   -> do
+      env <- asks niAlphaEnv
+      case M.lookup n env of
+        Just n' -> return (BName n')
+        Nothing -> return (BName n)
     _    -> throwError [ (l, "Ambiguous name `" ++ show n ++ "' " ++ show (nub res))]
   where
     checkNames :: ModuleName -> Name -> [QName] -> [ModuleName]
@@ -116,123 +133,6 @@ refineName l (BName n) = do
     checkNames cm n (QName m n' : ns) =
       if n == n' then m : checkNames cm n ns else checkNames cm n ns 
  
- 
-
--- canonizeNameTy :: S.LTy -> Desugar S.LTy
--- canonizeNameTy (Loc l (S.TVar q)) = return $ Loc l (S.TVar q)
--- canonizeNameTy (Loc l (S.TCon n ts)) = do 
---   n' <- refineName l n 
---   Loc l . S.TCon n' <$> mapM canonizeNameTy ts
--- canonizeNameTy (Loc l (S.TForall n t)) = do
---   Loc l . S.TForall n <$> canonizeNameTy t
-
--- canonizeNameExp :: S.LExp -> Desugar S.LExp
--- canonizeNameExp (Loc l exp) = Loc l <$> case exp of
---   S.Var x -> do
---     x' <- refineName l x
---     return $ S.Var x'
-
---   S.Lit l -> return $ S.Lit l
-
---   S.App e1 e2 ->
---     S.App <$> canonizeNameExp e1 <*> canonizeNameExp e2
-
---   S.Abs ps e -> do
---     ps' <- mapM canonizeNamePat ps
---     let ns = concatMap (freeVarsP . unLoc) ps'
---     e' <- withNames (map BName ns) $
---             canonizeNameExp e 
---     return $ S.Abs ps' e' 
-
---   S.Con c es -> do 
---     c' <- refineName l c
---     S.Con c' <$> mapM canonizeNameExp es
-
---   S.Bang e -> S.Bang <$> canonizeNameExp e
-
---   S.Case e pcs -> do
---     S.Case <$> canonizeNameExp e <*> mapM canonizePatClause pcs
---     where
---       canonizePatClause (p, c) = do
---         p' <- canonizeNamePat p
---         c' <- canonizeNameClause  c
---         return $ (p', c')
-
---   S.Lift e1 e2 -> do 
---     S.Lift <$> canonizeNameExp e1 <*> canonizeNameExp e2
-
---   S.Sig e t -> do
---     S.Sig <$> canonizeNameExp e <*> canonizeNameTy t
-
---   S.Let ds e -> do
---     S.Let <$> mapM canonizeNameDecl ds <*> canonizeNameExp e
-
---   S.Parens e ->
---     S.Parens <$> canonizeNameExp e
-
---   S.Op q e1 e2 -> do
---     q' <- refineName l q
---     S.Op q' <$> canonizeNameExp e1 <*> canonizeNameExp e2
-
---   S.Unlift e -> S.Unlift <$> canonizeNameExp e
---   S.Fwd e -> S.Fwd <$> canonizeNameExp e
---   S.Bwd e -> S.Bwd <$> canonizeNameExp e
-
---   S.RCon c es -> do 
---     c' <- refineName l c
---     S.RCon c' <$> mapM canonizeNameExp es
-    
---   S.RPin e1 e2 -> 
---     S.RPin <$> canonizeNameExp e1 <*> canonizeNameExp e2 
-      
-
--- freeVarsP :: S.Pat -> [ Name ]
--- freeVarsP (S.PVar n) = [n]
--- freeVarsP (S.PCon _ ps) =
---   concatMap (freeVarsP . unLoc) ps
--- freeVarsP (S.PBang p) = freeVarsP $ unLoc p
--- freeVarsP (S.PREV p)  = freeVarsP $ unLoc p
--- freeVarsP S.PWild     = [] 
-
--- canonizeNamePat :: S.LPat -> Desugar S.LPat
--- canonizeNamePat (Loc l p) = Loc l <$> case p of
---   S.PVar n -> return $ S.PVar n
---   S.PCon c ps -> do 
---     c' <- refineName l c
---     S.PCon c' <$> mapM canonizeNamePat ps
---   S.PBang p -> S.PBang <$> canonizeNamePat p
---   S.PREV  p -> S.PREV  <$> canonizeNamePat p
---   S.PWild   -> return S.PWild 
-    
--- canonizeNameClause :: S.Clause -> Desugar S.Clause
--- canonizeNameClause (S.Clause e ds e') =
---   S.Clause <$> canonizeNameExp e <*> mapM canonizeNameDecl ds <*> traverse canonizeNameExp e'
-
--- canonizeNameDecls :: [ S.LDecl ] -> Desugar ([ S.LDecl ], [Name])
--- canonizeNameDecls ds = do
---   ds' <- mapM canonizeNameDecl ds
---   let ns = [ n | Loc _ (S.DDef n _) <- ds ]
---   return (ds', ns) 
-
--- canonizeNameDecl :: S.LDecl -> Desugar S.LDecl
--- canonizeNameDecl (Loc l d) = fmap (Loc l) $ case d of
---   S.DDef n pscs ->
---     S.DDef n <$> mapM f pscs
---     where
---       f (ps, c) = do
---         ps' <- mapM canonizeNamePat ps
---         c'  <- canonizeNameClause c
---         return (ps', c')
---   S.DSig n t ->
---     S.DSig n <$> canonizeNameTy t
-
---   S.DFixity n p a ->
---     return $ S.DFixity n p a 
-  
-  
- 
-  
-
 
 desugarTy :: S.Ty -> Ty
 desugarTy (S.TVar q)    = TyVar q
@@ -249,15 +149,49 @@ desugarTy (S.TForall n t) =
     go ns t = (reverse ns, t) 
 
 
+newName :: (Name -> Desugar r) -> Desugar r 
+newName f = do
+  i <- asks niNameCounter
+  local (\ni -> ni { niNameCounter = i + 1 }) $ f (Generated i)
 
-newName :: Desugar Name
-newName = do
-  i <- get
-  put $! i + 1
-  return $ Generated i 
+newNames :: Int -> ([Name] -> Desugar r) -> Desugar r
+newNames n f = do
+  i <- asks niNameCounter
+  local (\ni -> ni { niNameCounter = i + n }) $ f (map Generated [i..i+n-1])
 
-newQName :: Desugar QName
-newQName = BName <$> newName
+withNewNamesFor :: [Name] -> Desugar r -> Desugar r
+withNewNamesFor ns m = 
+  newNames (length ns) $ \ns' ->
+    withAlphaEntries (zip ns ns') $
+     withNames ns $ m 
+
+  
+newQName :: (QName -> Desugar r) -> Desugar r 
+newQName f = newName (f . BName) 
+
+
+{-
+
+desugar* functions perform the following transformations at once.
+
+ - Alpha-rename lambda and pattern bound names
+   while keeping def-bound names.
+   (based on de Bruijn indices) 
+
+ - Replace rules with patterns by case expressions.
+   This depends on the alpha renaming as we dig out patterns
+   in "rev" to introduce reversible case expressions where
+   the outer parts of the patterns have the same form. 
+
+ - Canonize def-bound names
+   + add qualifiers to names from other modules.
+   + remove quanlifiers from names from the current module. 
+   [TODO] Check: This procedue would have bugs, when shadowing. 
+
+ - Rearrange operators accordingly to their fixities.
+   [TODO] Test the conversion. 
+
+-}
 
 desugarLExp :: S.LExp -> Desugar LExp
 desugarLExp (Loc l e) = Loc l <$> desugarExp l e
@@ -270,11 +204,11 @@ desugarExp l (S.Var n) = do
 desugarExp _ (S.App e1 e2) =
   liftM2 App (desugarLExp e1) (desugarLExp e2)
 desugarExp l (S.Abs ps e) = do
-  xs <- mapM (const newName) ps
-  e' <- desugarExp l $
+  newNames (length ps) $ \xs -> do 
+    e' <- desugarExp l $
           S.Case (S.makeTupleExp [noLoc $ S.Var (BName x) | x <- xs])
           [ (S.makeTuplePat ps, S.Clause e [] Nothing) ]     
-  return $ unLoc $ foldr (\n r -> noLoc (Abs n r)) (noLoc e') xs
+    return $ unLoc $ foldr (\n r -> noLoc (Abs n r)) (noLoc e') xs
 
 desugarExp l (S.Con c es) = do
   c' <- refineName l c 
@@ -292,21 +226,21 @@ desugarExp _ (S.Unlift e) =
 
 desugarExp l (S.Fwd e) = do 
   let c = nameTuple 2
-  x <- newName
-  y <- newName
-  e' <- desugarExp l (S.Unlift e) 
-  return $ Case (noLoc e')
-    [ (noLoc $ PCon c [noLoc $ PVar x, noLoc $ PVar y],
-       noLoc $ Var (BName x)) ] 
+  newName $ \x ->
+    newName $ \y -> do 
+      e' <- desugarExp l (S.Unlift e) 
+      return $ Case (noLoc e')
+        [ (noLoc $ PCon c [noLoc $ PVar x, noLoc $ PVar y],
+           noLoc $ Var (BName x)) ] 
 
 desugarExp l (S.Bwd e) = do 
   let c = nameTuple 2
-  x <- newName
-  y <- newName
-  e' <- desugarExp l (S.Unlift e) 
-  return $ Case (noLoc e')
-    [ (noLoc $ PCon c [noLoc $ PVar x, noLoc $ PVar y],
-       noLoc $ Var (BName y)) ] 
+  newName $ \x ->
+    newName $ \y -> do 
+      e' <- desugarExp l (S.Unlift e) 
+      return $ Case (noLoc e')
+        [ (noLoc $ PCon c [noLoc $ PVar x, noLoc $ PVar y],
+           noLoc $ Var (BName y)) ] 
 
 desugarExp _ (S.Sig e t) = Sig <$> desugarLExp e <*> pure (desugarTy $ unLoc t) 
 
@@ -330,11 +264,6 @@ desugarExp _ (S.RPin e1 e2) =
   RPin <$> desugarLExp e1 <*> desugarLExp e2 
 
 
--- TODO: Currently, the equivalence between pattenrs is too strong; it 
--- does not identify patterns with the different variables.
---
--- Should we alpha-rename variable so that patterns appear in the same
--- level has will be equal if they are different only in variable names.
 data CPat = CPHole
           | CPVar  Name
           | CPCon  QName [ Loc CPat ]
@@ -349,6 +278,44 @@ equivalentCPat (CPCon c ps) (CPCon c' ps') =
 equivalentCPat (CPBang p) (CPBang p') =
   (equivalentCPat `on` unLoc) p p' 
 equivalentCPat _ _ = False              
+
+-- rename patterns under "PREV"
+renamePatUnderRev :: S.LPat -> (LPat -> Desugar r) -> Desugar r
+renamePatUnderRev p k0 = go p k0
+  where
+    go (Loc l (S.PVar n)) k = newName $ \n' -> withAlphaEntry n n' $
+      k (Loc l (PVar n'))
+    go (Loc l (S.PCon c ps)) k =
+      gos ps $ \ps' -> k (Loc l (PCon c ps')) 
+    go (Loc l _) _ = do
+      throwError [ (l, "reversible patterns cannot contain !, rev, _") ]
+
+    gos [] k = k []  
+    gos (p:ps) k =
+      go p $ \p' -> gos ps $ \ps' -> k (p':ps') 
+
+-- patterns under "PREV" is not renamed 
+renameAndSeparatePat :: S.LPat -> Desugar (Loc CPat, [S.LPat], [ (Name, Name) ], Int)
+renameAndSeparatePat p = goL p $ \cp sub binds adv -> return (cp, sub,binds, adv)
+  where
+    goL (Loc l p) k = go l p $ \cp sub binds adv -> k (Loc l cp) sub binds adv
+    go _ (S.PVar n) k = newName $ \n' ->
+      k (CPVar n') [] [(n,n')] 1
+    go l (S.PCon c ps) k = do
+      c' <- refineName l c
+      goLs ps $ \cps sub binds adv -> k (CPCon c' cps) sub binds adv
+    go _ (S.PBang p) k = do
+      goL p $ \cp sub binds adv -> k (CPBang cp) sub binds adv
+    go _ (S.PREV p) k = do
+      k CPHole [p] [] 0
+    go _ S.PWild k = newName $ \n' -> 
+      k (CPBang $ noLoc $ CPVar n') [] [] 1
+
+    goLs [] k = k [] [] [] 0
+    goLs (p:ps) k =
+      goL p $ \cp sub binds adv ->
+       goLs ps $ \cps sub' binds' adv' ->
+                 k (cp:cps) (sub ++ sub') (binds ++ binds') (adv + adv') 
   
 separateLPat :: S.LPat -> Desugar (Loc CPat, [ LPat ])
 separateLPat (Loc l p) = do
@@ -363,9 +330,7 @@ separatePat (S.PCon c ps) = do
 separatePat (S.PBang p) =  do
   (p', sub) <- separateLPat p
   return (CPBang p', sub)
-separatePat S.PWild = do
-  n <- newName
-  return (CPBang (noLoc $ CPVar n), [])
+separatePat S.PWild = error "Cannot happen" 
 separatePat (S.PREV p) =  do
   p' <- convertLPat p 
   return (CPHole, [ p']) 
@@ -376,9 +341,7 @@ convertLPat (Loc l (S.PCon c ps)) = do
   Loc l . PCon c <$> mapM convertLPat ps
 convertLPat (Loc l (S.PBang p)) =
   Loc l . PBang <$> convertLPat p
-convertLPat (Loc l S.PWild) = do
-  n <- newName 
-  return $ Loc l . PBang $ Loc l (PVar n)
+convertLPat (Loc _ S.PWild) = error "Cannot happen." 
 convertLPat (Loc l (S.PREV _)) =
   throwError [(l, "rev patterns cannot be nested.")] 
 
@@ -441,35 +404,42 @@ convertClauseR (S.Clause body ws Nothing) = do
 desugarCaseExp :: Loc S.Exp -> [(Loc S.Pat, S.Clause)] -> Desugar Exp
 desugarCaseExp e0 alts = do
   e0' <- desugarLExp e0
-  alts' <- mapM (\(p,c) -> do { (p',sub) <- separateLPat p; return (p', sub, c) }) alts
+  alts' <- mapM (\(p,c) -> do
+                    (cp, sub, binds, adv) <- renameAndSeparatePat p 
+                    return (cp, sub, binds, adv, c)) alts
   -- grouping alts that have the same unidir patterns. 
-  let altss = groupBy (equivalentCPat `on` (\(p',_,_) -> unLoc p')) alts'
+  let altss = groupBy (equivalentCPat `on` (\(cp,_,_,_,_) -> unLoc cp)) alts'
   alts <- mapM makeBCases altss 
   return $ Case e0' alts 
     where
-      makeBCases :: [ (Loc CPat, [LPat], S.Clause) ] -> Desugar (Loc Pat, LExp)
+      makeBCases :: [ (Loc CPat, [S.LPat], [(Name,Name)], Int, S.Clause) ] -> Desugar (Loc Pat, LExp)
       makeBCases [] = error "Cannot happen." 
-      makeBCases ralts@((cp,sub,clause):_)
-        | [] <- sub = do 
+      makeBCases ralts@((cp, sub, binds, adv, clause):_)
+        | [] <- sub = newNames adv $ \_ -> withAlphaEntries binds $ do 
             -- in this case, the original pattern does not have any REV.
             -- so length xs > 1 means that there are some redundant patterns.
             -- 
             -- FIXME: say warning            
             let p = fillCPat cp [] 
-            e <- withNames (freeVarsP $ unLoc p) $ convertClauseU clause
+            e <- -- withNames (freeVarsP $ unLoc p) $
+                 convertClauseU clause
             return (p, e)
-        | otherwise = do
-            xs <- mapM (const newName) sub
-            let lxs = zipWith (\p x -> Loc (location p) $ PVar x) sub xs
-            let re0 = makeTupleExpR $ map (noLoc . Var . BName) xs
-            let outP = fillCPat cp lxs 
-            pes <- withNames (freeVarsP $ unLoc outP) $
-                   mapM (\(_,subs,cl) -> do
-                            let p = makeTuplePat subs
-                            (eb, we) <- withNames (freeVarsP $ unLoc p) $
-                                         convertClauseR cl 
-                            return (p, eb, we) ) ralts
-            return $ (outP , noLoc $ RCase re0 pes)
+        | otherwise = newNames adv $ \_ -> do
+            -- Notice that, length sub, adv are equivalence 
+            -- in ralts, while binds can differ. 
+            newNames (length sub) $ \xs -> do 
+              let lxs = zipWith (\p x -> Loc (location p) $ PVar x) sub xs
+              let re0 = makeTupleExpR $ map (noLoc . Var . BName) xs
+              let outP = fillCPat cp lxs 
+              pes <- withNames (freeVarsP $ unLoc outP) $
+                     mapM (\(_,subs,binds,_,cl) ->
+                              withAlphaEntries binds $ do 
+                                let p = S.makeTuplePat subs
+                                renamePatUnderRev p $ \p' -> do 
+                                  (eb, we) <- withNames (freeVarsP $ unLoc p') $
+                                              convertClauseR cl 
+                                  return (p', eb, we) ) ralts
+              return $ (outP , noLoc $ RCase re0 pes)
 
 
 desugarLDecls :: [S.LDecl] -> Desugar ([LDecl], [Name], [(Name, (S.Prec, S.Assoc))]) 
@@ -496,20 +466,20 @@ desugarDef sigs (l, f, pcs) = do
   case map unwrap $ group $ sort [ length ps | (ps, _) <- pcs ] of
     []    -> throwError [ (l, "Empty definition: " ++ show f) ]
     [len] -> do
-      xs <- mapM (const newName) [1..len]
-      e' <- desugarExp l $
-            S.Case (S.makeTupleExp [noLoc $ S.Var (BName x) | x <- xs])
-            [ (S.makeTuplePat ps, clause) | (ps, clause) <- pcs ]
-      let body =
-            foldr (\x r -> noLoc $ Abs x r) (noLoc e') xs
-      sig <- case filter (\(_,n,_) -> n == f) sigs of
-               []  -> return $ Nothing
-               [(_,_,t)] -> return $ Just t
-               res -> throwError $ [ (l, "Multiple signatures for " ++ show f)
-                                   | (l,_,_) <- res ]
+      newNames len $ \xs -> do 
+        e' <- desugarExp l $
+              S.Case (S.makeTupleExp [noLoc $ S.Var (BName x) | x <- xs])
+              [ (S.makeTuplePat ps, clause) | (ps, clause) <- pcs ]
+        let body =
+              foldr (\x r -> noLoc $ Abs x r) (noLoc e') xs
+        sig <- case filter (\(_,n,_) -> n == f) sigs of
+                 []  -> return $ Nothing
+                 [(_,_,t)] -> return $ Just t
+                 res -> throwError $ [ (l, "Multiple signatures for " ++ show f)
+                                     | (l,_,_) <- res ]
 
-      let sig' = (desugarTy . unLoc) <$> sig 
-      return $ Loc l (DDef f sig' body)
+        let sig' = (desugarTy . unLoc) <$> sig 
+        return $ Loc l (DDef f sig' body)
     ls -> 
       throwError [ (l, "#Arguments differ for " ++ show f ++ show ls) ]
   where
