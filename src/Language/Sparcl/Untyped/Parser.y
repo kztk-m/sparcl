@@ -38,6 +38,8 @@ import Language.Sparcl.Literal
   "."  { Loc _ (TkPunct ".") }
   "forall" { Loc _ (TkPunct "forall") }
 
+  "-o" { Loc _ (TkPunct "-o") }
+
   "!"  { Loc _ (TkPunct "!") }
 
   "_"  { Loc _ (TkPunct "_") } 
@@ -51,6 +53,9 @@ import Language.Sparcl.Literal
   "of"   { Loc _ (TkKey "of") }
   "with" { Loc _ (TkKey "with") }
   "end"  { Loc _ (TkKey "end") } 
+
+  "data" { Loc _ (TkKey "data") }
+  "type" { Loc _ (TkKey "type") } 
   
   "rev"  { Loc _ (TkKey "rev") }
   "fixity" { Loc _ (TkKey "fixity") } 
@@ -69,13 +74,14 @@ import Language.Sparcl.Literal
   "module" { Loc _ (TkKey "module") } 
   "import" { Loc _ (TkKey "import") } 
 
-  "left"   { Loc _ (TkVarID (NormalName "left")) }
-  "right"  { Loc _ (TkVarID (NormalName "right")) } 
+
+  {- a trick to allow "left" and "right" to occur as usual variables -}
+  "left"   { Loc _ (TkVarID (BName (NormalName "left"))) }
+  "right"  { Loc _ (TkVarID (BName (NormalName "right"))) } 
 
   op     { Loc _ (TkOp _) } 
   char   { Loc _ (TkCharLit _) }
   varId  { Loc _ (TkVarID _) }
-  qVarId { Loc _ (TkQVarID _) }
   conId  { Loc _ (TkConID _) }
   int    { Loc _ (TkIntLit _) } 
 
@@ -108,7 +114,8 @@ ModuleName :: { ModuleName }
   
 Ty :: { Loc Ty }
   : "forall" sequence(VarName) "." Ty { foldr (\n r -> Loc (location n <> location r) $ TForall (unLoc n) r) $4 $2 }
-  | AppTy "->" Ty  { Loc (location $1 <> location $3) $ TCon nameTyArr [$1, $3] }
+  | AppTy "->" Ty  { Loc (location $1 <> location $3) $ TCon nameTyLArr [Loc (location $1) (TCon nameTyBang [$1]), $3] }
+  | AppTy "-o" Ty  { Loc (location $1 <> location $3) $ TCon nameTyLArr [$1, $3] } 
   | AppTy          { $1 }
 
 AppTy :: { Loc Ty }
@@ -124,24 +131,36 @@ SimpleTy :: { Loc Ty }
   | VarName  { fmap TVar $1 }
   | TupleTy  { $1 }
 
-TopDecls :: { [LDecl] }
+TopDecls :: { [Loc TopDecl] }
   : sequence( TopDecl ) { $1 } 
 
 TupleTy :: { Loc Ty }
   : "(" sepBy(Ty,",") ")" { mkTupleTy $2 } 
 
-TopDecl :: { LDecl }
-  : LocalDecl { $1 }
-  | "fixity" BareOp int Assoc { Loc (location $1 <> location $4) $ DFixity (unLoc $2) (Prec $ intTk $ unLoc $3) (unLoc $4) }
+TopDecl :: { Loc TopDecl }
+  : LocalDecl
+    { fmap DDecl $1 }
+  | "data" ConName sequence(VarName) "=" sepBy1(CDecl,"|")
+    { Loc (location $1 <> mconcat (map location $5)) $ DData (unLoc $2) (map unLoc $3) $5 }
+  | "type" ConName sequence(VarName) "=" Ty
+    { Loc (location $1 <> location $5) $ DType (unLoc $2) (map unLoc $3) $5 } 
 
+CDecl :: { Loc CDecl }
+  : ConName sequence(SimpleTy)
+    { Loc (location $1 <> mconcat (map location $2)) $ CDecl (unLoc $1) $2 } 
+  
 Assoc :: { Loc Assoc }
   : "left"  { L <$ $1 }
   | "right" { R <$ $1 }
   |         { noLoc N } 
   
 LocalDecl :: { LDecl }
-  : "def" VarName sepBy1(Def, "|") { expandLoc $1 $ lddef (unLoc $2) $3 }
-  | "sig" VarName ":" Ty               { expandLoc $1 $ Loc (location $4) $ DSig (unLoc $2) $4 }
+  : "def" VarName sepBy1(Def, "|")
+      { expandLoc $1 $ lddef (unLoc $2) $3 }
+  | "sig" VarName ":" Ty
+      { expandLoc $1 $ Loc (location $4) $ DSig (unLoc $2) $4 }
+  | "fixity" Op int Assoc
+      { Loc (location $1 <> location $4) $ DFixity (unLoc $2) (Prec $ intTk $ unLoc $3) (unLoc $4) }
 
 Def :: { ([LPat], Clause) }
   : sequence(SimplePat) "=" Clause { ($1, $3) } 
@@ -156,8 +175,8 @@ Exp :: { Loc Exp }
 
 
 OpExp :: { Loc Exp }
-  : OpExp op AppExp { expandLoc $2 $ lop (fmap qnameTk $2) $1 $3 }
-  | AppExp          { $1 } 
+  : OpExp QOp AppExp { lop $2 $1 $3 }
+  | AppExp           { $1 } 
 
 AppExp :: { Loc Exp }
   : AppExp SimpleExp { lapp $1 $2 }
@@ -168,12 +187,12 @@ AppExp :: { Loc Exp }
   | SimpleExp        { $1 }
 
 SimpleExp :: { Loc Exp }
-  : VarQName   { fmap Var $1 }
-  | ConQName   { fmap (\c -> Con c []) $1 }
+  : QVarOrOp       { fmap Var $1 }
+  | ConQName       { fmap (\c -> Con c []) $1 }
   | "rev" ConQName { fmap (\c -> RCon c []) $2 }
-  | Literal  { fmap Lit $1 } 
-  | "!" SimpleExp { expandLoc $1 $ Loc (location $2) (Bang $2) }
-  | TupleExp      { $1 }
+  | Literal        { fmap Lit $1 } 
+  | "!" SimpleExp  { expandLoc $1 $ Loc (location $2) (Bang $2) }
+  | TupleExp       { $1 }
 
 TupleExp :: { Loc Exp }
   : "(" sepBy(Exp, ",") ")" { expandLoc $1 $ expandLoc $3 $ mkTupleExp $2 }
@@ -207,16 +226,29 @@ With :: { Maybe LExp }
 
 VarQName :: { Loc QName }
   : varId  { fmap qnameTk $1 }
-  | qVarId { fmap qnameTk $1 }
 
 ConQName :: { Loc QName }
   : conId  { fmap qnameTk $1 } 
 
-BareOp :: { Loc Name }
-  : op {% traverse (unquantify . qnameTk) $1 }             
+QOp :: { Loc QName }
+  : op { fmap qnameTk $1 } 
+
+QVarOrOp :: { Loc QName }
+  : "(" QOp ")" { $2 }
+  | VarQName    { $1 } 
+
+VarOrOp :: { Loc Name }
+  : "(" Op ")" { $2 }
+  | VarName    { $1 }
+
+Op :: { Loc Name }
+  : QOp {% traverse unquantify $1 }             
 
 VarName :: { Loc Name }
-  : varId { fmap nameTk $1 } 
+  : VarQName {% traverse unquantify $1 }
+
+ConName :: { Loc Name }
+  : ConQName {% traverse unquantify $1 } 
 
 Braces(e)
   : "{" e "}" { $2 } 

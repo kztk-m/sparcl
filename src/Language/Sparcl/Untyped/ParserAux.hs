@@ -11,15 +11,10 @@ import Language.Sparcl.Pretty
 import Data.Char as C 
 
 qnameTk :: Token -> QName
-qnameTk (TkQVarID n) = n
-qnameTk (TkVarID  n) = BName n
+qnameTk (TkVarID  n) = n
 qnameTk (TkConID  n) = n
 qnameTk (TkOp     n) = n
 qnameTk _            = error "..." 
-
-nameTk :: Token -> Name
-nameTk (TkVarID n) = n
-nameTk _ = error "unexpected token" 
 
 intTk :: Token -> Int
 intTk (TkIntLit i) = i
@@ -105,8 +100,7 @@ parseError (Loc _l tk) =
 
 tokenToString :: Token -> String
 tokenToString (TkOp s)     = "operator " ++ prettyShow s
-tokenToString (TkQVarID s) = "quantified varID " ++ prettyShow s
-tokenToString (TkVarID n)  = "unquantified varID " ++ prettyShow n
+tokenToString (TkVarID n)  = "varID " ++ prettyShow n
 tokenToString (TkConID n)  = "conID " ++ prettyShow n
 tokenToString (TkKey s)    = "keyword " ++ s
 tokenToString (TkPunct s)  = "key symbol " ++ s 

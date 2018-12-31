@@ -189,12 +189,56 @@ instance Pretty Assoc where
 
 type LDecl = Loc Decl 
 
+data CDecl
+  = CDecl Name  -- constructor name
+          [LTy] -- constructor argument
+  deriving Show
+
+instance Pretty (Loc CDecl) where
+  ppr (Loc l d) =
+    D.text "{-" D.<+> ppr l D.<+> D.text "-}"
+    D.<$> ppr d 
+    
+instance Pretty CDecl where
+  ppr (CDecl c []) = ppr c
+  ppr (CDecl c args) = 
+    ppr c D.<+> D.hsep [ pprPrec 1 a | a <- args ] 
+
+data TopDecl
+  = DDecl Decl 
+  | DData Name [Name] [Loc CDecl]
+  | DType Name [Name] LTy
+
 data Decl
   = DDef Name [ ([LPat],  Clause) ] 
   | DSig Name LTy
   | DFixity Name Prec Assoc -- TODO: will be replaced with "DDefOp" 
   -- | DMutual [LDecl] 
    deriving Show
+
+instance Pretty (Loc TopDecl) where
+  ppr (Loc l d) =
+    D.text "{- " D.<+> ppr l D.<+> D.text "-}"
+    D.<$> ppr d  
+
+  pprList _ ds =
+    D.vsep (map ppr ds) 
+  
+
+instance Pretty TopDecl where
+  ppr (DData t targs cs) =
+    D.hsep [D.text "data", ppr t, D.align $ D.hsep (map ppr targs)] D.<>
+    D.nest 2 (D.line D.<> D.text "=" D.<+> D.group (pprCs cs))
+    where
+      pprCs []     = D.empty
+      pprCs [c]    = ppr c
+      pprCs (c:cs) = ppr c D.<$> D.text "|" D.<+> pprCs cs 
+
+  ppr (DType t targs ty) =
+    D.hsep [D.text "type", ppr t, D.align $ D.hsep (map ppr targs),
+            D.align (ppr ty)] 
+
+  ppr (DDecl d) = ppr d 
 
 instance Pretty Decl where
   ppr (DDef n pcs) =
@@ -213,6 +257,8 @@ instance Pretty Decl where
   ppr (DFixity n k a) =
     D.text "fixity" D.<+> ppr n D.<+> ppr k D.<+> ppr a
 
+            
+
   -- ppr (DMutual ds) =
   --   D.text "mutual" D.<+> D.semiBraces (map ppr ds) 
             
@@ -221,14 +267,15 @@ instance Pretty Decl where
                                            
 instance Pretty (Loc Decl) where
   ppr (Loc l d) =
-    D.text "-- " D.<+> ppr l D.<$> ppr d
+    D.text "{- " D.<+> ppr l D.<+> D.text "-}"
+    D.<$> ppr d  
 
   pprList _ ds =
     D.vsep (map ppr ds) 
     
 
 data Module
-  = Module ModuleName [Export] [Import] [LDecl]
+  = Module ModuleName [Export] [Import] [Loc TopDecl]
 
 type Export = QName
 data Import = Import { importModuleName :: ModuleName, importingNames :: Maybe [QName] }

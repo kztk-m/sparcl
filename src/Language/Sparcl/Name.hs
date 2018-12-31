@@ -65,8 +65,11 @@ nameTyDouble = QName baseModule (NormalName "Double")
 nameTyChar :: QName
 nameTyChar = QName baseModule (NormalName "Char")
 
+nameTyBool :: QName
+nameTyBool = QName baseModule (NormalName "Bool") 
+
 nameTyList :: QName
 nameTyList = QName baseModule (NormalName "List")
 
-nameTyArr :: QName
-nameTyArr = QName baseModule (NormalName "->") 
+nameTyLArr :: QName
+nameTyLArr = QName baseModule (NormalName "-o") 

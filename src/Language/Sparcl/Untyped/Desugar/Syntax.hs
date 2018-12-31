@@ -1,8 +1,22 @@
-module Language.Sparcl.Untyped.Desugar.Syntax where
+module Language.Sparcl.Untyped.Desugar.Syntax (
+  Ty(..), MetaTyVar(..), BodyTy, PolyTy, MonoTy,
+  Exp(..), LExp,
+  Pat(..), LPat,
+  Decl(..), LDecl,
+  DataDecl(..), CDecl(..),TypeDecl(..),
+  freeVarsP, freeVars, freeBVars, TyVar(..), 
+  S.Prec(..), S.Assoc(..), OpTable ,
+  module Language.Sparcl.Name,
+  module Language.Sparcl.Literal,
+  module Language.Sparcl.SrcLoc 
+  ) where
 
 import Language.Sparcl.Name
 import Language.Sparcl.Literal
 import Language.Sparcl.SrcLoc 
+
+import qualified Data.Map as M
+import qualified Data.Set as S 
 
 import qualified Language.Sparcl.Untyped.Syntax as S
 
@@ -12,16 +26,30 @@ import qualified Text.PrettyPrint.ANSI.Leijen as D
 
 
 data Ty = TyCon   QName [Ty]     -- ^ Type constructor 
-        | TyVar   Name           -- ^ Type variable         
+        | TyVar   TyVar          -- ^ Type variable         
         | TyMetaV MetaTyVar      -- ^ Metavariables (to be substituted in type inf.) 
-        | TyForAll [Name] BodyTy -- ^ polymorphic types 
+        | TyForAll [TyVar] BodyTy -- ^ polymorphic types 
         | TySyn   Ty Ty          -- ^ type synonym (@TySym o u@ means @u@ but @o@ will be used for error messages) 
          deriving (Eq, Show)
 
+data TyVar = BoundTv Name
+           | SkolemTv TyVar Int -- used only for checking of which type is more general. 
+  deriving Show 
+
+instance Eq TyVar where
+  BoundTv n == BoundTv m = n == m
+  SkolemTv _ i == SkolemTv _ j = i == j
+  _ == _ = False
+
+instance Pretty TyVar where
+  ppr (BoundTv n) = ppr n
+  ppr (SkolemTv n i) = ppr n D.<> D.text "@" D.<> D.int i 
+
+
 instance Pretty Ty where
   pprPrec _ (TyCon c []) = ppr c
-  pprPrec k (TyCon c [a,b]) | c == nameTyArr = parensIf (k > 0) $ 
-    D.group $ (pprPrec 1 a D.<$> D.text "->" D.<+> pprPrec 0 b)
+  pprPrec k (TyCon c [a,b]) | c == nameTyLArr = parensIf (k > 0) $ 
+    D.group $ (pprPrec 1 a D.<$> D.text "-o" D.<+> pprPrec 0 b)
   pprPrec k (TyCon c ts) = parensIf (k > 1) $
     ppr c D.<+> D.align (D.hsep (map (pprPrec 2) ts))
 
@@ -67,6 +95,58 @@ data Exp
   | RCase LExp [ (LPat, LExp, LExp ) ]
   | RPin  LExp LExp
   deriving Show 
+
+freeBVars :: LExp -> [ Name ]
+freeBVars e = [ n | BName n <- freeVars e ] 
+
+freeVars :: LExp -> [ QName ]
+freeVars e = S.toList $ go (S.fromList []) e (S.fromList [])
+  where
+    go bound e = go' bound (unLoc e)
+
+    go' _bound (Lit _) r = r
+    go' bound (Var q) r
+      | S.member q bound = r
+      | otherwise        = S.insert q r
+    go' bound (App e1 e2) r =
+      go bound e1 (go bound e2 r)
+
+    go' bound (Abs x e) r =
+      go (S.insert (BName x) bound) e r
+    go' bound (Con _ es) r =
+      foldl (flip $ go bound) r es
+    go' bound (Bang e) r = go bound e r
+    go' bound (Case e alts) r =
+      go bound e (goAlts bound alts r)
+    go' bound (Lift e1 e2) r =
+      go bound e1 (go bound e2 r)
+    go' bound (Sig e _) r = go bound e r
+    go' bound (Let decls e) r = 
+      let ns = [ n | Loc _ (DDef n _ _) <- decls ]
+          es = [ e | Loc _ (DDef _ _ e) <- decls ]
+          bound' = foldl (flip S.insert) bound $ map BName ns 
+      in go bound' e $ foldl (flip $ go bound') r es 
+
+    go' bound (Unlift e) r = go bound e r
+    go' bound (RCon _ es) r =
+      foldl (flip $ go bound) r es 
+    go' bound (RCase e ralts) r =
+      go bound e (goRAlts bound ralts r)
+    go' bound (RPin e1 e2) r =
+      go bound e1 (go bound e2 r)
+
+    goAlts _bound [] r = r
+    goAlts bound ((p,e):alts) r =
+      let ns = freeVarsP (unLoc p)
+          bound' = foldl (flip S.insert) bound $ map BName ns
+      in go bound' e (goAlts bound alts r)
+
+    goRAlts _bound [] r = r
+    goRAlts bound ((p,e,e'):alts) r =
+      let ns = freeVarsP (unLoc p)
+          bound' = foldl (flip S.insert) bound $ map BName ns
+      in go bound' e $ go bound e' $ goRAlts bound alts r 
+      
 
 instance Pretty (Loc Exp) where
   pprPrec k = pprPrec k . unLoc
@@ -168,11 +248,18 @@ instance Pretty Decl where
 
 instance Pretty LDecl where
   ppr (Loc l d) =
-    D.text "-- " D.<+> ppr l D.<$> ppr d
+    D.text "{- " D.<+> ppr l D.<+> D.text "-}"
+    D.<$> ppr d
 
   pprList _ = D.vsep . map ppr 
   
+type OpTable = M.Map QName (S.Prec, S.Assoc) 
 
-data TopDecl
-  = NormalDecl Decl
-  | Fixity     QName S.Prec S.Assoc
+data DataDecl 
+  = DData    Name [Name] [CDecl]
+
+data CDecl = CDecl Name [Ty]
+
+data TypeDecl
+  = DType    Name [Name] Ty
+

@@ -15,12 +15,12 @@ import Data.List (break)
 @reserved =
   if | then | else | case | of | let | in | with | where | abort
   | import | module | with | lift | unlift | forward | backward
-  | def | sig
+  | def | sig | data | type 
   | rev | end 
   | qualified | as | forall
 
 @punct =
-  "." | "->" | "(" | ")" | "{" | "}" | "[" | "]" | ";" | ":" | "," | "=" 
+  "." | "->" | "-o" | "(" | ")" | "{" | "}" | "[" | "]" | ";" | ":" | "," | "=" 
   | "|" | "_" | "@" | "!" | "\" -- " 
 
 $nl = [\n\r\f]
@@ -41,7 +41,7 @@ $symbol = [\= \+ \- \* \/ \^ \< \> \$ \| \& \? \: \# \@ \!]
 @modElem = $large ($small | $large) * 
 @moduleName = @modElem ("." @modElem)*
 
-@qVarId = @moduleName "." @varId
+@qVarId = (@moduleName ".")? @varId
 @qConId = (@moduleName ".")? @conId
 @qOp    = (@moduleName ".")? @op 
 
@@ -66,8 +66,7 @@ tokens :-
   @punct    { tok $ TkPunct } 
   @char     { tok $ TkCharLit . read }
   @decimal  { tok $ TkIntLit . read }
-  @varId     { tok $ TkVarID . NormalName } 
-  @qVarId    { tok $ TkQVarID . mkName }
+  @qVarId    { tok $ TkVarID . mkName }
   @qConId    { tok $ TkConID . mkName } 
   @qOp       { tok $ TkOp . mkName } 
   }
@@ -86,8 +85,7 @@ data AlexUserState
 data Token
   = TkKey     String
   | TkOp      QName 
-  | TkVarID   Name
-  | TkQVarID  QName 
+  | TkVarID   QName
   | TkConID   QName
   | TkIntLit  Int
   | TkCharLit Char

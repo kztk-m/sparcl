@@ -30,33 +30,38 @@ data NameInfo = NameInfo { niDefinedNames  :: [QName],
                            niAlphaEnv      :: AlphaEnv, 
                            niOpTable       :: M.Map QName (S.Prec, S.Assoc) }
 
-desugarTest :: NameInfo -> Desugar a -> IO a
-desugarTest ni d =
-  case runReaderT d ni of
-    Left ls ->
-      Fail.fail $ unlines [ show l ++ ": " ++ s | (l,s) <- ls ]
-    Right v -> return v 
+desugarTest :: ModuleName -> [QName] -> OpTable -> Desugar a -> IO a
+desugarTest currentModule definedNames opTable d =
+  let ni = NameInfo { niDefinedNames = definedNames,
+                      niCurrentModule = currentModule,
+                      niNameCounter = 0,
+                      niAlphaEnv = M.empty,
+                      niOpTable = opTable }
+  in case runReaderT d ni of
+       Left ls ->
+         Fail.fail $ unlines [ show l ++ ": " ++ s | (l,s) <- ls ]
+       Right v -> return v 
 
-defaultNameInfo :: NameInfo 
-defaultNameInfo =
-  let tbl = M.fromList [
-        base "+" |-> (S.Prec 60, S.L),
-        base "-" |-> (S.Prec 60, S.L), 
-        base "*" |-> (S.Prec 70, S.L),
-        base "/" |-> (S.Prec 70, S.L)
-        ]
-  in NameInfo {
-    niDefinedNames  = [ nameTyArr, nameTyBang,
-                        nameTyChar, nameTyDouble, nameTyInt,
-                        nameTyList, nameTyRev, conTrue, conFalse ] ++ M.keys tbl ,
-    niCurrentModule = ["Main"],
-    niNameCounter = 1,
-    niAlphaEnv = M.empty, 
-    niOpTable = tbl
-    }
-  where
-    a |-> b = (a, b) 
-    base s = QName baseModule (NormalName s) 
+-- defaultNameInfo :: NameInfo 
+-- defaultNameInfo =
+--   let tbl = M.fromList [
+--         base "+" |-> (S.Prec 60, S.L),
+--         base "-" |-> (S.Prec 60, S.L), 
+--         base "*" |-> (S.Prec 70, S.L),
+--         base "/" |-> (S.Prec 70, S.L)
+--         ]
+--   in NameInfo {
+--     niDefinedNames  = [ nameTyArr, nameTyBang,
+--                         nameTyChar, nameTyDouble, nameTyInt,
+--                         nameTyList, nameTyRev, conTrue, conFalse ] ++ M.keys tbl ,
+--     niCurrentModule = ["Main"],
+--     niNameCounter = 1,
+--     niAlphaEnv = M.empty, 
+--     niOpTable = tbl
+--     }
+--   where
+--     a |-> b = (a, b) 
+--     base s = QName baseModule (NormalName s) 
 
 
 withAlphaEntry :: Name -> Name -> Desugar a -> Desugar a
@@ -67,12 +72,12 @@ withAlphaEntries :: [(Name, Name)] -> Desugar a -> Desugar a
 withAlphaEntries ns m =
   foldr (uncurry withAlphaEntry) m ns 
 
-withName :: Name -> Desugar a -> Desugar a
-withName n m = 
+withDefinedName :: Name -> Desugar a -> Desugar a
+withDefinedName n m = 
   local (\ni -> ni { niDefinedNames = BName n : niDefinedNames ni }) m 
 
-withNames :: [Name] -> Desugar a -> Desugar a
-withNames ns m = foldr withName m ns 
+withDefinedNames :: [Name] -> Desugar a -> Desugar a
+withDefinedNames ns m = foldr withDefinedName m ns 
 
 withOpEntry :: Name -> (S.Prec, S.Assoc) -> Desugar a -> Desugar a
 withOpEntry n (k,a) m =
@@ -134,13 +139,14 @@ refineName l (BName n) = do
       if n == n' then m : checkNames cm n ns else checkNames cm n ns 
  
 
-desugarTy :: S.Ty -> Ty
-desugarTy (S.TVar q)    = TyVar q
-desugarTy (S.TCon n ts) =
-  TyCon n $ map (desugarTy . unLoc) ts
-desugarTy (S.TForall n t) = 
+desugarTy :: S.Ty -> Desugar Ty
+desugarTy (S.TVar q)    = return $ TyVar (BoundTv q) 
+desugarTy (S.TCon n ts) = do
+  n' <- refineName NoLoc n 
+  TyCon n' <$> mapM (desugarTy . unLoc) ts
+desugarTy (S.TForall n t) = do 
   let (ns, t') = unForall $ unLoc t
-  in TyForAll (n:ns) $ desugarTy t'
+  TyForAll (map BoundTv $ n:ns) <$> desugarTy t'
   where
     unForall :: S.Ty -> ([Name], S.Ty)
     unForall = go []
@@ -162,8 +168,7 @@ newNames n f = do
 withNewNamesFor :: [Name] -> Desugar r -> Desugar r
 withNewNamesFor ns m = 
   newNames (length ns) $ \ns' ->
-    withAlphaEntries (zip ns ns') $
-     withNames ns $ m 
+    withAlphaEntries (zip ns ns') $ m
 
   
 newQName :: (QName -> Desugar r) -> Desugar r 
@@ -242,12 +247,12 @@ desugarExp l (S.Bwd e) = do
         [ (noLoc $ PCon c [noLoc $ PVar x, noLoc $ PVar y],
            noLoc $ Var (BName y)) ] 
 
-desugarExp _ (S.Sig e t) = Sig <$> desugarLExp e <*> pure (desugarTy $ unLoc t) 
+desugarExp _ (S.Sig e t) = Sig <$> desugarLExp e <*> desugarTy (unLoc t)
 
 desugarExp _ (S.Let [] e) = unLoc <$> desugarLExp e 
 desugarExp _ (S.Let ds e) = do
   (ds', ns, ops) <- desugarLDecls ds
-  withNames ns $
+  withDefinedNames ns $
    withOpEntries ops $ 
      Let ds' <$> desugarLExp e
 
@@ -431,13 +436,11 @@ desugarCaseExp e0 alts = do
               let lxs = zipWith (\p x -> Loc (location p) $ PVar x) sub xs
               let re0 = makeTupleExpR $ map (noLoc . Var . BName) xs
               let outP = fillCPat cp lxs 
-              pes <- withNames (freeVarsP $ unLoc outP) $
-                     mapM (\(_,subs,binds,_,cl) ->
+              pes <- mapM (\(_,subs,binds,_,cl) ->
                               withAlphaEntries binds $ do 
                                 let p = S.makeTuplePat subs
                                 renamePatUnderRev p $ \p' -> do 
-                                  (eb, we) <- withNames (freeVarsP $ unLoc p') $
-                                              convertClauseR cl 
+                                  (eb, we) <- convertClauseR cl 
                                   return (p', eb, we) ) ralts
               return $ (outP , noLoc $ RCase re0 pes)
 
@@ -455,11 +458,37 @@ desugarLDecls ds = do
       throwError [ (l, "No corresponding definition: " ++ show n) 
                  | (l, n, _ ) <- ns ]       
     [] -> do 
-      ds' <- withNames defNames $
+      ds' <- withDefinedNames defNames $
               withOpEntries fixities $ 
                mapM (desugarDef sigs) defs
       return $ (ds', defNames, fixities) 
 
+desugarTopDecls ::
+  [Loc S.TopDecl]
+  -> Desugar ([LDecl], [QName], OpTable, [Loc DataDecl], [Loc TypeDecl])
+desugarTopDecls tdecls = do
+  cm <- getCurrentModule
+  let decls = [ Loc l d | Loc l (S.DDecl d) <- tdecls ]
+  dataDecls <- sequence    
+    [ do cdecls' <- mapM desugarCDecl cdecls 
+         return $ Loc l (DData n ns cdecls')
+    | Loc l (S.DData n ns cdecls) <- tdecls ]
+  typeDecls <- sequence
+    [ do ty' <- desugarTy (unLoc ty)
+         return $ Loc l (DType n ns ty')
+    | Loc l (S.DType n ns ty) <- tdecls ]
+
+  (decls', names, entries) <- desugarLDecls decls
+  let qnames = [ QName cm n | n <- names ]
+  let opTable = M.fromList [ (QName cm n,v) | (n, v) <- entries ]
+  
+  return (decls', qnames, opTable, dataDecls, typeDecls)
+  where
+    desugarCDecl (Loc _ (S.CDecl n ts)) = do
+      ts' <- mapM (desugarTy . unLoc) ts
+      return $ CDecl n ts'
+     
+      
 desugarDef :: [ (SrcSpan, Name, S.LTy) ] -> (SrcSpan, Name, [ ([S.LPat], S.Clause) ])
               -> Desugar LDecl
 desugarDef sigs (l, f, pcs) = do
@@ -478,7 +507,7 @@ desugarDef sigs (l, f, pcs) = do
                  res -> throwError $ [ (l, "Multiple signatures for " ++ show f)
                                      | (l,_,_) <- res ]
 
-        let sig' = (desugarTy . unLoc) <$> sig 
+        sig' <- traverse (desugarTy . unLoc) sig
         return $ Loc l (DDef f sig' body)
     ls -> 
       throwError [ (l, "#Arguments differ for " ++ show f ++ show ls) ]

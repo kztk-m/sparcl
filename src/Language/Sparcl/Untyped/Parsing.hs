@@ -8,6 +8,7 @@ import Language.Sparcl.Untyped.Syntax
 
 import Language.Sparcl.Untyped.Lexer
 import Language.Sparcl.Untyped.Parser
+import Language.Sparcl.SrcLoc
 
 import qualified Control.Monad.Fail as Fail
 
@@ -17,7 +18,7 @@ parseExp s = runAlex s pExp
 parseModule :: FilePath -> String -> Either String Module
 parseModule fp s = runAlex s (setFilePath fp >> pModule) 
 
-parseDecl :: String -> Either String [LDecl]
+parseDecl :: String -> Either String [Loc TopDecl]
 parseDecl s = runAlex s pDecls
 
 toIO :: Either String a -> IO a
@@ -28,7 +29,7 @@ toIO m = case m of
 parseExpTest :: String -> IO LExp
 parseExpTest = toIO . parseExp
 
-parseDeclTest :: String -> IO [LDecl]
+parseDeclTest :: String -> IO [Loc TopDecl]
 parseDeclTest = toIO . parseDecl 
 
 parseModuleTest :: FilePath -> String -> IO Module
