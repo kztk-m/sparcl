@@ -51,8 +51,38 @@ data TInfo
             tiSvCount :: !Int 
           }    
 
-newtype TC a = TC { unTC :: StateT TInfo (Either D.Doc) a }
+-- newtype TC a = TC { unTC :: StateT TInfo (Either D.Doc) a }
+newtype TC a = TC { unTC :: ExceptT D.Doc (State TInfo) a }
   deriving (Functor, Applicative, Monad, MonadState TInfo, MonadError D.Doc) 
+
+runTC :: TInfo -> TC a -> (Either D.Doc a, TInfo) 
+runTC tinfo (TC m) = runState (runExceptT m) tinfo 
+
+freeTyVars :: MonadTypeCheck m => [Ty] -> m [TyVar]
+freeTyVars ts = do
+  ts' <- mapM zonkType ts
+  return $ go ts' []
+    where
+      go []     r = r
+      go (t:ts) r = goT [] t (go ts r)
+
+      goT bound (TyVar t) r
+        | t `elem` bound = r
+        | t `elem` r     = r
+        | otherwise      = t : r
+      goT bound (TyCon _ ts) r =
+        foldr (goT bound) r ts
+      goT bound (TyForAll bs t) r = goT (bs ++ bound) t r
+      goT _bound (TyMetaV _) r = r
+      goT bound (TySyn ty _) r = goT bound ty r 
+
+initTInfo :: M.Map QName Ty -> M.Map QName ([TyVar], Ty) -> TInfo
+initTInfo tenv syn = 
+  TInfo { tiTyEnv   = M.map (\t -> (Omega, t)) tenv,
+          tiMvCount = 0,
+          tiMap     = IM.empty,
+          tiSyn     = syn,
+          tiSvCount = 0 } 
 
 getTyEnv :: TC TyEnv
 getTyEnv = gets tiTyEnv
@@ -97,12 +127,17 @@ metaTyVars xs = go xs []
 instance MonadTypeCheck TC where
   typeError = throwError
 
-  askType l n = do
-    ti <- get
-    let tyEnv = tiTyEnv ti
-    (ty, tyEnv') <- lookupTyEnv l n tyEnv
-    put (ti { tiTyEnv = tyEnv' })
-    return ty
+  askType l n
+    | Just k <- checkNameTuple n = do 
+        let tvs = map (BoundTv . NormalName) [ 't':show i | i <- [1..k] ]
+        let tys = map TyVar tvs
+        return $ TyForAll tvs $ foldr (-@) (tupleTy tys) tys        
+    | otherwise = do                       
+        ti <- get
+        let tyEnv = tiTyEnv ti
+        (ty, tyEnv') <- lookupTyEnv l n tyEnv
+        put (ti { tiTyEnv = tyEnv' })
+        return ty
 
   readTyVar mv = do
     ti <- get
@@ -250,7 +285,7 @@ unify ty1 ty2 = do
 unifyWork :: MonadTypeCheck m => MonoTy -> MonoTy -> m ()
 unifyWork (TySyn _ t1) t2 = unifyWork t1 t2
 unifyWork t1 (TySyn _ t2) = unifyWork t1 t2
-unifyWork (TyVar x1) (TyVar x2)       | x1 == x2 = return () -- this requires alpha renaming of variables. 
+unifyWork (TyVar x1) (TyVar x2)       | x1 == x2 = return ()
 unifyWork (TyMetaV mv1) (TyMetaV mv2) | mv1 == mv2 = return ()
 unifyWork (TyMetaV mv) ty = unifyMetaTyVar mv ty
 unifyWork ty (TyMetaV mv) = unifyMetaTyVar mv ty
@@ -261,7 +296,10 @@ unifyWork (TyCon c ts) (TyCon c' ts') | c == c' = do
 unifyWork ty1 ty2 = do
   ty1' <- zonkType ty1
   ty2' <- zonkType ty2
-  typeError $ D.text "Types do not match:" D.<+> ppr ty1' D.<+> ppr ty2'
+  typeError $ D.nest 2 $
+    D.text "Types do not match:" D.<$>
+    D.group (D.align (D.dquotes (ppr ty1') D.<+> D.text "vs."
+                       D.<$> D.dquotes (ppr ty2')))
 
 unifyMetaTyVar :: MonadTypeCheck m => MetaTyVar -> MonoTy -> m () 
 unifyMetaTyVar mv ty2 = do 
@@ -281,7 +319,7 @@ unifyUnboundMetaTyVar mv ty2 = do
   ty2' <- zonkType ty2
   let mvs = metaTyVars [ty2']
   case mv `elem` mvs of
-    True  -> typeError $ D.text "Occurrence check failed for:" D.<+> D.sep [ppr mv, D.text " appears in ", ppr ty2']
+    True  -> typeError $ D.text "Occurrence check failed:" D.<+> D.sep [ppr mv, D.text " appears in ", ppr ty2']
     False -> writeTyVar mv ty2'
 
         

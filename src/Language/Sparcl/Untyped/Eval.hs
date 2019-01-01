@@ -68,6 +68,9 @@ pprEnv env =
   D.sep [ ppr k D.<+> D.text "=" D.<+> ppr v
         | (k, v) <- M.toList env ] 
 
+runEval :: Eval a -> a
+runEval a = runReader a 0 
+
 evalTest :: Eval a -> IO a
 evalTest a = return $ runReader a 0 
   -- case runReaderT a 0 of
@@ -172,8 +175,10 @@ evalU env (Loc _loc exp) = case exp of
   Lift ef eb -> do
     VFun vf <- evalU env ef
     VFun vb <- evalU env eb
+    let vf' = vf . VBang
+    let vb' = vb . VBang 
     return $ VFun $ \(VRes f b) ->
-                      return $ VRes (f >=> vf) (vb >=> b)
+                      return $ VRes (f >=> vf') (vb' >=> b)
 
   Sig e _ ->
     evalU env e
@@ -183,15 +188,17 @@ evalU env (Loc _loc exp) = case exp of
     evalU env' e
 
   Unlift e -> do
-    VFun f <- evalU env e
+    VBang (VFun f) <- evalU env e
     newAddr $ \a -> do
       VRes f0 b0 <- f (VRes (\hp -> lookupHeap a hp)
                         (\v  -> return $ singletonHeap a v))
-      let f0' v = f0 (singletonHeap a v)
-      let b0' v = do hp <- b0 v
-                     lookupHeap a hp 
+      let f0' (VBang v) = f0 (singletonHeap a v)
+          f0' _         = error "expecting !"
+      let b0' (VBang v) = do hp <- b0 v
+                             lookupHeap a hp
+          b0' _         = error "expecting !"
       let c = nameTuple 2
-      return $ VCon c [VFun f0', VFun b0'] 
+      return $ VCon c [VBang (VFun f0'), VBang (VFun b0')] 
   
 
   RCon q es -> do 

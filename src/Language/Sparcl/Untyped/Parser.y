@@ -92,11 +92,11 @@ Module :: { Module }
   : "module" ModuleName Exports "where" sequence(Import) TopDecls
        { Module $2 $3 $5 $6 }
   | sequence(Import) TopDecls
-       { Module ["Main"] [] $1 $2 }
+       { Module ["Main"] Nothing $1 $2 }
 
-Exports :: { [Export] }
-  : "(" sepEndBy(QName,",") ")" { $2 }
-  |                             { [] }
+Exports :: { Maybe [Export] }
+  : "(" sepEndBy(QName,",") ")" { Just $2 }
+  |                             { Nothing }
 
 QName :: { QName }
   : ConQName { unLoc $1 }

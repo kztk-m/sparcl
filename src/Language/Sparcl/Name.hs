@@ -6,10 +6,12 @@ import qualified Text.PrettyPrint.ANSI.Leijen as D
 import Data.Char
 
 data Name = NormalName String
+          | NameTuple Int 
           | Generated  Int
   deriving (Ord, Eq, Show) 
 
 instance Pretty Name where
+  ppr (NameTuple n)  = D.text (replicate n ',') 
   ppr (NormalName n) = D.text n
   ppr (Generated  i) = D.text "_" D.<> D.int i 
 
@@ -42,7 +44,12 @@ conFalse :: QName
 conFalse = QName baseModule (NormalName "False")
 
 nameTuple :: Int -> QName
-nameTuple n = QName baseModule (NormalName $ replicate n ',')
+nameTuple n = QName baseModule (NameTuple n) 
+
+checkNameTuple :: QName -> Maybe Int
+checkNameTuple (QName _ (NameTuple m)) = Just m
+checkNameTuple (BName   (NameTuple m)) = Just m
+checkNameTuple _                       = Nothing 
 
 nameUnit :: QName
 nameUnit = nameTuple 0 

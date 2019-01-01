@@ -13,21 +13,34 @@ import Data.List ((\\))
 
 import qualified Data.Graph as G
 
+-- import Debug.Trace 
+
 checkUnificationError :: MonadTypeCheck m => SrcSpan -> Ty -> Ty -> m a -> m a
 checkUnificationError loc ty1 ty2 e = do
   catchError e $ \d -> do 
       ty1' <- zonkType ty1
       ty2' <- zonkType ty2
-      throwError $ ppr loc D.<+> (D.align $ D.nest 2 $ 
+      throwError $ ppr loc D.<$> (D.align $ D.nest 2 $ 
                                   D.vsep [D.text "Type error",
-                                          D.cat [D.text "Expected:", ppr ty2'],
-                                          D.cat [D.text "Inferred:", ppr ty1'] ])
+                                          D.nest 2 $ D.hsep [D.text "Expected:", D.align $ ppr ty2'],
+                                          D.nest 2 $ D.hsep [D.text "Inferred:", D.align $ ppr ty1'] ])
                    D.<$> D.text "Detail:" D.<+> d
 
 
 tryUnify :: MonadTypeCheck m => SrcSpan -> Ty -> Ty -> m () 
 tryUnify loc ty1 ty2 =
   checkUnificationError loc ty1 ty2 $ unify ty1 ty2 
+
+atExp :: MonadTypeCheck m => m a -> Exp -> m a
+atExp m e =
+  catchError m $ \doc ->
+    throwError $ doc D.<$>
+                 D.nest 2 (D.text "when checking expression:"
+                           D.</> ppr e)
+
+tryUnifyE :: MonadTypeCheck m => SrcSpan -> Exp -> Ty -> Ty -> m ()
+tryUnifyE loc e ty1 ty2 =
+  tryUnify loc ty1 ty2 `atExp` e 
 
 instantiate :: MonadTypeCheck m => PolyTy -> m MonoTy
 instantiate (TyForAll ts t) = do
@@ -36,10 +49,10 @@ instantiate (TyForAll ts t) = do
 instantiate t = return t 
 
 instPoly :: MonadTypeCheck m => SrcSpan -> PolyTy -> BodyTy -> m () 
-instPoly loc polyTy expectedTy = do 
+instPoly loc polyTy expectedTy = do  
   t <- instantiate polyTy
+  -- trace (show $ D.hsep [ppr polyTy, D.text "-->", D.align (ppr t)]) $
   tryUnify loc t expectedTy 
-
 inferTy :: MonadTypeCheck m => Loc Exp -> m BodyTy
 inferTy (Loc loc e) = go e
   where
@@ -77,51 +90,35 @@ ensurePairTy loc ty = do
   tryUnify loc ty (TyCon (nameTyTuple 2) [fstTy, sndTy])
   return (fstTy, sndTy) 
                   
-
-bangTy :: Ty -> Ty
-bangTy ty = TyCon nameTyBang [ty]
-
-revTy :: Ty -> Ty
-revTy ty = TyCon nameTyRev [ty]
-
-(-@) :: Ty -> Ty -> Ty
-t1 -@ t2 = TyCon nameTyLArr [t1, t2]
-
-boolTy :: Ty
-boolTy = TyCon nameTyBool []
-
-infixr 4 -@ 
-
 checkTy :: MonadTypeCheck m => Loc Exp -> BodyTy -> m ()
-checkTy (Loc loc e) expectedTy = go e
+checkTy (Loc loc exp) expectedTy = go exp
   where
     go (Var x) = do
-      tyOfX <- askType loc x
-      instPoly loc tyOfX expectedTy 
+      tyOfX <- askType loc x `atExp` exp 
+      instPoly loc tyOfX expectedTy `atExp` exp 
 
     go (Lit l) = case l of
       LitInt _ ->
-        tryUnify loc (TyCon nameTyInt []) expectedTy
+        tryUnifyE loc exp (TyCon nameTyInt []) expectedTy
       LitChar _ ->
-        tryUnify loc (TyCon nameTyChar []) expectedTy
+        tryUnifyE loc exp (TyCon nameTyChar []) expectedTy
       LitDouble _ ->
-        tryUnify loc (TyCon nameTyDouble []) expectedTy         
+        tryUnifyE loc exp (TyCon nameTyDouble []) expectedTy         
 
     go (Abs x e) = do
-      (argTy, resTy) <- ensureFunTy loc expectedTy
-      withLVar x argTy $
-        checkTy e resTy 
+      (argTy, resTy) <- ensureFunTy loc expectedTy `atExp` exp
+      (withLVar x argTy $ checkTy e resTy) `atExp` exp 
         
     go (App e1 e2) = do
       ty1 <- inferTy e1
-      (argTy, resTy) <- ensureFunTy (location e1) ty1
+      (argTy, resTy) <- ensureFunTy (location e1) ty1 `atExp` (unLoc e1)
       checkTy e2 argTy
-      tryUnify loc resTy expectedTy 
+      tryUnifyE loc (unLoc e2) resTy expectedTy 
 
     go (Con c es) = do
       tyOfC <- instantiate =<< askType loc c
       retTy <- foldM inferApp tyOfC es
-      tryUnify loc retTy expectedTy
+      tryUnifyE loc exp retTy expectedTy
         where
           inferApp ty e = do 
             (argTy, resTy) <- ensureFunTy (location e) ty
@@ -167,21 +164,21 @@ checkTy (Loc loc e) expectedTy = go e
       tyA  <- ensureBangTy loc tyBangA
       tyB' <- ensureBangTy loc tyBangB'
 
-      tryUnify loc tyA' tyA
-      tryUnify loc tyB' tyB 
+      tryUnifyE loc exp tyA' tyA
+      tryUnifyE loc exp tyB' tyB 
       
       checkTy e (bangTy $ revTy tyA -@ revTy tyB)
         
     go (Sig e ty) = do
       ty' <- instantiate ty
-      tryUnify loc ty' ty
+      tryUnifyE loc exp ty' ty
       checkTy e ty'
 
 
     go (RCon c es) = do
       tyOfC <- fmap addRev . instantiate =<< askType loc c
       retTy <- foldM inferApp tyOfC es
-      tryUnify loc retTy expectedTy
+      tryUnifyE loc exp retTy expectedTy
         where
           inferApp ty e = do 
             (argTy, resTy) <- ensureFunTy (location e) ty
@@ -194,8 +191,8 @@ checkTy (Loc loc e) expectedTy = go e
     go (RCase e ralts) = do
       tyPat <- newMetaTy NoLoc
       checkTy e (revTy tyPat)
-      ty <- ensureBangTy loc expectedTy 
-      checkRAltsTy ralts tyPat ty
+      ty <- ensureBangTy loc expectedTy `atExp` exp
+      checkRAltsTy ralts tyPat ty 
       
     -- e1 : rev a   
     -- e2 : !a -> rev b
@@ -203,8 +200,8 @@ checkTy (Loc loc e) expectedTy = go e
     -- pin e1 e2 : rev (a, b)
 
     go (RPin e1 e2) = do
-      tyAB <- ensureRevTy loc expectedTy
-      (tyA, tyB) <- ensurePairTy loc tyAB
+      tyAB <- ensureRevTy loc expectedTy `atExp` exp
+      (tyA, tyB) <- ensurePairTy loc tyAB `atExp` exp 
 
       checkTy e1 (revTy tyA)
       checkTy e2 (bangTy tyA -@ revTy tyB) 
@@ -287,28 +284,6 @@ checkMoreGeneral loc ty1 ty2 = do
   tryUnify loc ty1 ty2 
                                            
                          
-
-
-freeTyVars :: MonadTypeCheck m => [Ty] -> m [TyVar]
-freeTyVars ts = do
-  ts' <- mapM zonkType ts
-  return $ go ts' []
-    where
-      go []     r = r
-      go (t:ts) r = goT [] t (go ts r)
-
-      goT bound (TyVar t) r
-        | t `elem` bound = r
-        | t `elem` r     = r
-        | otherwise      = t : r
-      goT bound (TyCon _ ts) r =
-        foldr (goT bound) r ts
-      goT bound (TyForAll bs t) r = goT (bs ++ bound) t r
-      goT _bound (TyMetaV _) r = r
-      goT bound (TySyn ty _) r = goT bound ty r 
-
-  
-
 quantify :: MonadTypeCheck m => [MetaTyVar] -> BodyTy -> m PolyTy
 quantify mvs ty = do
   forM_ (zip mvs newBinders) $

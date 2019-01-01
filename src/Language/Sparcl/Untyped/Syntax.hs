@@ -275,7 +275,7 @@ instance Pretty (Loc Decl) where
     
 
 data Module
-  = Module ModuleName [Export] [Import] [Loc TopDecl]
+  = Module ModuleName (Maybe [Export]) [Import] [Loc TopDecl]
 
 type Export = QName
 data Import = Import { importModuleName :: ModuleName, importingNames :: Maybe [QName] }

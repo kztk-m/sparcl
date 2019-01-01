@@ -1,5 +1,8 @@
 {-# LANGUAGE ViewPatterns #-}
-module Language.Sparcl.Untyped.Desugar where
+module Language.Sparcl.Untyped.Desugar (
+  desugarTopDecls, desugarExp, desugarLExp, desugarTy,
+  runDesugar
+  ) where
 
 import qualified Language.Sparcl.Untyped.Syntax as S
 import Language.Sparcl.SrcLoc
@@ -30,8 +33,8 @@ data NameInfo = NameInfo { niDefinedNames  :: [QName],
                            niAlphaEnv      :: AlphaEnv, 
                            niOpTable       :: M.Map QName (S.Prec, S.Assoc) }
 
-desugarTest :: ModuleName -> [QName] -> OpTable -> Desugar a -> IO a
-desugarTest currentModule definedNames opTable d =
+runDesugar :: ModuleName -> [QName] -> OpTable -> Desugar a -> IO a
+runDesugar currentModule definedNames opTable d =
   let ni = NameInfo { niDefinedNames = definedNames,
                       niCurrentModule = currentModule,
                       niNameCounter = 0,
@@ -165,14 +168,14 @@ newNames n f = do
   i <- asks niNameCounter
   local (\ni -> ni { niNameCounter = i + n }) $ f (map Generated [i..i+n-1])
 
-withNewNamesFor :: [Name] -> Desugar r -> Desugar r
-withNewNamesFor ns m = 
-  newNames (length ns) $ \ns' ->
-    withAlphaEntries (zip ns ns') $ m
+-- withNewNamesFor :: [Name] -> Desugar r -> Desugar r
+-- withNewNamesFor ns m = 
+--   newNames (length ns) $ \ns' ->
+--     withAlphaEntries (zip ns ns') $ m
 
   
-newQName :: (QName -> Desugar r) -> Desugar r 
-newQName f = newName (f . BName) 
+-- newQName :: (QName -> Desugar r) -> Desugar r 
+-- newQName f = newName (f . BName) 
 
 
 {-
@@ -234,8 +237,8 @@ desugarExp l (S.Fwd e) = do
   newName $ \x ->
     newName $ \y -> do 
       e' <- desugarExp l (S.Unlift e) 
-      return $ Case (noLoc e')
-        [ (noLoc $ PCon c [noLoc $ PVar x, noLoc $ PVar y],
+      return $ Case (Loc (location e) e')
+        [ (noLoc $ PCon c [noLoc $ PBang $ noLoc $ PVar x, noLoc $ PBang $ noLoc $ PVar y],
            noLoc $ Var (BName x)) ] 
 
 desugarExp l (S.Bwd e) = do 
@@ -243,8 +246,8 @@ desugarExp l (S.Bwd e) = do
   newName $ \x ->
     newName $ \y -> do 
       e' <- desugarExp l (S.Unlift e) 
-      return $ Case (noLoc e')
-        [ (noLoc $ PCon c [noLoc $ PVar x, noLoc $ PVar y],
+      return $ Case (Loc (location e) e')
+        [ (noLoc $ PCon c [noLoc $ PBang $ noLoc $ PVar x, noLoc $ PBang $ noLoc $ PVar y],
            noLoc $ Var (BName y)) ] 
 
 desugarExp _ (S.Sig e t) = Sig <$> desugarLExp e <*> desugarTy (unLoc t)
@@ -322,33 +325,33 @@ renameAndSeparatePat p = goL p $ \cp sub binds adv -> return (cp, sub,binds, adv
        goLs ps $ \cps sub' binds' adv' ->
                  k (cp:cps) (sub ++ sub') (binds ++ binds') (adv + adv') 
   
-separateLPat :: S.LPat -> Desugar (Loc CPat, [ LPat ])
-separateLPat (Loc l p) = do
-  (p', sub) <- separatePat p
-  return (Loc l p', sub)
+-- separateLPat :: S.LPat -> Desugar (Loc CPat, [ LPat ])
+-- separateLPat (Loc l p) = do
+--   (p', sub) <- separatePat p
+--   return (Loc l p', sub)
 
-separatePat :: S.Pat -> Desugar (CPat, [ LPat ])
-separatePat (S.PVar n) = return (CPVar n, [])
-separatePat (S.PCon c ps) = do 
-  (ps', subs) <- unzip <$> mapM separateLPat ps
-  return (CPCon c ps', concat subs)
-separatePat (S.PBang p) =  do
-  (p', sub) <- separateLPat p
-  return (CPBang p', sub)
-separatePat S.PWild = error "Cannot happen" 
-separatePat (S.PREV p) =  do
-  p' <- convertLPat p 
-  return (CPHole, [ p']) 
+-- separatePat :: S.Pat -> Desugar (CPat, [ LPat ])
+-- separatePat (S.PVar n) = return (CPVar n, [])
+-- separatePat (S.PCon c ps) = do 
+--   (ps', subs) <- unzip <$> mapM separateLPat ps
+--   return (CPCon c ps', concat subs)
+-- separatePat (S.PBang p) =  do
+--   (p', sub) <- separateLPat p
+--   return (CPBang p', sub)
+-- separatePat S.PWild = error "Cannot happen" 
+-- separatePat (S.PREV p) =  do
+--   p' <- convertLPat p 
+--   return (CPHole, [ p']) 
 
-convertLPat :: S.LPat -> Desugar LPat
-convertLPat (Loc l (S.PVar n)) = return $ Loc l (PVar n)
-convertLPat (Loc l (S.PCon c ps)) = do
-  Loc l . PCon c <$> mapM convertLPat ps
-convertLPat (Loc l (S.PBang p)) =
-  Loc l . PBang <$> convertLPat p
-convertLPat (Loc _ S.PWild) = error "Cannot happen." 
-convertLPat (Loc l (S.PREV _)) =
-  throwError [(l, "rev patterns cannot be nested.")] 
+-- convertLPat :: S.LPat -> Desugar LPat
+-- convertLPat (Loc l (S.PVar n)) = return $ Loc l (PVar n)
+-- convertLPat (Loc l (S.PCon c ps)) = do
+--   Loc l . PCon c <$> mapM convertLPat ps
+-- convertLPat (Loc l (S.PBang p)) =
+--   Loc l . PBang <$> convertLPat p
+-- convertLPat (Loc _ S.PWild) = error "Cannot happen." 
+-- convertLPat (Loc l (S.PREV _)) =
+--   throwError [(l, "rev patterns cannot be nested.")] 
 
 fillCPat :: Loc CPat -> [LPat] -> LPat
 fillCPat c ps = evalState (go c) ps
@@ -370,20 +373,20 @@ fillCPat c ps = evalState (go c) ps
       
       
   
-makeTupleExp :: [LExp] -> LExp 
-makeTupleExp [e] = e
-makeTupleExp es  =
-  noLoc $ Con (nameTuple $ length es) es
+-- makeTupleExp :: [LExp] -> LExp 
+-- makeTupleExp [e] = e
+-- makeTupleExp es  =
+--   noLoc $ Con (nameTuple $ length es) es
 
 makeTupleExpR :: [LExp] -> LExp
 makeTupleExpR [e] = e
 makeTupleExpR es  =
   noLoc $ RCon (nameTuple $ length es) es
 
-makeTuplePat :: [LPat] -> LPat
-makeTuplePat [p] = p
-makeTuplePat ps =
-  noLoc $ PCon (nameTuple $ length ps) ps 
+-- makeTuplePat :: [LPat] -> LPat
+-- makeTuplePat [p] = p
+-- makeTuplePat ps =
+--   noLoc $ PCon (nameTuple $ length ps) ps 
   
                    
 
@@ -401,7 +404,7 @@ convertClauseR (S.Clause body ws (Just e)) = do
 convertClauseR (S.Clause body ws Nothing) = do
   body' <- Loc (location body) <$> desugarExp (location body) (S.Let ws body)
   -- FIXME: More sophisticated with-exp generation.
-  e' <- desugarLExp $ noLoc $ S.Abs [noLoc S.PWild] (noLoc $ S.Con conTrue [])
+  e' <- desugarLExp $ noLoc $ S.Bang $ noLoc $ S.Abs [noLoc S.PWild] (noLoc $ S.Con conTrue [])
   return $ (body', e') 
 
   
@@ -465,28 +468,61 @@ desugarLDecls ds = do
 
 desugarTopDecls ::
   [Loc S.TopDecl]
-  -> Desugar ([LDecl], [QName], OpTable, [Loc DataDecl], [Loc TypeDecl])
+  -> Desugar ([LDecl], [QName], OpTable, TypeTable, SynTable)
 desugarTopDecls tdecls = do
   cm <- getCurrentModule
   let decls = [ Loc l d | Loc l (S.DDecl d) <- tdecls ]
-  dataDecls <- sequence    
-    [ do cdecls' <- mapM desugarCDecl cdecls 
-         return $ Loc l (DData n ns cdecls')
-    | Loc l (S.DData n ns cdecls) <- tdecls ]
-  typeDecls <- sequence
-    [ do ty' <- desugarTy (unLoc ty)
-         return $ Loc l (DType n ns ty')
-    | Loc l (S.DType n ns ty) <- tdecls ]
+  -- dataDecls <- sequence    
+  --   [ do cdecls' <- mapM desugarCDecl cdecls 
+  --        return $ Loc l (DData n ns cdecls')
+  --   | Loc l (S.DData n ns cdecls) <- tdecls ]
+
+  -- typeDecls <- sequence
+  --   [ do ty' <- desugarTy (unLoc ty)
+  --        return $ Loc l (DType n ns ty')
+  --   | Loc l (S.DType n ns ty) <- tdecls ]
+
+  dataTable <- fmap M.fromList $ fmap concat $ sequence 
+               [ mapM (procCDecl n ns) cdecls 
+               | Loc _ (S.DData n ns cdecls) <- tdecls ]
+
+  synTable <- M.fromList <$> sequence
+              [ do ty' <- desugarTy (unLoc ty)
+                   let ns' = map BoundTv ns 
+                   when (not $ isClosed ns' ty') $ 
+                     throwError [(loc, prettyShow ty ++ " contains unboudn variable(s).")]
+                   return (BName n, (ns', ty')) 
+              | Loc loc (S.DType n ns ty) <- tdecls ]
 
   (decls', names, entries) <- desugarLDecls decls
   let qnames = [ QName cm n | n <- names ]
   let opTable = M.fromList [ (QName cm n,v) | (n, v) <- entries ]
   
-  return (decls', qnames, opTable, dataDecls, typeDecls)
+  return (decls', qnames, opTable, dataTable, synTable)
   where
-    desugarCDecl (Loc _ (S.CDecl n ts)) = do
-      ts' <- mapM (desugarTy . unLoc) ts
-      return $ CDecl n ts'
+    procCDecl :: Name -> [Name] -> Loc S.CDecl -> Desugar (QName, Ty)
+    procCDecl n ns (Loc loc (S.CDecl c ts)) = do
+      let ns' = map BoundTv ns 
+      ty <- foldr (\t m -> do
+                      r  <- m 
+                      t' <- desugarTy (unLoc t) 
+                      return $ TyCon nameTyLArr [t', r])
+                  (pure $ TyCon (BName n) $ map TyVar ns') ts
+
+      when (not $ isClosed ns' ty) $
+        throwError [(loc, prettyShow ty ++ " contains unbound variable")]
+
+      return (BName c, TyForAll ns' ty) 
+      
+
+    isClosed bs (TyVar ty)      = ty `elem` bs
+    isClosed bs (TyForAll ns t) = isClosed (ns ++ bs) t
+    isClosed bs (TyCon _ ts)    = all (isClosed bs) ts
+    isClosed _  _               = error "Cannot happen (at this point)." 
+    
+    -- desugarCDecl (Loc _ (S.CDecl n ts)) = do
+    --   ts' <- mapM (desugarTy . unLoc) ts
+    --   return $ CDecl n ts'
      
       
 desugarDef :: [ (SrcSpan, Name, S.LTy) ] -> (SrcSpan, Name, [ ([S.LPat], S.Clause) ])

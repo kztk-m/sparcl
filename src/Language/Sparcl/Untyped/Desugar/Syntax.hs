@@ -1,14 +1,17 @@
 module Language.Sparcl.Untyped.Desugar.Syntax (
   Ty(..), MetaTyVar(..), BodyTy, PolyTy, MonoTy,
+  bangTy, revTy, boolTy, (-@), tupleTy,
+  
   Exp(..), LExp,
   Pat(..), LPat,
   Decl(..), LDecl,
-  DataDecl(..), CDecl(..),TypeDecl(..),
+  TypeTable, SynTable, 
   freeVarsP, freeVars, freeBVars, TyVar(..), 
   S.Prec(..), S.Assoc(..), OpTable ,
   module Language.Sparcl.Name,
   module Language.Sparcl.Literal,
-  module Language.Sparcl.SrcLoc 
+  module Language.Sparcl.SrcLoc,
+  S.Module(..), S.Import(..)
   ) where
 
 import Language.Sparcl.Name
@@ -23,6 +26,8 @@ import qualified Language.Sparcl.Untyped.Syntax as S
 
 import Language.Sparcl.Pretty 
 import qualified Text.PrettyPrint.ANSI.Leijen as D
+
+-- FIXME: Desugared expressions should retain the original syntax for error messages. 
 
 
 data Ty = TyCon   QName [Ty]     -- ^ Type constructor 
@@ -75,6 +80,25 @@ instance Eq MetaTyVar where
 type BodyTy = MonoTy  -- forall body. only consider rank 1
 type PolyTy = Ty      -- polymorphic types
 type MonoTy = Ty      -- monomorphic types
+
+
+bangTy :: Ty -> Ty
+bangTy ty = TyCon nameTyBang [ty]
+
+revTy :: Ty -> Ty
+revTy ty = TyCon nameTyRev [ty]
+
+(-@) :: Ty -> Ty -> Ty
+t1 -@ t2 = TyCon nameTyLArr [t1, t2]
+
+boolTy :: Ty
+boolTy = TyCon nameTyBool []
+
+tupleTy :: [Ty] -> Ty
+tupleTy ts = TyCon (nameTyTuple $ length ts) ts 
+
+infixr 4 -@ 
+
 
 
 type LExp = Loc Exp 
@@ -255,11 +279,6 @@ instance Pretty LDecl where
   
 type OpTable = M.Map QName (S.Prec, S.Assoc) 
 
-data DataDecl 
-  = DData    Name [Name] [CDecl]
-
-data CDecl = CDecl Name [Ty]
-
-data TypeDecl
-  = DType    Name [Name] Ty
+type TypeTable = M.Map QName Ty
+type SynTable  = M.Map QName ([TyVar], Ty)
 
