@@ -2,7 +2,7 @@ module Language.Sparcl.Untyped.Desugar.Syntax (
   Ty(..), MetaTyVar(..), BodyTy, PolyTy, MonoTy,
   bangTy, revTy, boolTy, (-@), tupleTy,
   
-  Exp(..), LExp,
+  Exp(..), OLExp, Orig(..), noOrig, 
   Pat(..), LPat,
   Decl(..), LDecl,
   TypeTable, SynTable, 
@@ -27,8 +27,6 @@ import qualified Language.Sparcl.Untyped.Syntax as S
 import Language.Sparcl.Pretty 
 import qualified Text.PrettyPrint.ANSI.Leijen as D
 
--- FIXME: Desugared expressions should retain the original syntax for error messages. 
-
 
 data Ty = TyCon   QName [Ty]     -- ^ Type constructor 
         | TyVar   TyVar          -- ^ Type variable         
@@ -52,15 +50,27 @@ instance Pretty TyVar where
 
 
 instance Pretty Ty where
+  pprPrec _ (TyCon c ts)
+    | c == nameTyTuple (length ts) =
+        D.parens $ D.hsep $ D.punctuate D.comma $ map (pprPrec 0) ts
+  pprPrec k (TyCon c [t])
+    | c == nameTyBang =
+        parensIf (k > 1) $ D.text "!" D.<> pprPrec 1 t
+    | c == nameTyRev =
+        parensIf (k > 1) $ D.text "rev" D.<+> pprPrec 2 t 
+
   pprPrec _ (TyCon c []) = ppr c
   pprPrec k (TyCon c [a,b]) | c == nameTyLArr = parensIf (k > 0) $ 
     D.group $ (pprPrec 1 a D.<$> D.text "-o" D.<+> pprPrec 0 b)
+
   pprPrec k (TyCon c ts) = parensIf (k > 1) $
     ppr c D.<+> D.align (D.hsep (map (pprPrec 2) ts))
 
   pprPrec _ (TyVar x) = ppr x 
 
   pprPrec _ (TyMetaV m) = ppr m
+
+  pprPrec k (TyForAll [] t) = pprPrec k t 
   pprPrec k (TyForAll ns t) = parensIf (k > 0) $ 
     D.text "forall" D.<+>
       D.hsep (map ppr ns) D.<> D.text "."
@@ -99,34 +109,39 @@ tupleTy ts = TyCon (nameTyTuple $ length ts) ts
 
 infixr 4 -@ 
 
+data Orig a b = Orig { original :: Maybe a, desugared :: b }
+  deriving Show
+type OLExp = Orig S.LExp (Loc Exp)
 
+noOrig :: d -> Orig o d
+noOrig = Orig Nothing 
 
-type LExp = Loc Exp 
+-- type LExp = Loc Exp 
 data Exp 
   = Lit Literal
   | Var QName
-  | App LExp LExp
-  | Abs Name LExp
-  | Con QName [LExp]
-  | Bang LExp
-  | Case LExp [ (LPat, LExp ) ]
-  | Lift LExp LExp
-  | Sig  LExp Ty
-  | Let  [LDecl] LExp
-  | Unlift LExp 
+  | App OLExp OLExp
+  | Abs Name OLExp
+  | Con QName [OLExp]
+  | Bang OLExp
+  | Case OLExp [ (LPat, OLExp ) ]
+  | Lift OLExp OLExp
+  | Sig  OLExp Ty
+  | Let  [LDecl] OLExp
+  | Unlift OLExp 
 
-  | RCon QName [LExp]
-  | RCase LExp [ (LPat, LExp, LExp ) ]
-  | RPin  LExp LExp
+  | RCon QName [OLExp]
+  | RCase OLExp [ (LPat, OLExp, OLExp ) ]
+  | RPin  OLExp OLExp
   deriving Show 
 
-freeBVars :: LExp -> [ Name ]
+freeBVars :: OLExp -> [ Name ]
 freeBVars e = [ n | BName n <- freeVars e ] 
 
-freeVars :: LExp -> [ QName ]
+freeVars :: OLExp -> [ QName ]
 freeVars e = S.toList $ go (S.fromList []) e (S.fromList [])
   where
-    go bound e = go' bound (unLoc e)
+    go bound e = go' bound (unLoc $ desugared e)
 
     go' _bound (Lit _) r = r
     go' bound (Var q) r
@@ -148,7 +163,7 @@ freeVars e = S.toList $ go (S.fromList []) e (S.fromList [])
     go' bound (Let decls e) r = 
       let ns = [ n | Loc _ (DDef n _ _) <- decls ]
           es = [ e | Loc _ (DDef _ _ e) <- decls ]
-          bound' = foldl (flip S.insert) bound $ map BName ns 
+          bound' = foldl (flip S.insert) bound ns 
       in go bound' e $ foldl (flip $ go bound') r es 
 
     go' bound (Unlift e) r = go bound e r
@@ -172,6 +187,9 @@ freeVars e = S.toList $ go (S.fromList []) e (S.fromList [])
       in go bound' e $ go bound e' $ goRAlts bound alts r 
       
 
+instance Pretty d => Pretty (Orig o d) where
+  pprPrec k (Orig _ d) = pprPrec k d 
+
 instance Pretty (Loc Exp) where
   pprPrec k = pprPrec k . unLoc
 
@@ -182,6 +200,10 @@ instance Pretty Exp where
     pprPrec 9 e1 D.<+> pprPrec 10 e2
   pprPrec k (Abs x e) = parensIf (k > 0) $ D.group $ D.align $ 
     D.text "\\" D.<> ppr x D.<+> D.nest 2 (D.text "->" D.<$> D.align (pprPrec 0 e))
+
+  pprPrec _ (Con c es)
+    | c == nameTuple (length es) =
+        D.parens (D.hsep $ D.punctuate D.comma $ map (pprPrec 0) es)
 
   pprPrec _ (Con c []) =
     ppr c 
@@ -257,7 +279,7 @@ freeVarsP (PBang p)   = freeVarsP $ unLoc p
 
 type LDecl = Loc Decl 
 data Decl
-  = DDef Name (Maybe Ty) LExp
+  = DDef QName (Maybe Ty) OLExp
   deriving Show
 
 instance Pretty Decl where

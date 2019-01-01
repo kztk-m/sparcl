@@ -25,8 +25,8 @@ class (MonadError D.Doc m, Monad m) => MonadTypeCheck m where
   
   resolveSyn :: Ty -> m Ty 
 
-  withLVar :: Name -> Ty -> m r -> m r
-  withUVar :: Name -> Ty -> m r -> m r
+  withLVar :: QName -> Ty -> m r -> m r
+  withUVar :: QName -> Ty -> m r -> m r
 
   -- typing under empty linear environment 
   withoutLinear :: m () -> m () 
@@ -155,34 +155,34 @@ instance MonadTypeCheck TC where
 
   withLVar x ty m = do
     tyEnv  <- getTyEnv
-    let origX = M.lookup (BName x) tyEnv 
-    putTyEnv $ M.insert (BName x) (One, ty) tyEnv 
+    let origX = M.lookup x tyEnv 
+    putTyEnv $ M.insert x (One, ty) tyEnv 
     ret <- m
     tyEnvAfter <- getTyEnv 
-    case M.lookup (BName x) tyEnvAfter of
+    case M.lookup x tyEnvAfter of
       Just (Zero, _) ->
         case origX of
           Just ent -> do 
-            putTyEnv $ M.insert (BName x) ent tyEnvAfter -- restore the original if any
+            putTyEnv $ M.insert x ent tyEnvAfter -- restore the original if any
             return ret 
           Nothing -> do 
-            putTyEnv $ M.delete (BName x) tyEnvAfter
+            putTyEnv $ M.delete x tyEnvAfter
             return ret 
       _ -> do
         typeError $ D.text "Linear type variable" D.<+> D.dquotes (ppr x) D.<+> D.text "is not used linearly."
     
   withUVar x ty m = do
     tyEnv <- getTyEnv
-    let origX = M.lookup (BName x) tyEnv
-    putTyEnv $ M.insert (BName x) (Omega, ty) tyEnv 
+    let origX = M.lookup x tyEnv
+    putTyEnv $ M.insert x (Omega, ty) tyEnv 
     ret <- m
     tyEnvAfter <- getTyEnv
     case origX of
       Nothing -> do 
-        putTyEnv $ M.delete (BName x) tyEnvAfter
+        putTyEnv $ M.delete x tyEnvAfter
         return ret 
       Just ent -> do 
-        putTyEnv $ M.insert (BName x) ent tyEnvAfter
+        putTyEnv $ M.insert x ent tyEnvAfter
         return ret 
 
   withoutLinear m = do
@@ -234,10 +234,10 @@ instance MonadTypeCheck TC where
     put $ ti { tiSvCount = cnt + 1 }
     return $ SkolemTv ty cnt 
 
-withLVars :: MonadTypeCheck m => [ (Name, Ty) ] -> m r -> m r
+withLVars :: MonadTypeCheck m => [ (QName, Ty) ] -> m r -> m r
 withLVars ns m = foldr (uncurry withLVar) m ns
 
-withUVars :: MonadTypeCheck m => [ (Name, Ty) ] -> m r -> m r
+withUVars :: MonadTypeCheck m => [ (QName, Ty) ] -> m r -> m r
 withUVars ns m = foldr (uncurry withUVar) m ns 
 
 newMetaTy :: MonadTypeCheck m => SrcSpan -> m Ty

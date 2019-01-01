@@ -53,15 +53,15 @@ instPoly loc polyTy expectedTy = do
   t <- instantiate polyTy
   -- trace (show $ D.hsep [ppr polyTy, D.text "-->", D.align (ppr t)]) $
   tryUnify loc t expectedTy 
-inferTy :: MonadTypeCheck m => Loc Exp -> m BodyTy
-inferTy (Loc loc e) = go e
+inferTy :: MonadTypeCheck m => OLExp -> m BodyTy
+inferTy (Orig o (Loc loc e)) = go e
   where
     go (Sig e ty) = do 
       checkTy e ty
       return ty
     go e = do 
       ty <- newMetaTy NoLoc
-      checkTy (Loc loc e) ty
+      checkTy (Orig o (Loc loc e)) ty
       return ty 
 
 ensureFunTy :: MonadTypeCheck m => SrcSpan -> MonoTy -> m (MonoTy, MonoTy)
@@ -90,8 +90,8 @@ ensurePairTy loc ty = do
   tryUnify loc ty (TyCon (nameTyTuple 2) [fstTy, sndTy])
   return (fstTy, sndTy) 
                   
-checkTy :: MonadTypeCheck m => Loc Exp -> BodyTy -> m ()
-checkTy (Loc loc exp) expectedTy = go exp
+checkTy :: MonadTypeCheck m => OLExp -> BodyTy -> m ()
+checkTy (Orig _orig (Loc loc exp)) expectedTy = go exp
   where
     go (Var x) = do
       tyOfX <- askType loc x `atExp` exp 
@@ -107,21 +107,22 @@ checkTy (Loc loc exp) expectedTy = go exp
 
     go (Abs x e) = do
       (argTy, resTy) <- ensureFunTy loc expectedTy `atExp` exp
-      (withLVar x argTy $ checkTy e resTy) `atExp` exp 
+      (withLVar (BName x) argTy $ checkTy e resTy) `atExp` exp 
         
     go (App e1 e2) = do
       ty1 <- inferTy e1
-      (argTy, resTy) <- ensureFunTy (location e1) ty1 `atExp` (unLoc e1)
+      (argTy, resTy) <- ensureFunTy (location $ desugared e1) ty1 `atExp` (unLoc $ desugared e1)
       checkTy e2 argTy
-      tryUnifyE loc (unLoc e2) resTy expectedTy 
+      tryUnifyE loc (unLoc $ desugared e2) resTy expectedTy 
 
     go (Con c es) = do
       tyOfC <- instantiate =<< askType loc c
       retTy <- foldM inferApp tyOfC es
+      -- trace (show $ ppr c D.<+> D.colon D.<+> ppr tyOfC) $
       tryUnifyE loc exp retTy expectedTy
         where
           inferApp ty e = do 
-            (argTy, resTy) <- ensureFunTy (location e) ty
+            (argTy, resTy) <- ensureFunTy (location $ desugared e) ty
             checkTy e argTy
             return resTy 
 
@@ -181,7 +182,7 @@ checkTy (Loc loc exp) expectedTy = go exp
       tryUnifyE loc exp retTy expectedTy
         where
           inferApp ty e = do 
-            (argTy, resTy) <- ensureFunTy (location e) ty
+            (argTy, resTy) <- ensureFunTy (location $ desugared e) ty
             checkTy e argTy
             return resTy
 
@@ -210,7 +211,7 @@ checkTy (Loc loc exp) expectedTy = go exp
       bind <- inferDecls decls 
       withUVars bind $ checkTy e expectedTy
 
-inferMutual :: MonadTypeCheck m => [LDecl] -> m [(Name, PolyTy)]
+inferMutual :: MonadTypeCheck m => [LDecl] -> m [(QName, PolyTy)]
 inferMutual decls = do
   let nes = [ (n,e) | Loc _ (DDef n _ e) <- decls ]
   let ns  = map fst nes 
@@ -222,11 +223,11 @@ inferMutual decls = do
 
   nts0 <- withUVars (zip ns tys) $ forM decls $ \(Loc loc (DDef n _ e)) -> do 
     ty  <- inferTy e              -- type of e 
-    tyE <- askType (location e) (BName n) -- type of n in the environment 
+    tyE <- askType (location $ desugared e) n -- type of n in the environment 
     when (not $ M.member n sigMap) $
       -- Defer unification if a declaration comes with a signature because
       -- the signature can be a polytype while unification targets monotypes. 
-      tryUnify (location e) ty tyE
+      tryUnify (location $ desugared e) ty tyE
     return (n, loc, ty) 
 
   envMetaVars <- getMetaTyVarsInEnv
@@ -237,14 +238,14 @@ inferMutual decls = do
     polyTy <- quantify (mvs \\ envMetaVars) tt 
     
     case M.lookup n sigMap of
-      Nothing    -> return (n, t)
+      Nothing    -> return (n, polyTy)
       Just sigTy -> do 
         checkMoreGeneral loc polyTy sigTy
         return (n, sigTy) 
 
   return nts1
 
-inferDecls :: MonadTypeCheck m => [LDecl] -> m [(Name, PolyTy)]
+inferDecls :: MonadTypeCheck m => [LDecl] -> m [(QName, PolyTy)]
 inferDecls decls = do
   let declss = map unSCC (G.stronglyConnComp graph)
   foldr (\ds m -> do 
@@ -254,7 +255,7 @@ inferDecls decls = do
     unSCC (G.AcyclicSCC x) = [x]
     unSCC (G.CyclicSCC xs) = xs
 
-    graph = [ (decl, n, freeBVars e) | decl@(Loc _ (DDef n _ e)) <- decls ]
+    graph = [ (decl, n, freeVars e) | decl@(Loc _ (DDef n _ e)) <- decls ]
     
   
 
@@ -306,7 +307,7 @@ allFancyBinders = map (BoundTv . NormalName) $
   [ x : show i | i <- [1::Integer ..], x <- ['a'..'z'] ] 
 
 
-checkAltsTy :: MonadTypeCheck m => [ (Loc Pat, Loc Exp) ] -> MonoTy -> BodyTy -> m ()
+checkAltsTy :: MonadTypeCheck m => [ (Loc Pat, OLExp) ] -> MonoTy -> BodyTy -> m ()
 checkAltsTy [] _ _ = return ()
 checkAltsTy ((p,e):alts) pty bty = do
   (ubinds, lbinds) <- checkPatTy p pty
@@ -315,7 +316,7 @@ checkAltsTy ((p,e):alts) pty bty = do
     checkTy e bty
   checkAltsTy alts pty bty 
 
-checkRAltsTy :: MonadTypeCheck m => [ (Loc Pat, Loc Exp, Loc Exp) ] -> MonoTy -> BodyTy -> m ()
+checkRAltsTy :: MonadTypeCheck m => [ (Loc Pat, OLExp, OLExp) ] -> MonoTy -> BodyTy -> m ()
 checkRAltsTy [] _ _ = return ()
 checkRAltsTy ((p,e,e'):ralts) pty bty = do
   -- the top level "rev" are already removed in pty and bty
@@ -329,10 +330,10 @@ checkRAltsTy ((p,e,e'):ralts) pty bty = do
       checkTy e' (bangTy (bangTy bty -@ boolTy))
       checkRAltsTy ralts pty bty 
 
-checkPatTy :: MonadTypeCheck m => Loc Pat -> MonoTy -> m ( [(Name, MonoTy)], [(Name,MonoTy)] )
+checkPatTy :: MonadTypeCheck m => Loc Pat -> MonoTy -> m ( [(QName, MonoTy)], [(QName,MonoTy)] )
 checkPatTy (Loc loc p) expectedTy = go p
   where
-     go (PVar x) = return ([], [(x,expectedTy)])
+     go (PVar x) = return ([], [(BName x,expectedTy)])
      go (PBang p) = do
        ty <- ensureBangTy loc expectedTy  
        (ubind, lbind) <- checkPatTy p ty

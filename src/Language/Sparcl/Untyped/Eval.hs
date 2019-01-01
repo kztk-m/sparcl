@@ -5,10 +5,6 @@ module Language.Sparcl.Untyped.Eval where
 
 import Language.Sparcl.Untyped.Desugar.Syntax
 
-import Language.Sparcl.Name 
-import Language.Sparcl.Literal
-import Language.Sparcl.SrcLoc
-
 import qualified Data.Map as M
 import Data.Map (Map)
 
@@ -39,8 +35,8 @@ type Env = Map QName Value
 -- type Eval = ReaderT Int (Either String)
 type Eval = Reader Int 
 
-extendsEnv :: [(Name, Value)] -> Env -> Env
-extendsEnv nvs env = foldr (uncurry (extendEnv . BName)) env nvs 
+extendsEnv :: [(QName, Value)] -> Env -> Env
+extendsEnv nvs env = foldr (uncurry extendEnv) env nvs 
    
 lookupEnv :: QName -> Env -> Eval Value
 lookupEnv n env = case M.lookup n env of
@@ -146,8 +142,8 @@ evalUDecls env ds = do
         let env' = extendsEnv ev env
     return env' 
 
-evalU :: Env -> LExp -> Eval Value
-evalU env (Loc _loc exp) = case exp of
+evalU :: Env -> OLExp -> Eval Value
+evalU env (desugared -> Loc _loc exp) = case exp of
   Lit l -> return $ VLit l
   Var n ->
     lookupEnv n env
@@ -249,26 +245,26 @@ evalU env (Loc _loc exp) = case exp of
 
 
     
-evalCase :: Env -> Value -> [ (LPat, LExp) ] -> Eval Value
+evalCase :: Env -> Value -> [ (LPat, OLExp) ] -> Eval Value
 evalCase _   _ [] = rtError $ D.text "pattern match error"
 evalCase env v ((p, e):pes) =
   case findMatch v p of
     Just binds -> evalU (extendsEnv binds env) e
     _          -> evalCase env v pes 
 
-findMatch :: Value -> LPat -> Maybe [ (Name, Value) ]
-findMatch v (unLoc -> PVar n) = return [(n,v)]
+findMatch :: Value -> LPat -> Maybe [ (QName, Value) ]
+findMatch v (unLoc -> PVar n) = return [(BName n,v)]
 findMatch (VCon q vs) (unLoc -> PCon q' ps) | q == q' && length vs == length ps =
                                        concat <$> zipWithM findMatch vs ps
 findMatch (VBang v) (unLoc -> PBang p) = findMatch v p
 findMatch _ _ = Nothing 
 
-evalCaseF :: Env -> Heap -> (Heap -> Eval Value) -> [ (LPat, LExp, Value -> Eval Bool) ] -> Eval Value
+evalCaseF :: Env -> Heap -> (Heap -> Eval Value) -> [ (LPat, OLExp, Value -> Eval Bool) ] -> Eval Value
 evalCaseF env hp f pes = do
   v0 <- f hp 
   go v0 [] pes
   where
-    go :: Value -> [Value -> Eval Bool] -> [ (LPat, LExp, Value -> Eval Bool) ] -> Eval Value
+    go :: Value -> [Value -> Eval Bool] -> [ (LPat, OLExp, Value -> Eval Bool) ] -> Eval Value
     go _  _       [] = rtError $ D.text "pattern match failure (fwd)"
     go v0 checker ((p,e,ch) : pes) =
       case findMatch v0 p of
@@ -291,7 +287,7 @@ evalCaseF env hp f pes = do
       return res
 
 
-evalCaseB :: Env -> Value -> (Value -> Eval Heap) -> [ (LPat, LExp, Value -> Eval Bool) ] -> Eval Heap
+evalCaseB :: Env -> Value -> (Value -> Eval Heap) -> [ (LPat, OLExp, Value -> Eval Bool) ] -> Eval Heap
 evalCaseB env vres b pes = do
   (v, hp) <- go [] pes
   hp' <- b v
@@ -311,7 +307,7 @@ evalCaseB env vres b pes = do
           let xs = freeVarsP (unLoc p)
           newAddrs (length xs) $ \as -> do 
             let binds' = zipWith (\x a ->
-                                    (x, VRes (lookupHeap a) (return . singletonHeap a))) xs as
+                                    (BName x, VRes (lookupHeap a) (return . singletonHeap a))) xs as
             VRes _ b <- evalU (extendsEnv binds' env) e
             hpBr <- b vres
             v0 <- fillPat (unLoc p) <$> zipWithM (\x a -> (x,) <$> lookupHeap a hpBr) xs as
@@ -339,7 +335,7 @@ runBwd (VRes _ b) = b
 runBwd _          = \_ -> rtError $ D.text "expected a reversible comp." 
   
   
-evalD :: Env -> LDecl -> Eval (Name, Value)
+evalD :: Env -> LDecl -> Eval (QName, Value)
 evalD env (unLoc -> DDef n _ e) = do
   (n,) <$> evalU env e
 

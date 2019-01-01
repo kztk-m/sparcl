@@ -75,18 +75,18 @@ withAlphaEntries :: [(Name, Name)] -> Desugar a -> Desugar a
 withAlphaEntries ns m =
   foldr (uncurry withAlphaEntry) m ns 
 
-withDefinedName :: Name -> Desugar a -> Desugar a
+withDefinedName :: QName -> Desugar a -> Desugar a
 withDefinedName n m = 
-  local (\ni -> ni { niDefinedNames = BName n : niDefinedNames ni }) m 
+  local (\ni -> ni { niDefinedNames = n : niDefinedNames ni }) m 
 
-withDefinedNames :: [Name] -> Desugar a -> Desugar a
+withDefinedNames :: [QName] -> Desugar a -> Desugar a
 withDefinedNames ns m = foldr withDefinedName m ns 
 
-withOpEntry :: Name -> (S.Prec, S.Assoc) -> Desugar a -> Desugar a
+withOpEntry :: QName -> (S.Prec, S.Assoc) -> Desugar a -> Desugar a
 withOpEntry n (k,a) m =
-  local (\ni -> ni { niOpTable = M.insert (BName n) (k, a) $ niOpTable ni }) m
+  local (\ni -> ni { niOpTable = M.insert n (k, a) $ niOpTable ni }) m
 
-withOpEntries :: [ (Name, (S.Prec, S.Assoc)) ] -> Desugar a -> Desugar a
+withOpEntries :: [ (QName, (S.Prec, S.Assoc)) ] -> Desugar a -> Desugar a
 withOpEntries ns m = foldr (uncurry withOpEntry) m ns 
 
 getCurrentModule :: Desugar ModuleName
@@ -116,16 +116,11 @@ isRightAssoc (k1, a1) (k2, a2)
       
              
 refineName :: SrcSpan -> QName -> Desugar QName
-refineName _ (QName m n) = do
-  cm <- getCurrentModule
-  if m == cm
-    then return (BName n)   -- Names in the current module should not be qualified 
-    else return (QName m n)
+refineName _ (QName m n) = return $ QName m n 
 refineName l (BName n) = do
   ns <- asks niDefinedNames
-  cm <- getCurrentModule
-  let res = checkNames cm n ns
-  case filter (/=cm) res of
+  let res = checkNames n ns
+  case res of
     [m]  -> return (QName m n)
     []   -> do
       env <- asks niAlphaEnv
@@ -134,14 +129,24 @@ refineName l (BName n) = do
         Nothing -> return (BName n)
     _    -> throwError [ (l, "Ambiguous name `" ++ show n ++ "' " ++ show (nub res))]
   where
-    checkNames :: ModuleName -> Name -> [QName] -> [ModuleName]
-    checkNames _cm _n [] = []
-    checkNames cm n (BName n' : ns) =
-      if n == n' then cm : checkNames cm n ns else checkNames cm n ns
-    checkNames cm n (QName m n' : ns) =
-      if n == n' then m : checkNames cm n ns else checkNames cm n ns 
+    -- assumes that QNames can only occur after BNames    
+    checkNames :: Name -> [QName] -> [ModuleName]
+    checkNames _ []            = [] 
+    checkNames n (BName n':ns)
+      | n == n'   = [] -- Ok. n is locally bound name.
+      | otherwise = checkNames n ns 
+    checkNames n (QName m n':ns)
+      | n == n'   = m:checkNames n ns -- n is defined in m 
+      | otherwise = checkNames n ns 
+    
+    
+    -- checkNames :: ModuleName -> Name -> [QName] -> [ModuleName]
+    -- checkNames _cm _n [] = []
+    -- checkNames cm n (BName n' : ns) =
+    --   if n == n' then cm : checkNames cm n ns else checkNames cm n ns
+    -- checkNames cm n (QName m n' : ns) =
+    --   if n == n' then m : checkNames cm n ns else checkNames cm n ns 
  
-
 desugarTy :: S.Ty -> Desugar Ty
 desugarTy (S.TVar q)    = return $ TyVar (BoundTv q) 
 desugarTy (S.TCon n ts) = do
@@ -201,8 +206,10 @@ desugar* functions perform the following transformations at once.
 
 -}
 
-desugarLExp :: S.LExp -> Desugar LExp
-desugarLExp (Loc l e) = Loc l <$> desugarExp l e
+desugarLExp :: S.LExp -> Desugar OLExp
+desugarLExp orig@(Loc l e) = do
+  e' <- desugarExp l e
+  return $ Orig (Just orig) (Loc l e') 
 
 desugarExp :: SrcSpan -> S.Exp -> Desugar Exp
 desugarExp _ (S.Lit l) = return $ Lit l
@@ -216,7 +223,7 @@ desugarExp l (S.Abs ps e) = do
     e' <- desugarExp l $
           S.Case (S.makeTupleExp [noLoc $ S.Var (BName x) | x <- xs])
           [ (S.makeTuplePat ps, S.Clause e [] Nothing) ]     
-    return $ unLoc $ foldr (\n r -> noLoc (Abs n r)) (noLoc e') xs
+    return $ unLoc $ desugared $ foldr (\n r -> noOrig $ noLoc (Abs n r)) (noOrig $ noLoc e') xs
 
 desugarExp l (S.Con c es) = do
   c' <- refineName l c 
@@ -237,32 +244,32 @@ desugarExp l (S.Fwd e) = do
   newName $ \x ->
     newName $ \y -> do 
       e' <- desugarExp l (S.Unlift e) 
-      return $ Case (Loc (location e) e')
+      return $ Case (noOrig $ Loc (location e) e')
         [ (noLoc $ PCon c [noLoc $ PBang $ noLoc $ PVar x, noLoc $ PBang $ noLoc $ PVar y],
-           noLoc $ Var (BName x)) ] 
+           noOrig $ noLoc $ Var (BName x)) ] 
 
 desugarExp l (S.Bwd e) = do 
   let c = nameTuple 2
   newName $ \x ->
     newName $ \y -> do 
       e' <- desugarExp l (S.Unlift e) 
-      return $ Case (Loc (location e) e')
+      return $ Case (noOrig $ Loc (location e) e')
         [ (noLoc $ PCon c [noLoc $ PBang $ noLoc $ PVar x, noLoc $ PBang $ noLoc $ PVar y],
-           noLoc $ Var (BName y)) ] 
+           noOrig $ noLoc $ Var (BName y)) ] 
 
 desugarExp _ (S.Sig e t) = Sig <$> desugarLExp e <*> desugarTy (unLoc t)
 
-desugarExp _ (S.Let [] e) = unLoc <$> desugarLExp e 
+desugarExp _ (S.Let [] e) = unLoc . desugared <$> desugarLExp e 
 desugarExp _ (S.Let ds e) = do
-  (ds', ns, ops) <- desugarLDecls ds
+  (ds', ns, ops) <- desugarLDecls BName ds
   withDefinedNames ns $
    withOpEntries ops $ 
      Let ds' <$> desugarLExp e
 
-desugarExp _ (S.Parens e) = unLoc <$> desugarLExp e
+desugarExp _ (S.Parens e) = unLoc . desugared <$> desugarLExp e
 desugarExp l (S.Op op e1 e2) = do
   op' <- refineName l op 
-  unLoc <$> rearrangeOp l op' e1 e2 
+  unLoc . desugared <$> rearrangeOp l op' e1 e2 
 
 desugarExp l (S.RCon c es) = do
   c' <- refineName l c 
@@ -293,8 +300,9 @@ renamePatUnderRev p k0 = go p k0
   where
     go (Loc l (S.PVar n)) k = newName $ \n' -> withAlphaEntry n n' $
       k (Loc l (PVar n'))
-    go (Loc l (S.PCon c ps)) k =
-      gos ps $ \ps' -> k (Loc l (PCon c ps')) 
+    go (Loc l (S.PCon c ps)) k = do
+      c' <- refineName l c 
+      gos ps $ \ps' -> k (Loc l (PCon c' ps')) 
     go (Loc l _) _ = do
       throwError [ (l, "reversible patterns cannot contain !, rev, _") ]
 
@@ -378,10 +386,10 @@ fillCPat c ps = evalState (go c) ps
 -- makeTupleExp es  =
 --   noLoc $ Con (nameTuple $ length es) es
 
-makeTupleExpR :: [LExp] -> LExp
+makeTupleExpR :: [OLExp] -> OLExp
 makeTupleExpR [e] = e
 makeTupleExpR es  =
-  noLoc $ RCon (nameTuple $ length es) es
+  noOrig $ noLoc $ RCon (nameTuple $ length es) es
 
 -- makeTuplePat :: [LPat] -> LPat
 -- makeTuplePat [p] = p
@@ -390,19 +398,19 @@ makeTupleExpR es  =
   
                    
 
-convertClauseU :: S.Clause -> Desugar LExp
+convertClauseU :: S.Clause -> Desugar OLExp
 convertClauseU (S.Clause body ws Nothing) =
-  Loc (location body) <$> desugarExp (location body) (S.Let ws body)
+  noOrig <$> Loc (location body) <$> desugarExp (location body) (S.Let ws body)
 convertClauseU (S.Clause _ _ (Just e)) =
   throwError [ (location e, "Unidirectional branch cannot have `with' expression") ]
 
-convertClauseR :: S.Clause -> Desugar (LExp, LExp)
+convertClauseR :: S.Clause -> Desugar (OLExp, OLExp)
 convertClauseR (S.Clause body ws (Just e)) = do
-  body' <- Loc (location body) <$> desugarExp (location body) (S.Let ws body)
+  body' <- noOrig <$> Loc (location body) <$> desugarExp (location body) (S.Let ws body)
   e'    <- desugarLExp e
   return $ (body', e')
 convertClauseR (S.Clause body ws Nothing) = do
-  body' <- Loc (location body) <$> desugarExp (location body) (S.Let ws body)
+  body' <- noOrig <$> Loc (location body) <$> desugarExp (location body) (S.Let ws body)
   -- FIXME: More sophisticated with-exp generation.
   e' <- desugarLExp $ noLoc $ S.Bang $ noLoc $ S.Abs [noLoc S.PWild] (noLoc $ S.Con conTrue [])
   return $ (body', e') 
@@ -420,7 +428,7 @@ desugarCaseExp e0 alts = do
   alts <- mapM makeBCases altss 
   return $ Case e0' alts 
     where
-      makeBCases :: [ (Loc CPat, [S.LPat], [(Name,Name)], Int, S.Clause) ] -> Desugar (Loc Pat, LExp)
+      makeBCases :: [ (Loc CPat, [S.LPat], [(Name,Name)], Int, S.Clause) ] -> Desugar (Loc Pat, OLExp)
       makeBCases [] = error "Cannot happen." 
       makeBCases ralts@((cp, sub, binds, adv, clause):_)
         | [] <- sub = newNames adv $ \_ -> withAlphaEntries binds $ do 
@@ -437,7 +445,7 @@ desugarCaseExp e0 alts = do
             -- in ralts, while binds can differ. 
             newNames (length sub) $ \xs -> do 
               let lxs = zipWith (\p x -> Loc (location p) $ PVar x) sub xs
-              let re0 = makeTupleExpR $ map (noLoc . Var . BName) xs
+              let re0 = makeTupleExpR $ map (noOrig . noLoc . Var . BName) xs
               let outP = fillCPat cp lxs 
               pes <- mapM (\(_,subs,binds,_,cl) ->
                               withAlphaEntries binds $ do 
@@ -445,26 +453,27 @@ desugarCaseExp e0 alts = do
                                 renamePatUnderRev p $ \p' -> do 
                                   (eb, we) <- convertClauseR cl 
                                   return (p', eb, we) ) ralts
-              return $ (outP , noLoc $ RCase re0 pes)
+              return $ (outP , noOrig $ noLoc $ RCase re0 pes)
 
 
-desugarLDecls :: [S.LDecl] -> Desugar ([LDecl], [Name], [(Name, (S.Prec, S.Assoc))]) 
-desugarLDecls ds = do
+desugarLDecls :: (Name -> QName) -> [S.LDecl] -> Desugar ([LDecl], [QName], [(QName, (S.Prec, S.Assoc))]) 
+desugarLDecls qualifier ds = do
   let defs = [ (l, n, pcs) | Loc l (S.DDef n pcs) <- ds ]
   let sigs = [ (l, n, t)   | Loc l (S.DSig n t) <- ds ]
-  let fixities = [ (n, (k,a)) | Loc _ (S.DFixity n k a) <- ds ] 
+  let fixities = [ (qualifier n, (k,a)) | Loc _ (S.DFixity n k a) <- ds ] 
   
   let defNames = [ n | (_, n, _) <- defs ]
+  let defQNames = map qualifier defNames
 
   case filter (\(_,n,_) -> all (\m -> n /= m) defNames) sigs of 
     ns@(_:_) ->
       throwError [ (l, "No corresponding definition: " ++ show n) 
                  | (l, n, _ ) <- ns ]       
     [] -> do 
-      ds' <- withDefinedNames defNames $
+      ds' <- withDefinedNames defQNames $
               withOpEntries fixities $ 
-               mapM (desugarDef sigs) defs
-      return $ (ds', defNames, fixities) 
+               mapM (desugarDef qualifier sigs) defs
+      return $ (ds', defQNames, fixities) 
 
 desugarTopDecls ::
   [Loc S.TopDecl]
@@ -482,37 +491,43 @@ desugarTopDecls tdecls = do
   --        return $ Loc l (DType n ns ty')
   --   | Loc l (S.DType n ns ty) <- tdecls ]
 
-  dataTable <- fmap M.fromList $ fmap concat $ sequence 
-               [ mapM (procCDecl n ns) cdecls 
-               | Loc _ (S.DData n ns cdecls) <- tdecls ]
+  let newTyNames = [ QName cm n | Loc _ (S.DData n _ _) <- tdecls ]
+               ++ [ QName cm n | Loc _ (S.DType n _ _) <- tdecls ]
 
-  synTable <- M.fromList <$> sequence
-              [ do ty' <- desugarTy (unLoc ty)
-                   let ns' = map BoundTv ns 
-                   when (not $ isClosed ns' ty') $ 
-                     throwError [(loc, prettyShow ty ++ " contains unboudn variable(s).")]
-                   return (BName n, (ns', ty')) 
-              | Loc loc (S.DType n ns ty) <- tdecls ]
+  withDefinedNames newTyNames $ do   
+    dataTable <- fmap M.fromList $ fmap concat $ sequence 
+                 [ mapM (procCDecl cm n ns) cdecls 
+                 | Loc _ (S.DData n ns cdecls) <- tdecls ]
 
-  (decls', names, entries) <- desugarLDecls decls
-  let qnames = [ QName cm n | n <- names ]
-  let opTable = M.fromList [ (QName cm n,v) | (n, v) <- entries ]
+    synTable <- M.fromList <$> sequence
+                [ do ty' <- desugarTy (unLoc ty)
+                     let ns' = map BoundTv ns 
+                     when (not $ isClosed ns' ty') $ 
+                       throwError [(loc, prettyShow ty ++ " contains unboudn variable(s).")]
+                     return (BName n, (ns', ty')) 
+                | Loc loc (S.DType n ns ty) <- tdecls ]
+
+    (decls', qnames, entries) <-
+      withDefinedNames (M.keys dataTable) $
+        desugarLDecls (QName cm) decls
+
+    let opTable = M.fromList [ (n,v) | (n, v) <- entries ]
   
-  return (decls', qnames, opTable, dataTable, synTable)
+    return (decls', qnames, opTable, dataTable, synTable)
   where
-    procCDecl :: Name -> [Name] -> Loc S.CDecl -> Desugar (QName, Ty)
-    procCDecl n ns (Loc loc (S.CDecl c ts)) = do
+    procCDecl :: ModuleName -> Name -> [Name] -> Loc S.CDecl -> Desugar (QName, Ty)
+    procCDecl cm n ns (Loc loc (S.CDecl c ts)) = do
       let ns' = map BoundTv ns 
       ty <- foldr (\t m -> do
                       r  <- m 
                       t' <- desugarTy (unLoc t) 
                       return $ TyCon nameTyLArr [t', r])
-                  (pure $ TyCon (BName n) $ map TyVar ns') ts
+                  (pure $ TyCon (QName cm n) $ map TyVar ns') ts
 
       when (not $ isClosed ns' ty) $
         throwError [(loc, prettyShow ty ++ " contains unbound variable")]
 
-      return (BName c, TyForAll ns' ty) 
+      return (QName cm c, TyForAll ns' ty) 
       
 
     isClosed bs (TyVar ty)      = ty `elem` bs
@@ -525,9 +540,12 @@ desugarTopDecls tdecls = do
     --   return $ CDecl n ts'
      
       
-desugarDef :: [ (SrcSpan, Name, S.LTy) ] -> (SrcSpan, Name, [ ([S.LPat], S.Clause) ])
-              -> Desugar LDecl
-desugarDef sigs (l, f, pcs) = do
+desugarDef ::
+  (Name -> QName) 
+  -> [ (SrcSpan, Name, S.LTy) ]
+  -> (SrcSpan, Name, [ ([S.LPat], S.Clause) ])
+  -> Desugar LDecl
+desugarDef qualifier sigs (l, f, pcs) = do
   case map unwrap $ group $ sort [ length ps | (ps, _) <- pcs ] of
     []    -> throwError [ (l, "Empty definition: " ++ show f) ]
     [len] -> do
@@ -536,7 +554,7 @@ desugarDef sigs (l, f, pcs) = do
               S.Case (S.makeTupleExp [noLoc $ S.Var (BName x) | x <- xs])
               [ (S.makeTuplePat ps, clause) | (ps, clause) <- pcs ]
         let body =
-              foldr (\x r -> noLoc $ Abs x r) (noLoc e') xs
+              foldr (\x r -> noOrig $ noLoc $ Abs x r) (noOrig $ noLoc e') xs
         sig <- case filter (\(_,n,_) -> n == f) sigs of
                  []  -> return $ Nothing
                  [(_,_,t)] -> return $ Just t
@@ -544,7 +562,7 @@ desugarDef sigs (l, f, pcs) = do
                                      | (l,_,_) <- res ]
 
         sig' <- traverse (desugarTy . unLoc) sig
-        return $ Loc l (DDef f sig' body)
+        return $ Loc l (DDef (qualifier f) sig' body)
     ls -> 
       throwError [ (l, "#Arguments differ for " ++ show f ++ show ls) ]
   where
@@ -584,7 +602,7 @@ In the former case, it is rather straight forward to proceed the
 
 -}
 
-rearrangeOp :: SrcSpan -> QName -> S.LExp -> S.LExp -> Desugar LExp
+rearrangeOp :: SrcSpan -> QName -> S.LExp -> S.LExp -> Desugar OLExp
 rearrangeOp l1 op e1 e2 = do
   e2' <- desugarLExp e2
   go l1 e1 op e2'
@@ -607,10 +625,10 @@ rearrangeOp l1 op e1 e2 = do
         e1' <- desugarLExp e1
         return $ opExp l op' e1' e2' 
 
-opExp :: SrcSpan -> QName -> LExp -> LExp -> LExp 
+opExp :: SrcSpan -> QName -> OLExp -> OLExp -> OLExp 
 opExp l opName exp1 exp2 =
-  foldl (\r a -> lapp r a) (Loc l $ Var opName) [exp1, exp2] 
+  foldl (\r a -> lapp r a) (noOrig $ Loc l $ Var opName) [exp1, exp2] 
   where
-    lapp e1 e2 = Loc (location e1 <> location e2) (App e1 e2) 
+    lapp e1 e2 = noOrig $ Loc (location (desugared e1) <> location (desugared e2)) (App e1 e2) 
                
         
