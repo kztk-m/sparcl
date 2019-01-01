@@ -27,15 +27,15 @@ instance Pretty SrcSpan where
   ppr NoLoc = D.angles $ D.text "*unknown loc*"
   ppr (SrcSpan s1 s2) =
     D.angles $ D.hcat [pprMaybeFilePath $ filename s1,
-                       D.colon,
-                       D.parens $ D.hcat [ D.int (row s1),
-                                           D.comma,
-                                           D.int (col s1) ],
-                       D.text "-", 
-                       D.parens $ D.hcat [ D.int (row s2),
-                                           D.comma,
-                                           D.int (col s1) ]]
-    
+                       D.colon, pprPos (row s1) (col s1) (row s2) (col s2) ]
+    where
+      pprPos l1 c1 l2 c2
+        | l1 == l2 && c1 == c2 = D.hcat [ D.int l1, D.colon, D.int c1]
+        | l1 == l2 && c1 /= c2 = D.hcat [ D.int l1, D.colon, D.int c1, D.text "-", D.int c2 ]
+        | otherwise            = D.hcat [ D.parens (D.hcat [D.int l1, D.colon, D.int c1]),
+                                          D.text "-",
+                                          D.parens (D.hcat [D.int l2, D.colon, D.int c2])] 
+
 
 
 noLoc :: a -> Loc a

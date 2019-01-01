@@ -1,9 +1,10 @@
+{-# LANGUAGE ViewPatterns #-}
 module Language.Sparcl.Typing.TC where
 
 -- Type checking monad
 -- Here, we use int values for meta variables
 import Language.Sparcl.Untyped.Desugar.Syntax
-
+import qualified Language.Sparcl.Untyped.Syntax as S 
 
 import qualified Data.IntMap as IM
 import qualified Data.Map as M
@@ -16,8 +17,75 @@ import Control.Monad.Except
 import qualified Text.PrettyPrint.ANSI.Leijen as D
 import Language.Sparcl.Pretty 
 
-class (MonadError D.Doc m, Monad m) => MonadTypeCheck m where
-  typeError :: D.Doc -> m a
+-- import Control.Arrow (first) 
+
+import qualified Data.Sequence as Seq 
+
+import Debug.Trace 
+
+data TypeError = TypeError (Maybe SrcSpan) (Seq.Seq S.LExp) ErrorDetail
+
+data ErrorDetail
+  = UnMatchTy  Ty Ty 
+  | UnMatchTyD Ty Ty Ty Ty -- inferred and expected
+  | OccurrenceCheck MetaTyVar Ty
+  | MultipleUse QName
+  | NoUse       QName
+  | Undefined   QName 
+  | Other       D.Doc 
+  
+
+instance Pretty TypeError where
+  ppr (TypeError l es d) =
+    D.bold (D.text "[TYPE ERROR]") D.<+> D.nest 2
+     (maybe (D.text "*unknown place*") ppr l 
+      D.<$> pprDetail d D.<> pprContexts (Seq.drop (Seq.length es - 3) es))
+    where
+      pprDetail (UnMatchTy ty1 ty2) = 
+        D.text "Types do not match"
+        D.<+> D.align (ppr ty1) D.<+> D.text "/=" D.<+> D.align (ppr ty2)
+
+      pprDetail (UnMatchTyD ty1 ty2 ty1' ty2') =
+        D.text "Types do not match" D.<> D.nest 2 
+         ( D.line D.<> D.hsep [D.text "Expected: ", D.align (ppr ty1) ] D.<> 
+           D.line D.<> D.hsep [D.text "Inferred: ", D.align (ppr ty2) ] )
+        D.<$> D.text "More precisely, the following types do not match."
+        D.</> D.align (ppr ty1') D.<+> D.text "/=" D.<+> D.align (ppr ty2')
+
+      pprDetail (OccurrenceCheck mv ty) =
+        D.text "Cannot construct an infinite type:"
+        D.<$> D.hsep[ ppr mv, D.text "=", D.align (ppr ty) ]
+
+      pprDetail (MultipleUse v) =
+        D.hsep [ D.text "Variable", ppr (originalQName v), D.text "must not be used more than once." ]
+
+      pprDetail (NoUse v) =
+        D.hsep [ D.text "Variable", ppr (originalQName v), D.text "must be used at once." ]
+
+      pprDetail (Undefined v) =
+        D.hsep [ D.text "Unbound variable", ppr (originalQName v) ]
+        
+      pprDetail (Other d) = d         
+        
+      pprContexts (Seq.Empty)  = D.empty
+      pprContexts (es Seq.:|> e) =
+        D.line D.<> D.text "when checking expression:" D.<+> ppr (location e) 
+        D.<> D.nest 2 (D.line D.<> ppr e)
+        D.<> pprContexts es 
+     
+atLoc :: MonadTypeCheck m => SrcSpan -> m r -> m r
+atLoc NoLoc m = m
+atLoc loc   m =
+  catchError m $ \(TypeError oloc es reason) -> throwError (TypeError (maybe (Just loc) Just oloc) es reason)
+
+atExp :: MonadTypeCheck m => Maybe S.LExp -> m r -> m r
+atExp Nothing  m = m 
+atExp (Just e) m =
+  catchError m $ \(TypeError oloc es reason) -> throwError (TypeError oloc (e Seq.<| es) reason)
+                   
+  
+class (MonadError TypeError m, Monad m) => MonadTypeCheck m where
+  typeError :: ErrorDetail -> m a
   askType :: SrcSpan -> QName -> m Ty
 
   readTyVar :: MetaTyVar -> m (Maybe Ty)
@@ -52,11 +120,17 @@ data TInfo
           }    
 
 -- newtype TC a = TC { unTC :: StateT TInfo (Either D.Doc) a }
-newtype TC a = TC { unTC :: ExceptT D.Doc (State TInfo) a }
-  deriving (Functor, Applicative, Monad, MonadState TInfo, MonadError D.Doc) 
+newtype TC a = TC { unTC :: ExceptT TypeError (State TInfo) a }
+  deriving (Functor, Applicative, Monad, MonadState TInfo, MonadError TypeError) 
 
 runTC :: TInfo -> TC a -> (Either D.Doc a, TInfo) 
-runTC tinfo (TC m) = runState (runExceptT m) tinfo 
+runTC tinfo (TC m) =
+  let (res, ti) = runState (runExceptT m) tinfo
+      res' = case res of
+               Left e  -> Left (ppr e)
+               Right v -> Right v 
+  in trace (show $ pprMap $ M.fromList $ IM.toList $ tiMap ti) (res', ti) 
+  
 
 freeTyVars :: MonadTypeCheck m => [Ty] -> m [TyVar]
 freeTyVars ts = do
@@ -98,18 +172,19 @@ lookupTyEnv l n tyEnv =
     Just (Omega, ty) -> return (ty, tyEnv)
     Just (One,   ty) -> return (ty, M.insert n (Zero, ty) tyEnv)
     Just (Zero,  _ ) ->
-      typeError $ ppr l D.<> D.nest 2 (D.line D.<> D.hsep [D.dquotes (ppr n), D.text "is used more than once."])
+      atLoc l $ typeError $ MultipleUse n 
     _ ->
-      typeError $ ppr l D.<> D.nest 2 (D.line D.<> D.dquotes (ppr n) D.<+> D.text "is undefined.")
+      atLoc l $ typeError $ Undefined n 
+
 
 findTy :: MetaTyVar -> IM.IntMap Ty -> (Maybe Ty, IM.IntMap Ty)
 findTy (MetaTyVar i _) map =
   case IM.lookup i map of
-    Just (TyMetaV mv) ->
-      let (res, map') = findTy mv map
-      in case res of
-           Just ty -> (Just ty, IM.insert i ty map')
-           _       -> (Nothing, map') 
+    -- Just (TyMetaV mv) ->
+    --   let (res, map') = findTy mv map
+    --   in case res of
+    --        Just ty -> (Just ty, IM.insert i ty map')
+    --        Nothing -> (Nothing, map') 
     res -> (res, map)
 
 metaTyVars :: [Ty] -> [MetaTyVar]
@@ -125,7 +200,7 @@ metaTyVars xs = go xs []
     goTy _              = id 
 
 instance MonadTypeCheck TC where
-  typeError = throwError
+  typeError d = throwError (TypeError Nothing Seq.Empty d)
 
   askType l n
     | Just k <- checkNameTuple n = do 
@@ -141,15 +216,13 @@ instance MonadTypeCheck TC where
 
   readTyVar mv = do
     ti <- get
-    let tm = tiMap ti
-    let (res, tm') = findTy mv tm 
+    let (res, tm') = findTy mv (tiMap ti)
     put (ti { tiMap = tm' })
     return res
 
   writeTyVar (MetaTyVar i _) ty = do
     ti <- get
-    let tm  = tiMap ti
-    let tm' = IM.insert i ty tm
+    let tm' = IM.insert i ty $ tiMap ti 
     put (ti { tiMap = tm'})
 
 
@@ -169,7 +242,7 @@ instance MonadTypeCheck TC where
             putTyEnv $ M.delete x tyEnvAfter
             return ret 
       _ -> do
-        typeError $ D.text "Linear type variable" D.<+> D.dquotes (ppr x) D.<+> D.text "is not used linearly."
+        typeError $ NoUse x -- D.text "Linear type variable" D.<+> D.dquotes (ppr x) D.<+> D.text "is not used linearly."
     
   withUVar x ty m = do
     tyEnv <- getTyEnv
@@ -221,7 +294,7 @@ instance MonadTypeCheck TC where
             | length ns == length ts -> 
               TySyn orig <$> go synMap (substTy (zip ns ts) ty)
           Just _ ->
-              typeError $ D.hsep [ D.text "Type synonym", D.dquotes (ppr c), D.text "must be fully-applied." ] 
+              typeError $ Other $ D.hsep [ D.text "Type synonym", D.dquotes (ppr c), D.text "must be fully-applied." ] 
 
   getMetaTyVarsInEnv = do
     tyEnv <- getTyEnv
@@ -259,11 +332,14 @@ substTy tbl ty = case ty of
    
 
 zonkMetaTyVar :: MonadTypeCheck m => MetaTyVar -> m Ty
-zonkMetaTyVar mv = do 
+zonkMetaTyVar mv = {- trace "zonk!" $ -} do 
   res <- readTyVar mv 
   case res of
     Nothing -> return (TyMetaV mv) 
-    Just ty -> return ty
+    Just ty -> do
+      ty' <- zonkType ty
+      writeTyVar mv ty'
+      return ty'
 
 zonkType :: MonadTypeCheck m => Ty -> m Ty
 zonkType (TyVar n) = return $ TyVar n
@@ -291,15 +367,12 @@ unifyWork (TyMetaV mv) ty = unifyMetaTyVar mv ty
 unifyWork ty (TyMetaV mv) = unifyMetaTyVar mv ty
 unifyWork (TyCon c ts) (TyCon c' ts') | c == c' = do 
                                           when (length ts /= length ts') $
-                                            typeError $ D.hsep [D.text "Type construtor", ppr c, D.text "has different numbesr of arguments."]
+                                            typeError $ Other $ D.hsep [D.text "Type construtor", ppr c, D.text "has different numbesr of arguments."]
                                           zipWithM_ unifyWork ts ts' 
 unifyWork ty1 ty2 = do
   ty1' <- zonkType ty1
   ty2' <- zonkType ty2
-  typeError $ D.nest 2 $
-    D.text "Types do not match:" D.<$>
-    D.group (D.align (D.dquotes (ppr ty1') D.<+> D.text "vs."
-                       D.<$> D.dquotes (ppr ty2')))
+  typeError $ UnMatchTy ty1' ty2' 
 
 unifyMetaTyVar :: MonadTypeCheck m => MetaTyVar -> MonoTy -> m () 
 unifyMetaTyVar mv ty2 = do 
@@ -313,14 +386,17 @@ unifyUnboundMetaTyVar :: MonadTypeCheck m => MetaTyVar -> MonoTy -> m ()
 unifyUnboundMetaTyVar mv (TyMetaV mv2) = do 
   res <- readTyVar mv2
   case res of
-    Nothing   -> writeTyVar mv (TyMetaV mv2) 
+    Nothing   ->
+      unless (mv == mv2) $ 
+       writeTyVar mv (TyMetaV mv2) 
     Just ty2' -> unifyUnboundMetaTyVar mv ty2' 
 unifyUnboundMetaTyVar mv ty2 = do 
   ty2' <- zonkType ty2
   let mvs = metaTyVars [ty2']
   case mv `elem` mvs of
-    True  -> typeError $ D.text "Occurrence check failed:" D.<+> D.sep [ppr mv, D.text " appears in ", ppr ty2']
-    False -> writeTyVar mv ty2'
+    True  -> typeError $ OccurrenceCheck mv ty2' 
+    False -> -- trace (show $ D.hsep [D.text "[assign]", ppr mv, D.text "=", D.align (ppr ty2')]) $ 
+      writeTyVar mv ty2'
 
         
    

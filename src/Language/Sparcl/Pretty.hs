@@ -27,6 +27,19 @@ class Pretty t where
 instance Pretty t => Pretty [t] where
   pprPrec = pprList 
 
+instance Pretty Int where
+  ppr = D.int
+
+instance Pretty Double where
+  ppr = D.double
+
+instance Pretty Char where
+  ppr = D.text . show
+  pprList _ = D.text . show 
+
+instance (Pretty a, Pretty b) => Pretty (a, b) where
+  ppr (a, b) = D.parens $ D.align (ppr a) D.<> D.comma D.<+> D.align (ppr b)
+
 prettyShow :: Pretty t => t -> String
 prettyShow x = show (ppr x)
 

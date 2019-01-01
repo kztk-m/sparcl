@@ -13,34 +13,60 @@ import Data.List ((\\))
 
 import qualified Data.Graph as G
 
--- import Debug.Trace 
+import Debug.Trace 
 
-checkUnificationError :: MonadTypeCheck m => SrcSpan -> Ty -> Ty -> m a -> m a
-checkUnificationError loc ty1 ty2 e = do
-  catchError e $ \d -> do 
-      ty1' <- zonkType ty1
-      ty2' <- zonkType ty2
-      throwError $ ppr loc D.<$> (D.align $ D.nest 2 $ 
-                                  D.vsep [D.text "Type error",
-                                          D.nest 2 $ D.hsep [D.text "Expected:", D.align $ ppr ty2'],
-                                          D.nest 2 $ D.hsep [D.text "Inferred:", D.align $ ppr ty1'] ])
-                   D.<$> D.text "Detail:" D.<+> d
+-- checkUnificationError :: MonadTypeCheck m => SrcSpan -> Ty -> Ty -> m a -> m a
+-- checkUnificationError loc ty1 ty2 e = do
+--   catchError e $ \d -> do 
+--       ty1' <- zonkType ty1
+--       ty2' <- zonkType ty2
+--       throwError $ ppr loc D.<$> (D.align $ D.nest 2 $ 
+--                                   D.vsep [D.text "Type error",
+--                                           D.nest 2 $ D.hsep [D.text "Expected:", D.align $ ppr ty2'],
+--                                           D.nest 2 $ D.hsep [D.text "Inferred:", D.align $ ppr ty1'] ])
+--                    D.<$> D.text "Detail:" D.<+> d
 
 
 tryUnify :: MonadTypeCheck m => SrcSpan -> Ty -> Ty -> m () 
 tryUnify loc ty1 ty2 =
-  checkUnificationError loc ty1 ty2 $ unify ty1 ty2 
+  catchError (atLoc loc $ unify ty1 ty2) $ \(TypeError loc' ctxt reason) ->
+    case reason of
+      UnMatchTy ty3 ty4 -> do
+        ty1' <- zonkType ty1
+        ty2' <- zonkType ty2
+        -- mp   <- M.fromList <$> traverseTy ty1'
+        -- trace (show $ D.text "Snap shot" D.<+> D.align (pprMap mp)) $
+        throwError $ TypeError loc' ctxt (UnMatchTyD ty1' ty2' ty3 ty4)  
+      _ ->
+        throwError $ TypeError loc' ctxt reason
 
-atExp :: MonadTypeCheck m => m a -> Exp -> m a
-atExp m e =
-  catchError m $ \doc ->
-    throwError $ doc D.<$>
-                 D.nest 2 (D.text "when checking expression:"
-                           D.</> ppr e)
+  -- where
 
-tryUnifyE :: MonadTypeCheck m => SrcSpan -> Exp -> Ty -> Ty -> m ()
-tryUnifyE loc e ty1 ty2 =
-  tryUnify loc ty1 ty2 `atExp` e 
+traverseTys :: (Traversable t, MonadTypeCheck f) => t Ty -> f [(Int, Ty)]
+traverseTys ts = concat <$> mapM traverseTy ts
+
+traverseTy :: MonadTypeCheck f => Ty -> f [(Int, Ty)]
+traverseTy (TyCon _ ts) = traverseTys ts
+traverseTy (TyVar _)    = return []
+traverseTy (TyMetaV tv@(MetaTyVar i _)) = do
+  res <- readTyVar tv
+  case res of
+    Nothing -> return []
+    Just ty -> ((i, ty) :) <$> traverseTy ty
+traverseTy (TyForAll _ t) = traverseTy t
+traverseTy (TySyn _ ty)   = traverseTy ty 
+
+
+-- atExp :: MonadTypeCheck m => m a -> Exp -> m a
+-- atExp m e =
+--   catchError m $ \doc ->
+--     throwError $ doc D.<$>
+--                  D.nest 2 (D.text "when checking expression:"
+--                            D.</> ppr e)
+
+-- tryUnifyE :: MonadTypeCheck m => SrcSpan -> Exp -> Ty -> Ty -> m ()
+-- tryUnifyE loc e ty1 ty2 =
+--   tryUnify loc ty1 ty2 `atExp` e 
 
 instantiate :: MonadTypeCheck m => PolyTy -> m MonoTy
 instantiate (TyForAll ts t) = do
@@ -51,7 +77,6 @@ instantiate t = return t
 instPoly :: MonadTypeCheck m => SrcSpan -> PolyTy -> BodyTy -> m () 
 instPoly loc polyTy expectedTy = do  
   t <- instantiate polyTy
-  -- trace (show $ D.hsep [ppr polyTy, D.text "-->", D.align (ppr t)]) $
   tryUnify loc t expectedTy 
 inferTy :: MonadTypeCheck m => OLExp -> m BodyTy
 inferTy (Orig o (Loc loc e)) = go e
@@ -68,58 +93,58 @@ ensureFunTy :: MonadTypeCheck m => SrcSpan -> MonoTy -> m (MonoTy, MonoTy)
 ensureFunTy loc ty = do
   argTy <- newMetaTy NoLoc
   resTy <- newMetaTy NoLoc 
-  tryUnify loc ty (argTy -@ resTy)
+  tryUnify loc (argTy -@ resTy) ty
   return (argTy, resTy) 
 
 ensureBangTy :: MonadTypeCheck m => SrcSpan -> MonoTy -> m MonoTy
 ensureBangTy loc ty = do
   argTy <- newMetaTy NoLoc
-  tryUnify loc ty (bangTy argTy)
+  tryUnify loc (bangTy argTy) ty
   return argTy 
 
 ensureRevTy :: MonadTypeCheck m => SrcSpan -> MonoTy -> m MonoTy
 ensureRevTy loc ty = do
   argTy <- newMetaTy NoLoc
-  tryUnify loc ty (revTy argTy)
+  tryUnify loc (revTy argTy) ty
   return argTy 
 
 ensurePairTy :: MonadTypeCheck m => SrcSpan -> MonoTy -> m (MonoTy, MonoTy)
 ensurePairTy loc ty = do
   fstTy <- newMetaTy NoLoc
   sndTy <- newMetaTy NoLoc
-  tryUnify loc ty (TyCon (nameTyTuple 2) [fstTy, sndTy])
+  tryUnify loc (TyCon (nameTyTuple 2) [fstTy, sndTy]) ty
   return (fstTy, sndTy) 
                   
 checkTy :: MonadTypeCheck m => OLExp -> BodyTy -> m ()
-checkTy (Orig _orig (Loc loc exp)) expectedTy = go exp
+checkTy (Orig orig (Loc loc exp)) expectedTy = atLoc loc $ atExp orig $ go exp
   where
     go (Var x) = do
-      tyOfX <- askType loc x `atExp` exp 
-      instPoly loc tyOfX expectedTy `atExp` exp 
+      tyOfX <- askType loc x 
+      instPoly loc tyOfX expectedTy 
 
     go (Lit l) = case l of
       LitInt _ ->
-        tryUnifyE loc exp (TyCon nameTyInt []) expectedTy
+        tryUnify loc (TyCon nameTyInt []) expectedTy
       LitChar _ ->
-        tryUnifyE loc exp (TyCon nameTyChar []) expectedTy
+        tryUnify loc (TyCon nameTyChar []) expectedTy
       LitDouble _ ->
-        tryUnifyE loc exp (TyCon nameTyDouble []) expectedTy         
+        tryUnify loc (TyCon nameTyDouble []) expectedTy         
 
     go (Abs x e) = do
-      (argTy, resTy) <- ensureFunTy loc expectedTy `atExp` exp
-      (withLVar (BName x) argTy $ checkTy e resTy) `atExp` exp 
+      (argTy, resTy) <- ensureFunTy loc expectedTy 
+      withLVar (BName x) argTy $ checkTy e resTy
         
     go (App e1 e2) = do
       ty1 <- inferTy e1
-      (argTy, resTy) <- ensureFunTy (location $ desugared e1) ty1 `atExp` (unLoc $ desugared e1)
+      (argTy, resTy) <- atExp (original e1) $ ensureFunTy (location $ desugared e1) ty1 
       checkTy e2 argTy
-      tryUnifyE loc (unLoc $ desugared e2) resTy expectedTy 
+      tryUnify loc resTy expectedTy 
 
     go (Con c es) = do
       tyOfC <- instantiate =<< askType loc c
       retTy <- foldM inferApp tyOfC es
-      -- trace (show $ ppr c D.<+> D.colon D.<+> ppr tyOfC) $
-      tryUnifyE loc exp retTy expectedTy
+--      trace (show $ ppr c D.<+> D.colon D.<+> D.align (ppr tyOfC)) $
+      tryUnify loc retTy expectedTy
         where
           inferApp ty e = do 
             (argTy, resTy) <- ensureFunTy (location $ desugared e) ty
@@ -165,21 +190,21 @@ checkTy (Orig _orig (Loc loc exp)) expectedTy = go exp
       tyA  <- ensureBangTy loc tyBangA
       tyB' <- ensureBangTy loc tyBangB'
 
-      tryUnifyE loc exp tyA' tyA
-      tryUnifyE loc exp tyB' tyB 
+      tryUnify loc tyA' tyA
+      tryUnify loc tyB' tyB 
       
       checkTy e (bangTy $ revTy tyA -@ revTy tyB)
         
     go (Sig e ty) = do
       ty' <- instantiate ty
-      tryUnifyE loc exp ty' ty
+      tryUnify loc ty' ty
       checkTy e ty'
 
 
     go (RCon c es) = do
       tyOfC <- fmap addRev . instantiate =<< askType loc c
       retTy <- foldM inferApp tyOfC es
-      tryUnifyE loc exp retTy expectedTy
+      tryUnify loc retTy expectedTy
         where
           inferApp ty e = do 
             (argTy, resTy) <- ensureFunTy (location $ desugared e) ty
@@ -192,7 +217,7 @@ checkTy (Orig _orig (Loc loc exp)) expectedTy = go exp
     go (RCase e ralts) = do
       tyPat <- newMetaTy NoLoc
       checkTy e (revTy tyPat)
-      ty <- ensureBangTy loc expectedTy `atExp` exp
+      ty <- ensureRevTy loc expectedTy 
       checkRAltsTy ralts tyPat ty 
       
     -- e1 : rev a   
@@ -201,8 +226,8 @@ checkTy (Orig _orig (Loc loc exp)) expectedTy = go exp
     -- pin e1 e2 : rev (a, b)
 
     go (RPin e1 e2) = do
-      tyAB <- ensureRevTy loc expectedTy `atExp` exp
-      (tyA, tyB) <- ensurePairTy loc tyAB `atExp` exp 
+      tyAB <- ensureRevTy loc expectedTy
+      (tyA, tyB) <- ensurePairTy loc tyAB 
 
       checkTy e1 (revTy tyA)
       checkTy e2 (bangTy tyA -@ revTy tyB) 
@@ -223,11 +248,11 @@ inferMutual decls = do
 
   nts0 <- withUVars (zip ns tys) $ forM decls $ \(Loc loc (DDef n _ e)) -> do 
     ty  <- inferTy e              -- type of e 
-    tyE <- askType (location $ desugared e) n -- type of n in the environment 
+    tyE <- askType loc n -- type of n in the environment 
     when (not $ M.member n sigMap) $
       -- Defer unification if a declaration comes with a signature because
       -- the signature can be a polytype while unification targets monotypes. 
-      tryUnify (location $ desugared e) ty tyE
+      tryUnify loc ty tyE
     return (n, loc, ty) 
 
   envMetaVars <- getMetaTyVarsInEnv
@@ -273,10 +298,11 @@ checkMoreGeneral loc polyTy1 polyTy2@(TyForAll _ _) = do
 
   let badTyVars = filter (`elem` escapedTyVars) skolemTyVars
   unless (null badTyVars) $
-    typeError $ D.group $ D.cat [ D.text "The inferred type",
-                                  D.nest 2 (D.line D.<> D.dquotes (ppr polyTy1)),
-                                  D.text "is not polymorphic enough for:",
-                                  D.nest 2 (D.line D.<> D.dquotes (ppr polyTy2)) ]
+    typeError $ Other $ D.group $
+    D.cat [ D.text "The inferred type",
+            D.nest 2 (D.line D.<> D.dquotes (ppr polyTy1)),
+            D.text "is not polymorphic enough for:",
+            D.nest 2 (D.line D.<> D.dquotes (ppr polyTy2)) ]
 checkMoreGeneral loc polyTy1@(TyForAll _ _) ty2 = do
   ty1 <- instantiate polyTy1
   checkMoreGeneral loc ty1 ty2
@@ -312,7 +338,17 @@ checkAltsTy [] _ _ = return ()
 checkAltsTy ((p,e):alts) pty bty = do
   (ubinds, lbinds) <- checkPatTy p pty
   withLVars lbinds $
-   withUVars ubinds $
+   withUVars ubinds $ do
+    -- mp   <- M.fromList <$> traverseTy pty
+    -- mps  <- foldr M.union M.empty <$> mapM (fmap M.fromList . traverseTy . snd) lbinds
+    -- mps2 <- foldr M.union M.empty <$> mapM (fmap M.fromList . traverseTy . snd) ubinds 
+    -- pty' <- zonkType pty 
+    -- trace (show $ D.vsep [ D.text "pat:" D.<+> D.align (ppr p),
+    --                        D.text "pty:" D.<+> D.align (ppr pty'), 
+    --                        D.text "ubind:" D.<+> D.align (pprMap (M.fromList ubinds)),
+    --                        D.text "lbind:" D.<+> D.align (pprMap (M.fromList lbinds)),
+    --                        D.text "ss:" D.<+> D.align (pprMap (M.unions [mp, mps,mps2])),
+    --                        D.empty ])
     checkTy e bty
   checkAltsTy alts pty bty 
 
@@ -323,7 +359,7 @@ checkRAltsTy ((p,e,e'):ralts) pty bty = do
   (ubinds, lbinds) <- checkPatTy p pty
   case ubinds of
     (_:_) ->
-      typeError $ D.hsep [ ppr (location p), D.text "Patterns in reversible computation cannot bind unrestricted variable." ]
+      typeError $ Other $ D.hsep [ ppr (location p), D.text "Patterns in reversible computation cannot bind unrestricted variable." ]
     _ -> do 
       withLVars [ (x, revTy t) | (x, t) <- lbinds ] $
         checkTy e (revTy bty) 
@@ -331,17 +367,23 @@ checkRAltsTy ((p,e,e'):ralts) pty bty = do
       checkRAltsTy ralts pty bty 
 
 checkPatTy :: MonadTypeCheck m => Loc Pat -> MonoTy -> m ( [(QName, MonoTy)], [(QName,MonoTy)] )
-checkPatTy (Loc loc p) expectedTy = go p
+checkPatTy (Loc loc p) = go p
   where
-     go (PVar x) = return ([], [(BName x,expectedTy)])
-     go (PBang p) = do
+     go (PVar x) expectedTy = return ([], [(BName x,expectedTy)])
+     go (PBang p) expectedTy = do
        ty <- ensureBangTy loc expectedTy  
        (ubind, lbind) <- checkPatTy p ty
+       -- mp <- traverseTy expectedTy
+       -- trace (show $ D.text "ty: " D.<+> D.align (ppr ty)
+       --               D.<$> D.text "ss (for !pat):" D.<+> D.align (pprMap $ M.fromList mp)) $ 
        return $ (ubind ++ lbind, [])
-     go (PCon c ps) = do
+     go (PCon c ps) expectedTy = do
        tyOfC <- instantiate =<< askType loc c
        (retTy, ubind, lbind) <- foldM inferApp (tyOfC, [], []) ps
        tryUnify loc retTy expectedTy
+       -- mp <- traverseTys [tyOfC, retTy, expectedTy]
+       -- trace (show $ D.text "ty: " D.<+> D.align (ppr retTy) D.<+> D.align (ppr expectedTy)
+       --               D.<$> D.text "ss (for c):" D.<+> D.align (pprMap $ M.fromList mp)) $         
        return (ubind, lbind) 
        where
          inferApp (ty, ubind, lbind) p = do 

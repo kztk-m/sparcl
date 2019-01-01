@@ -1,5 +1,5 @@
 {
-{-# OPTIONS_GHC -fno-warn-tabs #-}
+{-# OPTIONS_GHC -fno-warn-tabs -Wno-unused-imports #-}
 
 module Language.Sparcl.Untyped.Lexer where
 
@@ -59,7 +59,7 @@ tokens :-
   <comment>    "-}"   { endComment }
   <comment>    [.\n];
 
-  <0> "--" $nbsp * ;
+  <0> "--" .* ;
 
   <0> {
   @reserved { tok $ TkKey }

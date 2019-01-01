@@ -1,0 +1,29 @@
+data Nat = Z | S Nat 
+
+sig add : Nat -o rev Nat -o rev Nat 
+def add Z     y = y 
+      | (S x) y = rev S (add x y)
+
+def qq = S Z 
+
+def q0 = forward !(add (S Z)) !Z 
+
+def q1 = forward !(add (S (S Z))) !(S Z) 
+
+def q2 = backward !(add (S Z)) !(S (S Z))
+
+sig isZ : !Nat -o Bool
+def isZ !Z = True
+      | _  = False 
+
+sig mul : !Nat -o rev Nat -o rev Nat 
+def mul _  (rev Z)   = rev Z with !isZ 
+      | !z (rev S y) = 
+         add z (mul !z y) 
+
+def q3 = forward !(mul !(S (S Z))) !(S (S Z))
+def q4 = backward !(mul !(S (S Z))) !(S (S (S (S Z))))
+
+def incL = lift !(\!x -> x + 1) !(\!x -> x - 1)
+
+def q5 = 1 + 2 * 3 + 4 * 5 

@@ -8,12 +8,23 @@ import Data.Char
 data Name = NormalName String
           | NameTuple Int 
           | Generated  Int
+          | Alpha      Name Int 
   deriving (Ord, Eq, Show) 
 
 instance Pretty Name where
-  ppr (NameTuple n)  = D.text (replicate n ',') 
+  ppr (NameTuple 0)  = D.text "()"
+  ppr (NameTuple n)  = D.text (replicate (n-1) ',') 
   ppr (NormalName n) = D.text n
   ppr (Generated  i) = D.text "_" D.<> D.int i 
+  ppr (Alpha n    i) = ppr n D.<> D.text "_" D.<> D.int i 
+
+originalName :: Name -> Name
+originalName (Alpha n _) = n
+originalName n           = n
+
+originalQName :: QName -> QName
+originalQName (BName n) = BName (originalName n)
+originalQName (QName cm n) = QName cm (originalName n) 
 
 type ModuleName = [String]
 

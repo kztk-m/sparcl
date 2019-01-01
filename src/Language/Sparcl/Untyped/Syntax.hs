@@ -139,6 +139,10 @@ instance Pretty (Loc Pat) where
 instance Pretty Pat where
   pprPrec _ (PVar n) = ppr n
 
+  pprPrec _ (PCon c ps)
+    | c == nameTuple (length ps) =
+        D.parens $ D.hsep $ D.punctuate D.comma $ map (pprPrec 0) ps 
+
   pprPrec _ (PCon c []) = ppr c 
   pprPrec k (PCon c ps) = parensIf (k > 0) $
     ppr c D.<+> D.hsep (map (pprPrec 1) ps)

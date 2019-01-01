@@ -66,7 +66,6 @@ runDesugar currentModule definedNames opTable d =
 --     a |-> b = (a, b) 
 --     base s = QName baseModule (NormalName s) 
 
-
 withAlphaEntry :: Name -> Name -> Desugar a -> Desugar a
 withAlphaEntry n1 n2 =
   local (\ni -> ni { niAlphaEnv = M.insert n1 n2 $ niAlphaEnv ni })
@@ -167,6 +166,11 @@ newName :: (Name -> Desugar r) -> Desugar r
 newName f = do
   i <- asks niNameCounter
   local (\ni -> ni { niNameCounter = i + 1 }) $ f (Generated i)
+
+newNameFrom :: Name -> (Name -> Desugar r) -> Desugar r
+newNameFrom n f = do
+  i <- asks niNameCounter
+  local (\ni -> ni { niNameCounter = i + 1 }) $ f (Alpha n i) 
 
 newNames :: Int -> ([Name] -> Desugar r) -> Desugar r
 newNames n f = do
@@ -298,7 +302,7 @@ equivalentCPat _ _ = False
 renamePatUnderRev :: S.LPat -> (LPat -> Desugar r) -> Desugar r
 renamePatUnderRev p k0 = go p k0
   where
-    go (Loc l (S.PVar n)) k = newName $ \n' -> withAlphaEntry n n' $
+    go (Loc l (S.PVar n)) k = newNameFrom n $ \n' -> withAlphaEntry n n' $
       k (Loc l (PVar n'))
     go (Loc l (S.PCon c ps)) k = do
       c' <- refineName l c 
@@ -315,7 +319,7 @@ renameAndSeparatePat :: S.LPat -> Desugar (Loc CPat, [S.LPat], [ (Name, Name) ],
 renameAndSeparatePat p = goL p $ \cp sub binds adv -> return (cp, sub,binds, adv)
   where
     goL (Loc l p) k = go l p $ \cp sub binds adv -> k (Loc l cp) sub binds adv
-    go _ (S.PVar n) k = newName $ \n' ->
+    go _ (S.PVar n) k = newNameFrom n $ \n' ->
       k (CPVar n') [] [(n,n')] 1
     go l (S.PCon c ps) k = do
       c' <- refineName l c
@@ -616,7 +620,7 @@ rearrangeOp l1 op e1 e2 = do
                e12' <- go l1 e1 op1' e2'
                return $ opExp l2 op2' e12' e3'
            | isRightAssoc (k1, a1) (k2, a2) -> do
-               e1'  <- desugarLExp e2
+               e1'  <- desugarLExp e1
                e23' <- go l2 e2 op2' e3'
                return $ opExp l1 op1' e1' e23'
            | otherwise ->

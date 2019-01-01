@@ -169,8 +169,8 @@ evalU env (desugared -> Loc _loc exp) = case exp of
     evalCase env v0 pes
 
   Lift ef eb -> do
-    VFun vf <- evalU env ef
-    VFun vb <- evalU env eb
+    VBang (VFun vf) <- evalU env ef
+    VBang (VFun vb) <- evalU env eb
     let vf' = vf . VBang
     let vb' = vb . VBang 
     return $ VFun $ \(VRes f b) ->
@@ -208,12 +208,12 @@ evalU env (desugared -> Loc _loc exp) = case exp of
                                        envs <- zipWithM (\v u -> runBwd v u) vs us'
                                        return $ foldr unionHeap emptyHeap envs
                        _ ->
-                         rtError $ D.text "out of the range.")
+                         rtError $ D.text "out of the range:" D.<+> ppr v' D.<+> D.text "for" D.<+> ppr exp)
   
   RCase e0 pes -> do
     VRes f0 b0 <- evalU env e0
     pes' <- mapM (\(p,e,e') -> do
-                     VFun ch <- evalU env e'
+                     VBang (VFun ch) <- evalU env e'
                      let ch' v = do
                            res <- ch v
                            case res of
@@ -280,8 +280,8 @@ evalCaseF env hp f pes = do
              checkAssert ch checker res
 
     checkAssert ch checker res = do
-      v  <- ch res
-      vs <- mapM (\c -> c res) checker
+      v  <- ch (VBang res)
+      vs <- mapM (\c -> c (VBang res)) checker
       when (v && not (or vs)) $
         rtError (D.text "Assertion failed (fwd)")
       return res
@@ -300,8 +300,8 @@ evalCaseB env vres b pes = do
     
     go _ [] = rtError $ D.text "pattern match failure (bwd)"
     go checker ((p,e,ch):pes) = do
-      flg <- ch vres
-      case not flg of
+      flg <- ch (VBang vres) 
+      case flg of
         False -> go (mkAssert p:checker) pes
         True -> do
           let xs = freeVarsP (unLoc p)
