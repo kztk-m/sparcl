@@ -6,12 +6,11 @@ module Language.Sparcl.Typing.TC where
 import Language.Sparcl.Untyped.Desugar.Syntax
 import qualified Language.Sparcl.Untyped.Syntax as S 
 
-import qualified Data.IntMap as IM
 import qualified Data.Map as M
 
 import Data.Maybe (fromMaybe)
 
-import Control.Monad.State 
+import Control.Monad.Reader
 import Control.Monad.Except 
 
 import qualified Text.PrettyPrint.ANSI.Leijen as D
@@ -20,8 +19,9 @@ import Language.Sparcl.Pretty
 -- import Control.Arrow (first) 
 
 import qualified Data.Sequence as Seq 
+import Data.IORef
 
-import Debug.Trace 
+-- import Debug.Trace 
 
 data TypeError = TypeError (Maybe SrcSpan) (Seq.Seq S.LExp) ErrorDetail
 
@@ -99,7 +99,7 @@ class (MonadError TypeError m, Monad m) => MonadTypeCheck m where
   -- typing under empty linear environment 
   withoutLinear :: m () -> m () 
 
-  newMetaTyVar :: SrcSpan -> m MetaTyVar
+  newMetaTyVar :: m MetaTyVar
 
   getMetaTyVarsInEnv :: m [MetaTyVar] 
 
@@ -112,24 +112,41 @@ type TyEnv = M.Map QName (Multiplicity, Ty)
 -- Instead of the reader monad, we use the state monad to
 -- handle linearity. 
 data TInfo
-  = TInfo { tiTyEnv   :: TyEnv, 
-            tiMvCount :: !Int,
-            tiMap     :: IM.IntMap Ty,
-            tiSyn     :: M.Map QName ([TyVar],  Ty), 
-            tiSvCount :: !Int 
+  = TInfo { tiTyEnv   :: IORef TyEnv, 
+            tiMvCount :: !(IORef Int),
+            tiSyn     :: IORef (M.Map QName ([TyVar],  Ty)), 
+            tiSvCount :: !(IORef Int)
           }    
 
 -- newtype TC a = TC { unTC :: StateT TInfo (Either D.Doc) a }
-newtype TC a = TC { unTC :: ExceptT TypeError (State TInfo) a }
-  deriving (Functor, Applicative, Monad, MonadState TInfo, MonadError TypeError) 
+newtype TC a = TC { unTC :: ExceptT TypeError (ReaderT TInfo IO) a }
+  deriving (Functor, Applicative, Monad, MonadReader TInfo, MonadError TypeError, MonadIO) 
 
-runTC :: TInfo -> TC a -> (Either D.Doc a, TInfo) 
-runTC tinfo (TC m) =
-  let (res, ti) = runState (runExceptT m) tinfo
-      res' = case res of
-               Left e  -> Left (ppr e)
-               Right v -> Right v 
-  in trace (show $ pprMap $ M.fromList $ IM.toList $ tiMap ti) (res', ti) 
+initTInfo :: IO TInfo
+initTInfo = do 
+  r1 <- newIORef 0
+  r2 <- newIORef 0
+  rt <- newIORef $ M.empty
+  rs <- newIORef $ M.empty 
+  return $ TInfo { tiTyEnv   = rt,
+                   tiMvCount = r1,
+                   tiSyn     = rs,
+                   tiSvCount = r2 } 
+
+setEnvs :: TInfo -> TypeTable -> SynTable -> IO ()
+setEnvs ti tenv syn = do 
+  writeIORef (tiTyEnv ti) $ M.map (\t -> (Omega, t)) tenv
+  writeIORef (tiSyn   ti) syn 
+
+
+
+runTC :: TInfo -> TC a -> IO (Either D.Doc a)
+runTC tinfo (TC m) = do 
+  res <- runReaderT (runExceptT m) tinfo
+  return $ case res of
+             Left e  -> Left (ppr e)
+             Right v -> Right v 
+
   
 
 freeTyVars :: MonadTypeCheck m => [Ty] -> m [TyVar]
@@ -150,21 +167,16 @@ freeTyVars ts = do
       goT _bound (TyMetaV _) r = r
       goT bound (TySyn ty _) r = goT bound ty r 
 
-initTInfo :: M.Map QName Ty -> M.Map QName ([TyVar], Ty) -> TInfo
-initTInfo tenv syn = 
-  TInfo { tiTyEnv   = M.map (\t -> (Omega, t)) tenv,
-          tiMvCount = 0,
-          tiMap     = IM.empty,
-          tiSyn     = syn,
-          tiSvCount = 0 } 
-
 getTyEnv :: TC TyEnv
-getTyEnv = gets tiTyEnv
+getTyEnv = do
+  ti <- ask 
+  liftIO $ readIORef (tiTyEnv ti) 
+
 
 putTyEnv :: TyEnv -> TC ()
 putTyEnv tyEnv = do
-  ti <- get
-  put $ ti { tiTyEnv = tyEnv }
+  ref <- asks tiTyEnv 
+  liftIO $ writeIORef ref tyEnv
 
 lookupTyEnv :: SrcSpan -> QName -> TyEnv -> TC (Ty, TyEnv)
 lookupTyEnv l n tyEnv =
@@ -177,16 +189,6 @@ lookupTyEnv l n tyEnv =
       atLoc l $ typeError $ Undefined n 
 
 
-findTy :: MetaTyVar -> IM.IntMap Ty -> (Maybe Ty, IM.IntMap Ty)
-findTy (MetaTyVar i _) map =
-  case IM.lookup i map of
-    -- Just (TyMetaV mv) ->
-    --   let (res, map') = findTy mv map
-    --   in case res of
-    --        Just ty -> (Just ty, IM.insert i ty map')
-    --        Nothing -> (Nothing, map') 
-    res -> (res, map)
-
 metaTyVars :: [Ty] -> [MetaTyVar]
 metaTyVars xs = go xs []
   where
@@ -196,7 +198,7 @@ metaTyVars xs = go xs []
     goTy (TyCon _ ts) = go ts
     goTy (TyForAll _ t) = goTy t
     goTy (TySyn _ t)    = goTy t
-    goTy (TyMetaV m)    = (m:) 
+    goTy (TyMetaV m)    = \r -> if m `elem` r then r else m:r
     goTy _              = id 
 
 instance MonadTypeCheck TC where
@@ -207,23 +209,17 @@ instance MonadTypeCheck TC where
         let tvs = map (BoundTv . NormalName) [ 't':show i | i <- [1..k] ]
         let tys = map TyVar tvs
         return $ TyForAll tvs $ foldr (-@) (tupleTy tys) tys        
-    | otherwise = do                       
-        ti <- get
-        let tyEnv = tiTyEnv ti
+    | otherwise = do
+        tyEnv <- getTyEnv 
         (ty, tyEnv') <- lookupTyEnv l n tyEnv
-        put (ti { tiTyEnv = tyEnv' })
+        putTyEnv tyEnv' 
         return ty
 
-  readTyVar mv = do
-    ti <- get
-    let (res, tm') = findTy mv (tiMap ti)
-    put (ti { tiMap = tm' })
-    return res
+  readTyVar (MetaTyVar _ ref) = TC $ do
+    lift $ lift $ readIORef ref 
 
-  writeTyVar (MetaTyVar i _) ty = do
-    ti <- get
-    let tm' = IM.insert i ty $ tiMap ti 
-    put (ti { tiMap = tm'})
+  writeTyVar (MetaTyVar _ ref) ty = TC $ do
+    lift $ lift $ writeIORef ref (Just ty) 
 
 
   withLVar x ty m = do
@@ -270,14 +266,15 @@ instance MonadTypeCheck TC where
       isLinearEntry _        = False 
     
 
-  newMetaTyVar l = do
-    ti <- get
-    let sz = tiMvCount ti
-    put $! ti { tiMvCount = sz + 1 }
-    return $ MetaTyVar sz l
+  newMetaTyVar = TC $ do
+    cref <- asks tiMvCount 
+    cnt <- liftIO $ atomicModifyIORef' cref $ \cnt -> (cnt + 1, cnt)
+    ref <- liftIO $ newIORef Nothing 
+    return $ MetaTyVar cnt ref 
 
   resolveSyn ty = do
-    synMap <- gets tiSyn
+    ref <- asks tiSyn
+    synMap <- liftIO $ readIORef ref 
     go synMap ty 
     where
       go _synMap (TyVar x) = return (TyVar x)
@@ -302,9 +299,8 @@ instance MonadTypeCheck TC where
     return $ metaTyVars ts 
 
   newSkolemTyVar ty = do
-    ti <- get
-    let cnt = tiSvCount ti
-    put $ ti { tiSvCount = cnt + 1 }
+    cref <- asks tiSvCount
+    cnt <- liftIO $ atomicModifyIORef' cref $ \cnt -> (cnt + 1, cnt)
     return $ SkolemTv ty cnt 
 
 withLVars :: MonadTypeCheck m => [ (QName, Ty) ] -> m r -> m r
@@ -313,8 +309,8 @@ withLVars ns m = foldr (uncurry withLVar) m ns
 withUVars :: MonadTypeCheck m => [ (QName, Ty) ] -> m r -> m r
 withUVars ns m = foldr (uncurry withUVar) m ns 
 
-newMetaTy :: MonadTypeCheck m => SrcSpan -> m Ty
-newMetaTy = fmap TyMetaV . newMetaTyVar 
+newMetaTy :: MonadTypeCheck m => m Ty
+newMetaTy = fmap TyMetaV $ newMetaTyVar 
 
 substTy :: [ (TyVar, Ty) ] -> Ty -> Ty
 substTy tbl ty = case ty of

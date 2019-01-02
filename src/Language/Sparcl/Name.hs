@@ -3,6 +3,8 @@ module Language.Sparcl.Name where
 import Language.Sparcl.Pretty 
 import qualified Text.PrettyPrint.ANSI.Leijen as D
 
+import Control.DeepSeq 
+
 import Data.Char
 
 data Name = NormalName String
@@ -10,6 +12,12 @@ data Name = NormalName String
           | Generated  Int
           | Alpha      Name Int 
   deriving (Ord, Eq, Show) 
+
+instance NFData Name where
+  rnf (NormalName s) = rnf s
+  rnf (NameTuple i)  = rnf i
+  rnf (Generated i)  = rnf i
+  rnf (Alpha n i)    = rnf (n, i) 
 
 instance Pretty Name where
   ppr (NameTuple 0)  = D.text "()"
@@ -34,6 +42,10 @@ moduleNameToStr ms = foldr1 (\a b -> a ++ "." ++ b) ms
 data QName = QName ModuleName Name -- qualified name (for global names)
            | BName Name            -- bare name
            deriving (Show, Eq, Ord) 
+
+instance NFData QName where
+  rnf (QName m n) = rnf (m, n)
+  rnf (BName n)   = rnf n 
 
 instance Pretty QName where
   ppr (QName m n) =

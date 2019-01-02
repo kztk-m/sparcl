@@ -15,11 +15,13 @@ import System.Directory as Dir
 import System.FilePath as FP
 
 import Control.Monad.Reader
-import Control.Monad.State 
+import Control.Monad.State.Strict 
 import System.IO 
 
 import Language.Sparcl.Pretty
 import qualified Text.PrettyPrint.ANSI.Leijen as D
+
+import Control.Exception (Exception, throw)
 
 data ModuleInfo = ModuleInfo {
   miModuleName :: ModuleName,
@@ -36,25 +38,49 @@ data InterpInfo = InterpInfo {
   iiTypeTable   :: TypeTable,
   iiSynTable    :: SynTable,
   iiOpTable     :: OpTable,
-  iiValueTable  :: M.Map QName Value
+  iiValueTable  :: M.Map QName Value,
+  iiTInfo       :: TInfo 
   }
 
 type ModuleTable = M.Map ModuleName ModuleInfo   
 type ValueTable  = M.Map QName Value 
 
-type M = ReaderT InterpInfo (StateT (TInfo, ModuleTable) IO) 
+type M = ReaderT InterpInfo (StateT ModuleTable IO) 
 
 
-runM :: [FilePath] -> M a -> IO a
-runM searchPath m = do 
-  let ii = InterpInfo { iiSearchPath = searchPath,
-                        iiTypeTable  = M.empty,
-                        iiDefinedNames = [], 
-                        iiSynTable   = M.empty,
-                        iiOpTable    = M.empty,
-                        iiValueTable = M.empty  }
-  evalStateT (runReaderT (withImport baseModuleInfo m) ii) (initTInfo M.empty M.empty, M.empty)
+data StaticException = StaticException Doc
 
+instance Show StaticException where
+  show (StaticException d) =
+    show (D.red (D.text "[Error]") D.<> D.nest 2 (D.line D.<> d))
+
+instance Exception StaticException
+
+staticError :: Doc -> a
+staticError d = throw (StaticException d)
+
+
+runMTest :: [FilePath] -> M a -> IO a
+runMTest searchPath m = do
+  tinfo <- initTInfo
+  let ii = initInterpInfo tinfo searchPath 
+  evalStateT (runReaderT (withImport baseModuleInfo m) ii) M.empty
+
+runM :: [FilePath] -> TInfo -> M a -> IO a
+runM searchPath tinfo m = do
+  let ii = initInterpInfo tinfo searchPath 
+  (res, _) <- runStateT (runReaderT (withImport baseModuleInfo m) ii) M.empty
+  return res
+
+initInterpInfo :: TInfo -> [FilePath] -> InterpInfo
+initInterpInfo tinfo searchPath = 
+  InterpInfo { iiSearchPath = searchPath,
+               iiTypeTable  = M.empty,
+               iiDefinedNames = [], 
+               iiSynTable   = M.empty,
+               iiOpTable    = M.empty,
+               iiValueTable = M.empty,
+               iiTInfo      = tinfo }
 baseModuleInfo :: ModuleInfo 
 baseModuleInfo = ModuleInfo {
   miModuleName = baseModule,
@@ -63,7 +89,9 @@ baseModuleInfo = ModuleInfo {
       conTrue, conFalse,
       nameTyBang, nameTyBool, nameTyChar, nameTyDouble,
       nameTyInt, nameTyLArr, nameTyRev, nameTyList,
-      base "+", base "-", base "*"
+      base "+", base "-", base "*",
+      eqInt, leInt, ltInt,
+      eqChar, leChar, ltChar
       ], 
   
   miTypeTable = M.fromList [
@@ -71,7 +99,14 @@ baseModuleInfo = ModuleInfo {
       conFalse |-> boolTy,
       base "+" |-> intTy -@ (intTy -@ intTy),
       base "-" |-> intTy -@ (intTy -@ intTy),
-      base "*" |-> intTy -@ (intTy -@ intTy) ],
+      base "*" |-> intTy -@ (intTy -@ intTy),
+      eqInt  |-> intTy -@ intTy -@ boolTy,
+      leInt  |-> intTy -@ intTy -@ boolTy,
+      ltInt  |-> intTy -@ intTy -@ boolTy,
+      eqChar |-> charTy -@ charTy -@ boolTy,
+      leChar |-> charTy -@ charTy -@ boolTy,
+      ltChar |-> charTy -@ charTy -@ boolTy 
+      ],
     
   miSynTable = M.empty,
   miOpTable  = M.fromList [
@@ -82,9 +117,31 @@ baseModuleInfo = ModuleInfo {
   miValueTable = M.fromList [
       base "+" |-> intOp (+),
       base "-" |-> intOp (-),
-      base "*" |-> intOp (*) ]
+      base "*" |-> intOp (*),
+      eqInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool (unInt n == unInt m)),
+      leInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool (unInt n <= unInt m)),
+      ltInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool (unInt n <  unInt m)),
+      eqChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool (unChar c == unChar d)),
+      leChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool (unChar c <= unChar d)),
+      ltChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool (unChar c <  unChar d))
+      ]
   }
   where
+    eqInt = base "eqInt"
+    leInt = base "leInt"
+    ltInt = base "ltInt"
+    eqChar = base "eqChar"
+    leChar = base "leChar"
+    ltChar = base "ltChar"
+ 
+    unInt  (VLit (LitInt n)) = n
+    unInt  _                 = rtError $ D.text "Not an integer"
+    unChar (VLit (LitChar n)) = n
+    unChar _                  = rtError $ D.text "Not a character"
+
+    fromBool True  = VCon conTrue  []
+    fromBool False = VCon conFalse []
+    
     intOp f = VFun $ \(VLit (LitInt n)) -> return $ VFun $ \(VLit (LitInt m)) -> return (VLit (LitInt (f n m)))
     
     intTy = TyCon (base "Int") []
@@ -169,7 +226,7 @@ readModule :: FilePath -> M ModuleInfo
 readModule fp = do
   debugPrint $ "Parsing " ++ fp ++ " ..." 
   s <- lift $ lift $ readFile fp 
-  Module mod exports imports decls <- either error return $ parseModule fp s
+  Module mod exports imports decls <- either (staticError . D.text) return $ parseModule fp s
 
   debugPrint $ "Parsing Ok." 
 
@@ -197,17 +254,19 @@ readModule fp = do
     withOpTable newOpTable $
       withTypeTable newDataTable $
         withSynTable newSynTable $ do
-          (ti, modTbl) <- get
+          modTbl <- get
           tyEnv  <- asks iiTypeTable
 
           debugPrint "Type checking..."
           debugPrint $ show (D.text "under ty env" D.<+> pprMap tyEnv)
-          
-          synEnv <- asks iiSynTable
-          let (res, ti') = runTC (ti { tiTyEnv = M.map (\t -> (Omega, t)) tyEnv, tiSyn = synEnv }) $
-                           inferDecls decls'
 
-          nts <- either (error . show) return res
+          tinfo <- asks iiTInfo 
+          synEnv <- asks iiSynTable
+          liftIO $ setEnvs tinfo tyEnv synEnv 
+          
+          res <- liftIO $ runTC tinfo $ inferDecls decls'
+
+          nts <- either staticError return res
 
           -- let env = foldr M.union M.empty $ map miValueTable ms
           env <- asks iiValueTable 
@@ -223,7 +282,7 @@ readModule fp = do
                                  env' 
                 }                
 
-          put (ti', M.insert mod newMod modTbl)
+          put (M.insert mod newMod modTbl)
 
           case exports of
             Just es -> 
@@ -238,7 +297,7 @@ readModule fp = do
   
 interpModule :: ModuleName -> M ModuleInfo 
 interpModule mod = do
-  modTable <- gets snd
+  modTable <- get
   case M.lookup mod modTable of
     Just modData -> return modData
     _            -> do 

@@ -12,6 +12,8 @@ import Control.Monad.Except
 -- import Control.Monad.State
 import Control.Monad.Reader
 
+import Control.DeepSeq 
+
 -- import qualified Control.Monad.Fail as Fail
 
 import Language.Sparcl.Pretty 
@@ -123,6 +125,14 @@ data Value = VCon QName [Value]
            | VFun (Value -> Eval Value) 
            | VRes (Heap -> Eval Value) (Value -> Eval Heap) 
 
+instance NFData Value where
+  rnf (VCon c vs) = rnf (c, vs)
+  rnf (VBang v)   = rnf v
+  rnf (VLit l)    = rnf l
+  rnf (VFun _)    = ()
+  rnf (VRes _ _)  = ()
+  
+
 instance Pretty Value where
   pprPrec _ (VCon c []) = ppr c 
   pprPrec k (VCon c vs) = parensIf (k > 9) $ 
@@ -173,8 +183,8 @@ evalU env (desugared -> Loc _loc exp) = case exp of
     VBang (VFun vb) <- evalU env eb
     let vf' = vf . VBang
     let vb' = vb . VBang 
-    return $ VFun $ \(VRes f b) ->
-                      return $ VRes (f >=> vf') (vb' >=> b)
+    return $ VBang $ VFun $ \(VRes f b) ->
+                              return $ VRes (f >=> vf') (vb' >=> b)
 
   Sig e _ ->
     evalU env e

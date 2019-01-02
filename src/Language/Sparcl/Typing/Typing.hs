@@ -13,7 +13,7 @@ import Data.List ((\\))
 
 import qualified Data.Graph as G
 
-import Debug.Trace 
+-- import Debug.Trace 
 
 -- checkUnificationError :: MonadTypeCheck m => SrcSpan -> Ty -> Ty -> m a -> m a
 -- checkUnificationError loc ty1 ty2 e = do
@@ -70,14 +70,24 @@ traverseTy (TySyn _ ty)   = traverseTy ty
 
 instantiate :: MonadTypeCheck m => PolyTy -> m MonoTy
 instantiate (TyForAll ts t) = do
-  ms <- mapM (const $ newMetaTy NoLoc) ts
+  ms <- mapM (const newMetaTy) ts
   return $ substTy (zip ts ms) t
 instantiate t = return t 
 
 instPoly :: MonadTypeCheck m => SrcSpan -> PolyTy -> BodyTy -> m () 
 instPoly loc polyTy expectedTy = do  
   t <- instantiate polyTy
-  tryUnify loc t expectedTy 
+  tryUnify loc t expectedTy
+
+inferExp :: MonadTypeCheck m => OLExp -> m PolyTy
+inferExp exp = do
+  ty <- zonkType =<< inferTy exp
+  envMetaVars <- getMetaTyVarsInEnv
+  let mvs = metaTyVars [ty]
+  polyTy <- quantify (mvs \\ envMetaVars) ty
+  return polyTy
+  
+  
 inferTy :: MonadTypeCheck m => OLExp -> m BodyTy
 inferTy (Orig o (Loc loc e)) = go e
   where
@@ -85,33 +95,33 @@ inferTy (Orig o (Loc loc e)) = go e
       checkTy e ty
       return ty
     go e = do 
-      ty <- newMetaTy NoLoc
+      ty <- newMetaTy
       checkTy (Orig o (Loc loc e)) ty
       return ty 
 
 ensureFunTy :: MonadTypeCheck m => SrcSpan -> MonoTy -> m (MonoTy, MonoTy)
 ensureFunTy loc ty = do
-  argTy <- newMetaTy NoLoc
-  resTy <- newMetaTy NoLoc 
+  argTy <- newMetaTy 
+  resTy <- newMetaTy 
   tryUnify loc (argTy -@ resTy) ty
   return (argTy, resTy) 
 
 ensureBangTy :: MonadTypeCheck m => SrcSpan -> MonoTy -> m MonoTy
 ensureBangTy loc ty = do
-  argTy <- newMetaTy NoLoc
+  argTy <- newMetaTy 
   tryUnify loc (bangTy argTy) ty
   return argTy 
 
 ensureRevTy :: MonadTypeCheck m => SrcSpan -> MonoTy -> m MonoTy
 ensureRevTy loc ty = do
-  argTy <- newMetaTy NoLoc
+  argTy <- newMetaTy 
   tryUnify loc (revTy argTy) ty
   return argTy 
 
 ensurePairTy :: MonadTypeCheck m => SrcSpan -> MonoTy -> m (MonoTy, MonoTy)
 ensurePairTy loc ty = do
-  fstTy <- newMetaTy NoLoc
-  sndTy <- newMetaTy NoLoc
+  fstTy <- newMetaTy 
+  sndTy <- newMetaTy 
   tryUnify loc (TyCon (nameTyTuple 2) [fstTy, sndTy]) ty
   return (fstTy, sndTy) 
                   
@@ -156,7 +166,7 @@ checkTy (Orig orig (Loc loc exp)) expectedTy = atLoc loc $ atExp orig $ go exp
       withoutLinear $ checkTy e ty
 
     go (Case e alts) = do
-      tyPat <- newMetaTy NoLoc
+      tyPat <- newMetaTy 
       checkTy e tyPat 
       checkAltsTy alts tyPat expectedTy
 
@@ -215,7 +225,7 @@ checkTy (Orig orig (Loc loc exp)) expectedTy = atLoc loc $ atExp orig $ go exp
           addRev t                                   = revTy t 
                                      
     go (RCase e ralts) = do
-      tyPat <- newMetaTy NoLoc
+      tyPat <- newMetaTy 
       checkTy e (revTy tyPat)
       ty <- ensureRevTy loc expectedTy 
       checkRAltsTy ralts tyPat ty 
@@ -244,7 +254,7 @@ inferMutual decls = do
 
   tys <- mapM (\n -> case M.lookup n sigMap of
                        Just t  -> return t
-                       Nothing -> newMetaTy NoLoc) ns
+                       Nothing -> newMetaTy) ns
 
   nts0 <- withUVars (zip ns tys) $ forM decls $ \(Loc loc (DDef n _ e)) -> do 
     ty  <- inferTy e              -- type of e 

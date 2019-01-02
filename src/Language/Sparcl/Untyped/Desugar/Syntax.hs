@@ -1,6 +1,6 @@
 module Language.Sparcl.Untyped.Desugar.Syntax (
   Ty(..), MetaTyVar(..), BodyTy, PolyTy, MonoTy,
-  bangTy, revTy, boolTy, (-@), tupleTy,
+  bangTy, revTy, boolTy, (-@), tupleTy, charTy, 
   
   Exp(..), OLExp, Orig(..), noOrig, 
   Pat(..), LPat,
@@ -17,6 +17,8 @@ module Language.Sparcl.Untyped.Desugar.Syntax (
 import Language.Sparcl.Name
 import Language.Sparcl.Literal
 import Language.Sparcl.SrcLoc 
+
+import Data.IORef 
 
 import qualified Data.Map as M
 import qualified Data.Set as S 
@@ -78,14 +80,19 @@ instance Pretty Ty where
 
   pprPrec k (TySyn t _) = pprPrec k t 
 
-data MetaTyVar = MetaTyVar Int SrcSpan
-  deriving Show
+data MetaTyVar = MetaTyVar !Int !TyRef 
+ 
+type TyRef = IORef (Maybe MonoTy)
 
 instance Pretty MetaTyVar where
   ppr (MetaTyVar i _) = D.text $ "_" ++ show i 
 
+instance Show MetaTyVar where
+  show = prettyShow 
+
 instance Eq MetaTyVar where
-  MetaTyVar i _ == MetaTyVar j _ = i == j 
+  -- MetaTyVar i _ == MetaTyVar j _ = i == j
+  MetaTyVar _ i == MetaTyVar _ j = i == j 
 
 type BodyTy = MonoTy  -- forall body. only consider rank 1
 type PolyTy = Ty      -- polymorphic types
@@ -103,6 +110,9 @@ t1 -@ t2 = TyCon nameTyLArr [t1, t2]
 
 boolTy :: Ty
 boolTy = TyCon nameTyBool []
+
+charTy :: Ty
+charTy = TyCon nameTyChar []
 
 tupleTy :: [Ty] -> Ty
 tupleTy ts = TyCon (nameTyTuple $ length ts) ts 
