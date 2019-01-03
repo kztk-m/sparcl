@@ -1,13 +1,13 @@
-module Language.Sparcl.Untyped.Parsing (
+module Language.Sparcl.Surface.Parsing (
   parseExp, parseModule, parseDecl,
   parseExpTest, parseDeclTest, parseModuleTest
 
   ) where
 
-import Language.Sparcl.Untyped.Syntax
+import Language.Sparcl.Surface.Syntax
 
-import Language.Sparcl.Untyped.Lexer
-import Language.Sparcl.Untyped.Parser
+import Language.Sparcl.Surface.Lexer
+import Language.Sparcl.Surface.Parser
 import Language.Sparcl.SrcLoc
 
 import qualified Control.Monad.Fail as Fail

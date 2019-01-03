@@ -3,13 +3,13 @@ module Language.Sparcl.Module where
 import qualified Data.Map as M
 import qualified Data.Set as S
 
-import Language.Sparcl.Untyped.Desugar.Syntax
-import Language.Sparcl.Untyped.Desugar
-import Language.Sparcl.Untyped.Eval
+import Language.Sparcl.Core.Syntax
+import Language.Sparcl.Desugar
+import Language.Sparcl.Eval
 import Language.Sparcl.Typing.Typing
 import Language.Sparcl.Typing.TC 
 
-import Language.Sparcl.Untyped.Parsing 
+import Language.Sparcl.Surface.Parsing 
 
 import System.Directory as Dir
 import System.FilePath as FP

@@ -1,4 +1,4 @@
-module Language.Sparcl.Untyped.Desugar.Syntax (
+module Language.Sparcl.Core.Syntax (
   Ty(..), MetaTyVar(..), BodyTy, PolyTy, MonoTy,
   bangTy, revTy, boolTy, (-@), tupleTy, charTy, 
   
@@ -23,7 +23,7 @@ import Data.IORef
 import qualified Data.Map as M
 import qualified Data.Set as S 
 
-import qualified Language.Sparcl.Untyped.Syntax as S
+import qualified Language.Sparcl.Surface.Syntax as S
 
 
 import Language.Sparcl.Pretty 

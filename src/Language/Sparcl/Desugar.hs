@@ -1,15 +1,15 @@
 {-# LANGUAGE ViewPatterns #-}
-module Language.Sparcl.Untyped.Desugar (
+module Language.Sparcl.Desugar (
   desugarTopDecls, desugarExp, desugarLExp, desugarTy,
   runDesugar
   ) where
 
-import qualified Language.Sparcl.Untyped.Syntax as S
+import qualified Language.Sparcl.Surface.Syntax as S
 import Language.Sparcl.SrcLoc
 
 import Language.Sparcl.Name
 import Language.Sparcl.Pretty 
-import Language.Sparcl.Untyped.Desugar.Syntax
+import Language.Sparcl.Core.Syntax
 
 import Control.Monad.State 
 import Control.Monad.Reader

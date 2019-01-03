@@ -1,9 +1,9 @@
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE RecursiveDo #-}
 
-module Language.Sparcl.Untyped.Eval where
+module Language.Sparcl.Eval where
 
-import Language.Sparcl.Untyped.Desugar.Syntax
+import Language.Sparcl.Core.Syntax
 
 import qualified Data.Map as M
 import Data.Map (Map)

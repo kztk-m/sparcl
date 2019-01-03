@@ -1,10 +1,10 @@
 {
 {-# LANGUAGE ViewPatterns #-}
-module Language.Sparcl.Untyped.Parser where
+module Language.Sparcl.Surface.Parser where
 
-import Language.Sparcl.Untyped.Lexer
-import Language.Sparcl.Untyped.Syntax
-import Language.Sparcl.Untyped.ParserAux 
+import Language.Sparcl.Surface.Lexer
+import Language.Sparcl.Surface.Syntax
+import Language.Sparcl.Surface.ParserAux 
 
 import Language.Sparcl.SrcLoc
 import Language.Sparcl.Name

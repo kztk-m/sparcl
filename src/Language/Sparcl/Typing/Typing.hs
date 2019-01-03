@@ -1,7 +1,7 @@
 module Language.Sparcl.Typing.Typing where
 
 import Language.Sparcl.Typing.TC
-import Language.Sparcl.Untyped.Desugar.Syntax
+import Language.Sparcl.Core.Syntax
 
 import Control.Monad.Except
 import qualified Data.Map as M 

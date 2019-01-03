@@ -1,7 +1,7 @@
 {
 {-# OPTIONS_GHC -fno-warn-tabs -Wno-unused-imports #-}
 
-module Language.Sparcl.Untyped.Lexer where
+module Language.Sparcl.Surface.Lexer where
 
 import Language.Sparcl.Name
 import Language.Sparcl.SrcLoc

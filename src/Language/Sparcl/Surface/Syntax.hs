@@ -1,4 +1,4 @@
-module Language.Sparcl.Untyped.Syntax where
+module Language.Sparcl.Surface.Syntax where
 
 import Language.Sparcl.SrcLoc
 

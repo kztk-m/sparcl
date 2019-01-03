@@ -3,8 +3,8 @@ module Language.Sparcl.Typing.TC where
 
 -- Type checking monad
 -- Here, we use int values for meta variables
-import Language.Sparcl.Untyped.Desugar.Syntax
-import qualified Language.Sparcl.Untyped.Syntax as S 
+import Language.Sparcl.Core.Syntax
+import qualified Language.Sparcl.Surface.Syntax as S 
 
 import qualified Data.Map as M
 

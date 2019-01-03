@@ -1,14 +1,14 @@
 module Language.Sparcl.REPL where
 
 import Language.Sparcl.Module
-import Language.Sparcl.Untyped.Eval
-import Language.Sparcl.Untyped.Desugar.Syntax
+import Language.Sparcl.Eval
+import Language.Sparcl.Core.Syntax
 import Language.Sparcl.Typing.TC
 import Language.Sparcl.Typing.Typing 
 
-import Language.Sparcl.Untyped.Desugar
+import Language.Sparcl.Desugar
 
-import Language.Sparcl.Untyped.Parsing 
+import Language.Sparcl.Surface.Parsing 
 
 import qualified System.Console.Haskeline as HL
 
