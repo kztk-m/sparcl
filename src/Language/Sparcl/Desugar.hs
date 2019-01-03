@@ -496,7 +496,7 @@ desugarTopDecls tdecls = do
   --   | Loc l (S.DType n ns ty) <- tdecls ]
 
   let newTyNames = [ QName cm n | Loc _ (S.DData n _ _) <- tdecls ]
-               ++ [ QName cm n | Loc _ (S.DType n _ _) <- tdecls ]
+                   ++ [ QName cm n | Loc _ (S.DType n _ _) <- tdecls ]
 
   withDefinedNames newTyNames $ do   
     dataTable <- fmap M.fromList $ fmap concat $ sequence 
@@ -517,7 +517,7 @@ desugarTopDecls tdecls = do
 
     let opTable = M.fromList [ (n,v) | (n, v) <- entries ]
   
-    return (decls', qnames, opTable, dataTable, synTable)
+    return (decls', qnames++newTyNames++M.keys dataTable, opTable, dataTable, synTable)
   where
     procCDecl :: ModuleName -> Name -> [Name] -> Loc S.CDecl -> Desugar (QName, Ty)
     procCDecl cm n ns (Loc loc (S.CDecl c ts)) = do

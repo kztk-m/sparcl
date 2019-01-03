@@ -4,6 +4,7 @@ module Language.Sparcl.Typing.TC where
 -- Type checking monad
 -- Here, we use int values for meta variables
 import Language.Sparcl.Core.Syntax
+import Language.Sparcl.Exception 
 import qualified Language.Sparcl.Surface.Syntax as S 
 
 import qualified Data.Map as M
@@ -17,6 +18,7 @@ import qualified Text.PrettyPrint.ANSI.Leijen as D
 import Language.Sparcl.Pretty 
 
 -- import Control.Arrow (first) 
+import Control.Exception (evaluate, Exception, throw, catch)
 
 import qualified Data.Sequence as Seq 
 import Data.IORef
@@ -72,7 +74,8 @@ instance Pretty TypeError where
         D.line D.<> D.text "when checking expression:" D.<+> ppr (location e) 
         D.<> D.nest 2 (D.line D.<> ppr e)
         D.<> pprContexts es 
-     
+
+      
 atLoc :: MonadTypeCheck m => SrcSpan -> m r -> m r
 atLoc NoLoc m = m
 atLoc loc   m =
@@ -82,7 +85,12 @@ atExp :: MonadTypeCheck m => Maybe S.LExp -> m r -> m r
 atExp Nothing  m = m 
 atExp (Just e) m =
   catchError m $ \(TypeError oloc es reason) -> throwError (TypeError oloc (e Seq.<| es) reason)
-                   
+
+instance Show TypeError where
+  show = prettyShow
+instance Exception TypeError
+
+                                                
   
 class (MonadError TypeError m, Monad m) => MonadTypeCheck m where
   typeError :: ErrorDetail -> m a
@@ -119,8 +127,22 @@ data TInfo
           }    
 
 -- newtype TC a = TC { unTC :: StateT TInfo (Either D.Doc) a }
-newtype TC a = TC { unTC :: ExceptT TypeError (ReaderT TInfo IO) a }
-  deriving (Functor, Applicative, Monad, MonadReader TInfo, MonadError TypeError, MonadIO) 
+-- newtype TC a = TC { unTC :: ExceptT TypeError (ReaderT TInfo IO) a }
+newtype TC a = TC { unTC :: ReaderT TInfo IO a }
+  deriving (Functor, Applicative, Monad, MonadReader TInfo, MonadIO) 
+
+instance MonadError TypeError TC where
+  throwError e = TC $ ReaderT $ \_ -> throw e 
+  catchError (TC x) f = TC $ ReaderT $
+    \r -> catch (evaluate =<< runReaderT x r) (\y -> runReaderT (unTC $ f y) r) 
+
+class Monad m => HasTInfo m where
+  getTInfo :: m TInfo
+
+class Monad m => ModifyTInfo m where
+  modifyTInfo :: (TInfo -> m TInfo) -> m ()
+  
+  
 
 initTInfo :: IO TInfo
 initTInfo = do 
@@ -140,12 +162,11 @@ setEnvs ti tenv syn = do
 
 
 
-runTC :: TInfo -> TC a -> IO (Either D.Doc a)
+runTC :: TInfo -> TC a -> IO a 
 runTC tinfo (TC m) = do 
-  res <- runReaderT (runExceptT m) tinfo
-  return $ case res of
-             Left e  -> Left (ppr e)
-             Right v -> Right v 
+  -- res <- runReaderT m tinfo  (runExceptT m) tinfo
+  catch (evaluate =<< runReaderT m tinfo) $ \(e :: TypeError) ->
+    staticError (ppr e) 
 
   
 
@@ -216,10 +237,10 @@ instance MonadTypeCheck TC where
         return ty
 
   readTyVar (MetaTyVar _ ref) = TC $ do
-    lift $ lift $ readIORef ref 
+    liftIO $ readIORef ref 
 
   writeTyVar (MetaTyVar _ ref) ty = TC $ do
-    lift $ lift $ writeIORef ref (Just ty) 
+    liftIO $ writeIORef ref (Just ty) 
 
 
   withLVar x ty m = do

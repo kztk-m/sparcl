@@ -21,6 +21,7 @@ library
       Language.Sparcl.Name,
       Language.Sparcl.Literal,
       Language.Sparcl.Pretty,
+      Language.Sparcl.Class,
       Language.Sparcl.Surface.Syntax,
       Language.Sparcl.Surface.Lexer, 
       Language.Sparcl.Surface.Parser,
@@ -31,6 +32,8 @@ library
       Language.Sparcl.Typing.TC,
       Language.Sparcl.Module,
       Language.Sparcl.Desugar,
+      Language.Sparcl.Value,
+      Language.Sparcl.Exception,
       Language.Sparcl.Eval,
       Language.Sparcl.REPL
                      

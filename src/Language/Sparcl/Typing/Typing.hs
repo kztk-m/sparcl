@@ -12,6 +12,7 @@ import Language.Sparcl.Pretty
 import Data.List ((\\))
 
 import qualified Data.Graph as G
+-- import Control.Exception (evaluate)
 
 -- import Debug.Trace 
 

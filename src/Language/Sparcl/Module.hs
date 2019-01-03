@@ -1,3 +1,4 @@
+{-# LANGUAGE ConstraintKinds #-}
 module Language.Sparcl.Module where
 
 import qualified Data.Map as M
@@ -6,125 +7,216 @@ import qualified Data.Set as S
 import Language.Sparcl.Core.Syntax
 import Language.Sparcl.Desugar
 import Language.Sparcl.Eval
+import Language.Sparcl.Value
+import Language.Sparcl.Exception 
 import Language.Sparcl.Typing.Typing
-import Language.Sparcl.Typing.TC 
+import Language.Sparcl.Typing.TC
+import Language.Sparcl.Class
 
 import Language.Sparcl.Surface.Parsing 
 
-import System.Directory as Dir
-import System.FilePath as FP
+import System.Directory as Dir (doesFileExist)
+import qualified System.FilePath as FP ((</>), (<.>))
 
 import Control.Monad.Reader
-import Control.Monad.State.Strict 
 import System.IO 
 
 import Language.Sparcl.Pretty
 import qualified Text.PrettyPrint.ANSI.Leijen as D
 
-import Control.Exception (Exception, throw)
+import Data.IORef 
+
+-- import Control.Exception (Exception, throw)
 
 data ModuleInfo = ModuleInfo {
   miModuleName :: ModuleName,
-  miDefinedNames :: [QName], 
-  miTypeTable  :: TypeTable,
-  miSynTable   :: SynTable, 
-  miOpTable    :: OpTable,
-  miValueTable :: ValueTable 
+  miTables     :: Tables 
   }
 
 data InterpInfo = InterpInfo {
   iiSearchPath  :: [FilePath],
-  iiDefinedNames :: [QName], 
-  iiTypeTable   :: TypeTable,
-  iiSynTable    :: SynTable,
-  iiOpTable     :: OpTable,
-  iiValueTable  :: M.Map QName Value,
-  iiTInfo       :: TInfo 
+  iiTables      :: Tables, 
+  iiTInfo       :: TInfo,
+  iiModuleTable :: IORef ModuleTable
   }
 
 type ModuleTable = M.Map ModuleName ModuleInfo   
-type ValueTable  = M.Map QName Value 
 
-type M = ReaderT InterpInfo (StateT ModuleTable IO) 
+-- type M = ReaderT InterpInfo (StateT ModuleTable IO)
+type M = ReaderT InterpInfo IO 
+
+data Tables = Tables
+              { tDefinedNames :: [QName],
+                tOpTable      :: OpTable,
+                tTypeTable    :: TypeTable,
+                tSynTable     :: SynTable,
+                tValueTable   :: ValueTable 
+              }
+
+mergeTables :: Tables -> Tables -> Tables
+mergeTables t1 t2 =
+  setDefinedNames  (tDefinedNames t1 ++ ) $
+  setOpTable       (M.union $ tOpTable t1) $
+  setTypeTable     (M.union $ tTypeTable t1) $
+  setSynTable      (M.union $ tSynTable t1) $
+  setValueTable    (M.union $ tValueTable t1) $
+  t2
+
+setDefinedNames :: ([QName] -> [QName]) -> Tables -> Tables 
+setDefinedNames f t = t { tDefinedNames = f (tDefinedNames t) }
+
+setOpTable :: (OpTable -> OpTable) -> Tables -> Tables 
+setOpTable f t = t { tOpTable = f (tOpTable t) }
+
+setTypeTable :: (TypeTable -> TypeTable) -> Tables -> Tables
+setTypeTable f t = t { tTypeTable = f (tTypeTable t) }
+
+setSynTable :: (SynTable -> SynTable) -> Tables -> Tables
+setSynTable f t = t { tSynTable = f (tSynTable t) }
+
+setValueTable :: (ValueTable -> ValueTable) -> Tables -> Tables
+setValueTable f t = t { tValueTable = f (tValueTable t) }
+
+iiSetTable :: (Tables -> Tables) -> InterpInfo -> InterpInfo 
+iiSetTable f t = t { iiTables = f (iiTables t) } 
+
+miSetTables :: (Tables -> Tables) -> ModuleInfo -> ModuleInfo
+miSetTables f t = t { miTables = f (miTables t) }  
+
+instance HasOpTable M where
+  getOpTable     = asks $ tOpTable . iiTables
+  localOpTable f = local $ iiSetTable $ setOpTable f 
+    
+instance HasTypeTable M where
+  getTypeTable = asks $ tTypeTable . iiTables
+  localTypeTable f = local $ iiSetTable $ setTypeTable f 
+
+instance HasDefinedNames M where
+  getDefinedNames = asks $ tDefinedNames . iiTables
+  localDefinedNames f = local $ iiSetTable $ setDefinedNames f
+
+instance HasSynTable M where
+  getSynTable = asks $ tSynTable . iiTables
+  localSynTable f = local $ iiSetTable $ setSynTable f
+
+instance HasValueTable M where
+  getValueTable = asks $ tValueTable . iiTables
+  localValueTable f = local $ iiSetTable $ setValueTable f 
 
 
-data StaticException = StaticException Doc
+instance HasTInfo M where
+  getTInfo = asks iiTInfo
 
-instance Show StaticException where
-  show (StaticException d) =
-    show (D.red (D.text "[Error]") D.<> D.nest 2 (D.line D.<> d))
+class HasModuleTable m where
+  getModuleTable :: m ModuleTable
+--  localModuleTable :: (ModuleTable -> ModuleTable) -> m r -> m r 
 
-instance Exception StaticException
+instance HasModuleTable M where
+  getModuleTable = do
+    ref <- asks iiModuleTable
+    liftIO $ readIORef ref
 
-staticError :: Doc -> a
-staticError d = throw (StaticException d)
+  -- localModuleTable f m = do
+  --   ref <- asks iiModuleTable
+  --   old <- liftIO $ readIORef ref
+  --   liftIO $ writeIORef ref (f old)
+  --   res <- m
+  --   liftIO $ writeIORef ref old
+  --   return res
+
+instance HasSearchPath M where
+  getSearchPath = asks iiSearchPath
+  localSearchPath f =
+    local $ \ii -> ii { iiSearchPath = f (iiSearchPath ii) }
+
+type HasTables m = (HasDefinedNames m,
+                    HasOpTable m, 
+                    HasTypeTable m,
+                    HasSynTable m,
+                    HasValueTable m) 
+
+class HasModuleTable m => ModifyModuleTable m where
+  modifyModuleTable :: (ModuleTable -> ModuleTable) -> m ()
+
+instance ModifyModuleTable M where
+  modifyModuleTable f = do
+    ref <- asks iiModuleTable
+    old <- liftIO $ readIORef ref
+    liftIO $ writeIORef ref (f old)
+  
+    
 
 
-runMTest :: [FilePath] -> M a -> IO a
-runMTest searchPath m = do
-  tinfo <- initTInfo
-  let ii = initInterpInfo tinfo searchPath 
-  evalStateT (runReaderT (withImport baseModuleInfo m) ii) M.empty
+
+-- runMTest :: [FilePath] -> M a -> IO a
+-- runMTest searchPath m = do
+--   tinfo <- initTInfo
+--   let ii = initInterpInfo tinfo searchPath 
+--   evalStateT (runReaderT (withImport baseModuleInfo m) ii) M.empty
 
 runM :: [FilePath] -> TInfo -> M a -> IO a
 runM searchPath tinfo m = do
-  let ii = initInterpInfo tinfo searchPath 
-  (res, _) <- runStateT (runReaderT (withImport baseModuleInfo m) ii) M.empty
-  return res
+  ii <- initInterpInfo tinfo searchPath 
+  -- (res, _) <- runStateT (runReaderT (withImport baseModuleInfo m) ii) M.empty
+  runReaderT (withImport baseModuleInfo m) ii 
+--  return res
 
-initInterpInfo :: TInfo -> [FilePath] -> InterpInfo
-initInterpInfo tinfo searchPath = 
-  InterpInfo { iiSearchPath = searchPath,
-               iiTypeTable  = M.empty,
-               iiDefinedNames = [], 
-               iiSynTable   = M.empty,
-               iiOpTable    = M.empty,
-               iiValueTable = M.empty,
-               iiTInfo      = tinfo }
+initTables :: Tables 
+initTables = Tables [] M.empty M.empty M.empty M.empty
+
+initInterpInfo :: TInfo -> [FilePath] -> IO InterpInfo
+initInterpInfo tinfo searchPath = do
+  ref <- newIORef M.empty  
+  return $ InterpInfo { iiSearchPath = searchPath,
+                        iiTables = initTables, 
+                        iiTInfo      = tinfo,
+                        iiModuleTable = ref }
+    
 baseModuleInfo :: ModuleInfo 
 baseModuleInfo = ModuleInfo {
   miModuleName = baseModule,
-
-  miDefinedNames = [
-      conTrue, conFalse,
-      nameTyBang, nameTyBool, nameTyChar, nameTyDouble,
-      nameTyInt, nameTyLArr, nameTyRev, nameTyList,
-      base "+", base "-", base "*",
-      eqInt, leInt, ltInt,
-      eqChar, leChar, ltChar
+  miTables = Tables { 
+      tDefinedNames = [
+          conTrue, conFalse,
+          nameTyBang, nameTyBool, nameTyChar, nameTyDouble,
+          nameTyInt, nameTyLArr, nameTyRev, nameTyList,
+          base "+", base "-", base "*",
+          eqInt, leInt, ltInt,
+          eqChar, leChar, ltChar
       ], 
   
-  miTypeTable = M.fromList [
-      conTrue  |-> boolTy,
-      conFalse |-> boolTy,
-      base "+" |-> intTy -@ (intTy -@ intTy),
-      base "-" |-> intTy -@ (intTy -@ intTy),
-      base "*" |-> intTy -@ (intTy -@ intTy),
-      eqInt  |-> intTy -@ intTy -@ boolTy,
-      leInt  |-> intTy -@ intTy -@ boolTy,
-      ltInt  |-> intTy -@ intTy -@ boolTy,
-      eqChar |-> charTy -@ charTy -@ boolTy,
-      leChar |-> charTy -@ charTy -@ boolTy,
-      ltChar |-> charTy -@ charTy -@ boolTy 
-      ],
+      tTypeTable = M.fromList [
+          conTrue  |-> boolTy,
+          conFalse |-> boolTy,
+          base "+" |-> intTy -@ (intTy -@ intTy),
+          base "-" |-> intTy -@ (intTy -@ intTy),
+          base "*" |-> intTy -@ (intTy -@ intTy),
+          eqInt  |-> intTy -@ intTy -@ boolTy,
+          leInt  |-> intTy -@ intTy -@ boolTy,
+          ltInt  |-> intTy -@ intTy -@ boolTy,
+          eqChar |-> charTy -@ charTy -@ boolTy,
+          leChar |-> charTy -@ charTy -@ boolTy,
+          ltChar |-> charTy -@ charTy -@ boolTy 
+          ],
     
-  miSynTable = M.empty,
-  miOpTable  = M.fromList [
-      base "+" |-> (Prec 60, L),
-      base "-" |-> (Prec 60, L),
-      base "*" |-> (Prec 70, L) ], 
-               
-  miValueTable = M.fromList [
-      base "+" |-> intOp (+),
-      base "-" |-> intOp (-),
-      base "*" |-> intOp (*),
-      eqInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool (unInt n == unInt m)),
-      leInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool (unInt n <= unInt m)),
-      ltInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool (unInt n <  unInt m)),
-      eqChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool (unChar c == unChar d)),
-      leChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool (unChar c <= unChar d)),
-      ltChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool (unChar c <  unChar d))
-      ]
+      tSynTable = M.empty,
+      tOpTable  = M.fromList [
+          base "+" |-> (Prec 60, L),
+          base "-" |-> (Prec 60, L),
+          base "*" |-> (Prec 70, L) ], 
+        
+      tValueTable = M.fromList [
+          base "+" |-> intOp (+),
+          base "-" |-> intOp (-),
+          base "*" |-> intOp (*),
+            eqInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool (unInt n == unInt m)),
+            leInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool (unInt n <= unInt m)),
+            ltInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool (unInt n <  unInt m)),
+            eqChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool (unChar c == unChar d)),
+            leChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool (unChar c <= unChar d)),
+            ltChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool (unChar c <  unChar d))
+          ]
+      }
   }
   where
     eqInt = base "eqInt"
@@ -150,46 +242,52 @@ baseModuleInfo = ModuleInfo {
     infix 0 |-> 
   
 
-debugPrint :: String -> M ()
-debugPrint = lift . lift . hPutStrLn stderr 
+debugPrint :: MonadIO m => String -> m ()
+debugPrint = liftIO . hPutStrLn stderr 
 
-withOpTable :: OpTable -> M r -> M r
+withOpTable :: HasOpTable m => OpTable -> m r -> m r
 withOpTable newOpTable m = do
-  opTable <- asks iiOpTable
-  local (\ii -> ii { iiOpTable = M.union newOpTable opTable }) m
+  -- opTable <- asks iiOpTable
+  -- local (\ii -> ii { iiOpTable = M.union newOpTable opTable }) m
+  localOpTable (M.union newOpTable) m 
 
-withTypeTable :: TypeTable -> M r -> M r
+withTypeTable :: HasTypeTable m => TypeTable -> m r -> m r
 withTypeTable newTbl m = do
-  tbl <- asks iiTypeTable
-  local (\ii -> ii { iiTypeTable = M.union newTbl tbl }) m
+  localTypeTable (M.union newTbl) m
+  -- tbl <- asks iiTypeTable
+  -- local (\ii -> ii { iiTypeTable = M.union newTbl tbl }) m
 
-withSynTable :: SynTable -> M r -> M r 
+withSynTable :: HasSynTable m => SynTable -> m r -> m r 
 withSynTable newTbl m = do
-  tbl <- asks iiSynTable
-  local (\ii -> ii { iiSynTable = M.union newTbl tbl }) m
+  localSynTable (M.union newTbl) m 
+  -- tbl <- asks iiSynTable
+  -- local (\ii -> ii { iiSynTable = M.union newTbl tbl }) m
 
-withValueTable :: ValueTable -> M r -> M r 
+withValueTable :: HasValueTable m => ValueTable -> m r -> m r 
 withValueTable newTbl m = do
-  tbl <- asks iiValueTable
-  local (\ii -> ii { iiValueTable = M.union newTbl tbl }) m
+  localValueTable (M.union newTbl) m 
+  -- tbl <- asks iiValueTable
+  -- local (\ii -> ii { iiValueTable = M.union newTbl tbl }) m
 
-withDefinedNames :: [QName] -> M r -> M r
+withDefinedNames :: HasDefinedNames m => [QName] -> m r -> m r
 withDefinedNames newTbl m = do
-  tbl <- asks iiDefinedNames
-  local (\ii -> ii { iiDefinedNames = newTbl ++ tbl}) m 
+  localDefinedNames (newTbl ++) m 
+  -- tbl <- asks iiDefinedNames
+  -- local (\ii -> ii { iiDefinedNames = newTbl ++ tbl}) m 
 
 
-withImport :: ModuleInfo -> M r -> M r 
+-- withImport :: ModuleInfo -> M r -> M r
+withImport :: HasTables m => ModuleInfo -> m r -> m r 
 withImport mod m = do
-  let opTbl  = miOpTable  mod
-  let tyTbl  = miTypeTable mod
-  let synTbl = miSynTable  mod
-  let defTbl = miDefinedNames mod
-  let valTbl = miValueTable mod
-  withOpTable opTbl $ withTypeTable tyTbl $ withSynTable synTbl $ withDefinedNames defTbl $ withValueTable valTbl m 
+  let t = miTables mod 
+  withOpTable (tOpTable t) $
+    withTypeTable (tTypeTable t) $
+      withSynTable (tSynTable t) $
+        withDefinedNames (tDefinedNames t) $
+          withValueTable (tValueTable t) m 
   
 
-withImports :: [ModuleInfo] -> M r -> M r
+withImports :: HasTables m => [ModuleInfo] -> m r -> m r
 withImports ms comp =
   foldr withImport comp ms 
 
@@ -204,49 +302,66 @@ restrictNames :: [QName] -> ModuleInfo -> ModuleInfo
 restrictNames ns mi = 
   let mn = miModuleName mi
       ns' = S.fromList $ ns ++ [ QName mn n | BName n <- ns ]
-      mi' = mi { miModuleName = mn,
-                 miOpTable   = M.restrictKeys (miOpTable mi) ns',
-                 miTypeTable = M.restrictKeys (miTypeTable mi) ns',
-                 miSynTable  = M.restrictKeys (miSynTable mi) ns',
-                 miValueTable = M.restrictKeys (miValueTable mi) ns' }
+      restrict :: M.Map QName a -> M.Map QName a 
+      restrict x = M.restrictKeys x ns' 
+      mi' = miSetTables (\t -> t { tDefinedNames = filter (`elem` ns) (tDefinedNames t), 
+                                   tOpTable    = restrict (tOpTable t),
+                                   tTypeTable  = restrict (tTypeTable t),
+                                   tSynTable   = restrict (tSynTable t),
+                                   tValueTable = restrict (tValueTable t) }) mi 
   in mi' 
                  
 
-searchModule :: ModuleName -> M FilePath
+searchModule :: (MonadIO m, HasSearchPath m) => ModuleName -> m FilePath
 searchModule mod = do
-  dirs <- asks iiSearchPath
+  dirs <- getSearchPath
   let file = moduleNameToFilePath mod 
   let searchFiles = [ dir FP.</> file | dir <- dirs ]
-  fs <- lift $ mapM (lift . Dir.doesFileExist) searchFiles
+  fs <- liftIO $ mapM Dir.doesFileExist searchFiles
   case map fst $ filter snd $ zip searchFiles fs of
     fp:_ -> return fp 
     _    -> error $ "ERROR: Cannot find module " ++ foldr1 (\a b -> a ++ "." ++ b) mod
 
-readModule :: FilePath -> M ModuleInfo
+
+readModule :: (MonadIO m, HasTables m, HasTInfo m, HasSearchPath m, ModifyModuleTable m) =>
+              FilePath -> m ModuleInfo
 readModule fp = do
+  -- Clear cache. 
+  modifyModuleTable (const $ M.empty)
+  -- reset emvironments. 
+  localDefinedNames (const []) $
+    localOpTable (const $ M.empty) $
+      localTypeTable (const $ M.empty) $
+        localSynTable (const $ M.empty) $
+          withImport baseModuleInfo $ 
+            readModuleWork fp 
+
+readModuleWork :: (MonadIO m, HasTables m, HasTInfo m, HasSearchPath m, ModifyModuleTable m) =>
+                  FilePath -> m ModuleInfo
+readModuleWork fp = do
   debugPrint $ "Parsing " ++ fp ++ " ..." 
-  s <- lift $ lift $ readFile fp 
+  s <- liftIO $ readFile fp 
   Module mod exports imports decls <- either (staticError . D.text) return $ parseModule fp s
 
   debugPrint $ "Parsing Ok." 
 
   
   ms <- mapM (\(Import m is) ->
-                 do md <- interpModule m
+                 do md <- interpModuleWork m
                     case is of
                       Nothing -> return md
                       Just ns -> 
                         return $ restrictNames (map (qualifyName m) ns) md) imports
 
   withImports ms $ do 
-    definedNames <- asks iiDefinedNames
-    opTable      <- asks iiOpTable
+    definedNames <- getDefinedNames
+    opTable      <- getOpTable
 
     debugPrint $ "Desugaring ..."
     debugPrint $ show $ D.group $ D.nest 2 $ D.text "w.r.t. opTable: " D.<$> pprMap opTable
     
     (decls', newDefinedNames, newOpTable, newDataTable, newSynTable) <-
-           lift $ lift $ runDesugar mod definedNames opTable (desugarTopDecls decls)
+           liftIO $ runDesugar mod definedNames opTable (desugarTopDecls decls)
 
     debugPrint $ "Desugaring Ok."
     debugPrint $ show (D.group $ D.nest 2 $ D.text "Desugared syntax:" D.</> D.align (ppr decls'))
@@ -254,35 +369,36 @@ readModule fp = do
     withOpTable newOpTable $
       withTypeTable newDataTable $
         withSynTable newSynTable $ do
-          modTbl <- get
-          tyEnv  <- asks iiTypeTable
+          modTbl <- getModuleTable 
+          tyEnv  <- getTypeTable
 
           debugPrint "Type checking..."
           debugPrint $ show (D.text "under ty env" D.<+> pprMap tyEnv)
 
-          tinfo <- asks iiTInfo 
-          synEnv <- asks iiSynTable
+          tinfo <- getTInfo 
+          synEnv <- getSynTable
           liftIO $ setEnvs tinfo tyEnv synEnv 
           
-          res <- liftIO $ runTC tinfo $ inferDecls decls'
+          nts <- liftIO $ runTC tinfo $ inferDecls decls'
 
-          nts <- either staticError return res
 
           -- let env = foldr M.union M.empty $ map miValueTable ms
-          env <- asks iiValueTable 
+          env <- getValueTable 
           let env' = runEval (evalUDecls env decls') 
 
           let newMod = ModuleInfo {
                 miModuleName = mod, 
-                  miOpTable    = newOpTable,
-                  miDefinedNames = newDefinedNames, 
-                  miSynTable   = newSynTable,
-                  miTypeTable  = foldr (uncurry M.insert) ({- M.mapKeys (qualifyName mod) -} newDataTable) nts,
-                  miValueTable = -- M.mapKeys (qualifyName mod) $
-                                 env' 
+                miTables = Tables {
+                    tOpTable    = newOpTable,
+                    tDefinedNames = newDefinedNames, 
+                    tSynTable   = newSynTable,
+                    tTypeTable  = foldr (uncurry M.insert) ({- M.mapKeys (qualifyName mod) -} newDataTable) nts,
+                    tValueTable = -- M.mapKeys (qualifyName mod) $
+                        env'
+                  }
                 }                
 
-          put (M.insert mod newMod modTbl)
+          modifyModuleTable (const $ M.insert mod newMod modTbl)
 
           case exports of
             Just es -> 
@@ -295,14 +411,15 @@ readModule fp = do
      qualifyName _  (QName cm n) = QName cm n 
               
   
-interpModule :: ModuleName -> M ModuleInfo 
-interpModule mod = do
-  modTable <- get
+interpModuleWork :: (MonadIO m, HasTables m, HasTInfo m, HasSearchPath m, ModifyModuleTable m) =>
+                    ModuleName -> m ModuleInfo 
+interpModuleWork mod = do
+  modTable <- getModuleTable 
   case M.lookup mod modTable of
     Just modData -> return modData
     _            -> do 
       fp <- searchModule mod
-      readModule fp 
+      readModuleWork fp 
                
   
   
