@@ -1,7 +1,6 @@
 module Language.Sparcl.Value where
 
-import Language.Sparcl.Pretty 
-import qualified Text.PrettyPrint.ANSI.Leijen as D
+import Language.Sparcl.Pretty as D
 
 import qualified Data.Map as M
 import Control.DeepSeq 
@@ -10,10 +9,10 @@ import Control.Monad.Reader
 
 import Language.Sparcl.Literal
 import Language.Sparcl.Name
-import Language.Sparcl.Exception 
+import Language.Sparcl.Exception
 
 
-data Value = VCon QName [Value]
+data Value = VCon Name [Value]
            | VBang Value
            | VLit Literal
            | VFun (Value -> Eval Value) 
@@ -21,8 +20,8 @@ data Value = VCon QName [Value]
 
 type Eval = Reader Int 
 
-type ValueTable = M.Map QName Value 
-type Env = M.Map QName Value
+type ValueTable = M.Map Name Value 
+type Env = M.Map Name Value
 
 instance NFData Value where
   rnf (VCon c vs) = rnf (c, vs)
@@ -46,10 +45,10 @@ instance Pretty Value where
 
 -- type Eval = ReaderT Int (Either String)
 
-extendsEnv :: [(QName, Value)] -> Env -> Env
+extendsEnv :: [(Name, Value)] -> Env -> Env
 extendsEnv nvs env = foldr (uncurry extendEnv) env nvs 
    
-lookupEnv :: QName -> Env -> Eval Value
+lookupEnv :: Name -> Env -> Eval Value
 lookupEnv n env = case M.lookup n env of
   Nothing -> rtError $ D.text "Undefined variable:" D.<+> ppr n
                        D.</> D.text "Searched through: " D.<+>
@@ -58,10 +57,10 @@ lookupEnv n env = case M.lookup n env of
     -- return $ VRes (lookupEnvR n) (return . singletonEnv n)
   Just v  -> return v
 
-singletonEnv :: QName -> Value -> Env
+singletonEnv :: Name -> Value -> Env
 singletonEnv = M.singleton 
 
-extendEnv :: QName -> Value -> Env -> Env
+extendEnv :: Name -> Value -> Env -> Env
 extendEnv q v env = M.insert q v env 
 
 unionEnv :: Env -> Env -> Env
@@ -116,11 +115,8 @@ removeHeap :: Addr -> Heap -> Heap
 removeHeap x h = M.delete x h
 
 removesHeap :: [Addr] -> Heap -> Heap
-removesHeap xs h = foldl (\h x -> removeHeap x h) h xs 
+removesHeap xs heap = foldl (\h x -> removeHeap x h) heap xs 
 
 singletonHeap :: Addr -> Value -> Heap 
 singletonHeap = M.singleton 
-
-
-    
 

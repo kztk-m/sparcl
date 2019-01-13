@@ -1,8 +1,7 @@
 module Language.Sparcl.Exception where
 
 import Control.Exception (Exception, throw)
-import Language.Sparcl.Pretty 
-import qualified Text.PrettyPrint.ANSI.Leijen as D
+import Language.Sparcl.Pretty as D
 
 data RunTimeException = RunTimeException Doc
 
@@ -19,7 +18,7 @@ data StaticException = StaticException Doc
 
 instance Show StaticException where
   show (StaticException d) =
-    show (D.red (D.text "[Error]") D.<> D.nest 2 (D.line D.<> d))
+    show (D.red (D.text "[ERROR]") D.<> D.nest 2 (D.line D.<> d))
 
 instance Exception StaticException
 

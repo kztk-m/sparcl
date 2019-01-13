@@ -12,8 +12,7 @@ import Control.Monad.Except
 
 -- import qualified Control.Monad.Fail as Fail
 
-import Language.Sparcl.Pretty 
-import qualified Text.PrettyPrint.ANSI.Leijen as D
+import Language.Sparcl.Pretty hiding ((<$>))
 
 
 -- lookupEnvR :: QName -> Env -> Eval Value
@@ -22,14 +21,16 @@ import qualified Text.PrettyPrint.ANSI.Leijen as D
 --   Just  v -> return v 
   
                     
-evalUDecls :: Env -> [LDecl] -> Eval Env
-evalUDecls env ds = do
-    rec ev  <- mapM (evalD env') ds
+evalUBind :: Env -> Bind Name -> Eval Env
+evalUBind env ds = do
+    rec ev  <- mapM (\(n,e) -> do
+                        v <- evalU env' e
+                        return (n,v)) ds
         let env' = extendsEnv ev env
     return env' 
 
-evalU :: Env -> OLExp -> Eval Value
-evalU env (desugared -> Loc _loc exp) = case exp of
+evalU :: Env -> Exp Name -> Eval Value
+evalU env expr = case expr of
   Lit l -> return $ VLit l
   Var n ->
     lookupEnv n env
@@ -40,9 +41,9 @@ evalU env (desugared -> Loc _loc exp) = case exp of
         v2 <- evalU env e2
         f v2
       _ ->
-        rtError $ D.text "the first component of application must be a function."
+        rtError $ text "the first component of application must be a function."
   Abs n e ->
-    return $ VFun (\v -> evalU (extendEnv (BName n) v env) e)
+    return $ VFun (\v -> evalU (extendEnv n v env) e)
 
   Con q es -> do 
     VCon q <$> mapM (evalU env) es
@@ -62,11 +63,8 @@ evalU env (desugared -> Loc _loc exp) = case exp of
     return $ VBang $ VFun $ \(VRes f b) ->
                               return $ VRes (f >=> vf') (vb' >=> b)
 
-  Sig e _ ->
-    evalU env e
-
   Let ds e -> do
-    env' <- evalUDecls env ds 
+    env' <- evalUBind env ds 
     evalU env' e
 
   Unlift e -> do
@@ -94,7 +92,7 @@ evalU env (desugared -> Loc _loc exp) = case exp of
                                        envs <- zipWithM (\v u -> runBwd v u) vs us'
                                        return $ foldr unionHeap emptyHeap envs
                        _ ->
-                         rtError $ D.text "out of the range:" D.<+> ppr v' D.<+> D.text "for" D.<+> ppr exp)
+                         rtError $ text "out of the range:" <+> ppr v' <+> text "for" <+> ppr expr)
   
   RCase e0 pes -> do
     VRes f0 b0 <- evalU env e0
@@ -125,33 +123,33 @@ evalU env (desugared -> Loc _loc exp) = case exp of
                                              hp2 <- b2 b
                                              hp1 <- b1 a
                                              return $ unionHeap hp1 hp2
-                           _ -> rtError $ D.text "Expected a pair" 
+                           _ -> rtError $ text "Expected a pair" 
                   )
                            
 
 
     
-evalCase :: Env -> Value -> [ (LPat, OLExp) ] -> Eval Value
-evalCase _   _ [] = rtError $ D.text "pattern match error"
+evalCase :: Env -> Value -> [ (Pat Name, Exp Name) ] -> Eval Value
+evalCase _   _ [] = rtError $ text "pattern match error"
 evalCase env v ((p, e):pes) =
   case findMatch v p of
     Just binds -> evalU (extendsEnv binds env) e
     _          -> evalCase env v pes 
 
-findMatch :: Value -> LPat -> Maybe [ (QName, Value) ]
-findMatch v (unLoc -> PVar n) = return [(BName n,v)]
-findMatch (VCon q vs) (unLoc -> PCon q' ps) | q == q' && length vs == length ps =
+findMatch :: Value -> Pat Name -> Maybe [ (Name, Value) ]
+findMatch v (PVar n) = return [(n, v)]
+findMatch (VCon q vs) (PCon q' ps) | q == q' && length vs == length ps =
                                        concat <$> zipWithM findMatch vs ps
-findMatch (VBang v) (unLoc -> PBang p) = findMatch v p
+findMatch (VBang v) (PBang p) = findMatch v p
 findMatch _ _ = Nothing 
 
-evalCaseF :: Env -> Heap -> (Heap -> Eval Value) -> [ (LPat, OLExp, Value -> Eval Bool) ] -> Eval Value
-evalCaseF env hp f pes = do
-  v0 <- f hp 
-  go v0 [] pes
+evalCaseF :: Env -> Heap -> (Heap -> Eval Value) -> [ (Pat Name, Exp Name, Value -> Eval Bool) ] -> Eval Value
+evalCaseF env hp f0 alts = do
+  v0 <- f0 hp 
+  go v0 [] alts
   where
-    go :: Value -> [Value -> Eval Bool] -> [ (LPat, OLExp, Value -> Eval Bool) ] -> Eval Value
-    go _  _       [] = rtError $ D.text "pattern match failure (fwd)"
+    go :: Value -> [Value -> Eval Bool] -> [ (Pat Name, Exp Name, Value -> Eval Bool) ] -> Eval Value
+    go _  _       [] = rtError $ text "pattern match failure (fwd)"
     go v0 checker ((p,e,ch) : pes) =
       case findMatch v0 p of
         Nothing -> do
@@ -169,62 +167,55 @@ evalCaseF env hp f pes = do
       v  <- ch (VBang res)
       vs <- mapM (\c -> c (VBang res)) checker
       when (v && not (or vs)) $
-        rtError (D.text "Assertion failed (fwd)")
+        rtError (text "Assertion failed (fwd)")
       return res
 
 
-evalCaseB :: Env -> Value -> (Value -> Eval Heap) -> [ (LPat, OLExp, Value -> Eval Bool) ] -> Eval Heap
-evalCaseB env vres b pes = do
-  (v, hp) <- go [] pes
-  hp' <- b v
+evalCaseB :: Env -> Value -> (Value -> Eval Heap) -> [ (Pat Name, Exp Name, Value -> Eval Bool) ] -> Eval Heap
+evalCaseB env vres b0 alts = do
+  (v, hp) <- go [] alts
+  hp' <- b0 v
   return $ unionHeap hp hp'
   where
-    mkAssert :: LPat -> (Value -> Bool)
+    mkAssert :: Pat Name -> (Value -> Bool)
     mkAssert p = \v -> case findMatch v p of
                          Just _ -> True
                          _      -> False 
     
-    go _ [] = rtError $ D.text "pattern match failure (bwd)"
+    go _ [] = rtError $ text "pattern match failure (bwd)"
     go checker ((p,e,ch):pes) = do
       flg <- ch (VBang vres) 
       case flg of
         False -> go (mkAssert p:checker) pes
         True -> do
-          let xs = freeVarsP (unLoc p)
+          let xs = freeVarsP p
           newAddrs (length xs) $ \as -> do 
             let binds' = zipWith (\x a ->
-                                    (BName x, VRes (lookupHeap a) (return . singletonHeap a))) xs as
+                                    (x, VRes (lookupHeap a) (return . singletonHeap a))) xs as
             VRes _ b <- evalU (extendsEnv binds' env) e
             hpBr <- b vres
-            v0 <- fillPat (unLoc p) <$> zipWithM (\x a -> (x,) <$> lookupHeap a hpBr) xs as
+            v0 <- fillPat p <$> zipWithM (\x a -> (x,) <$> lookupHeap a hpBr) xs as
             when (not (or $ map ($ v0) checker)) $
-              rtError $ D.text "Assertion failed (bwd)"
+              rtError $ text "Assertion failed (bwd)"
             return $ (v0, removesHeap as hpBr)
               
-    fillPat :: Pat -> [ (Name, Value) ] -> Value
+    fillPat :: Pat Name -> [ (Name, Value) ] -> Value
     fillPat (PVar n) bs = case lookup n bs of
       Just v -> v
       Nothing -> error "Shouldn't happen."
      
     fillPat (PCon c ps) bs =
-      VCon c (map (flip fillPat bs . unLoc) ps)
+      VCon c (map (flip fillPat bs) ps)
     fillPat (PBang p) bs =
-      VBang (fillPat (unLoc p) bs) 
+      VBang (fillPat p bs) 
           
 
 runFwd :: Value -> Heap -> Eval Value
 runFwd (VRes f _) = f
-runFwd _          = \_ -> rtError $ D.text "expected a reversible comp."
+runFwd _          = \_ -> rtError $ text "expected a reversible comp."
 
 runBwd :: Value -> Value -> Eval Heap
 runBwd (VRes _ b) = b 
-runBwd _          = \_ -> rtError $ D.text "expected a reversible comp." 
+runBwd _          = \_ -> rtError $ text "expected a reversible comp." 
   
-  
-evalD :: Env -> LDecl -> Eval (QName, Value)
-evalD env (unLoc -> DDef n _ e) = do
-  (n,) <$> evalU env e
-
-
-
-  
+   

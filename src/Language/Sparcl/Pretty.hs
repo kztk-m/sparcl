@@ -1,12 +1,13 @@
 module Language.Sparcl.Pretty (
-  Doc, Precedence, Pretty(..), prettyShow,
+  Precedence, Pretty(..), prettyShow,
   prettyPut, prettyPutLn,
   hPrettyPut, hPrettyPutLn, 
-  parensIf, pprMap
+  parensIf, pprMap,
+  module Text.PrettyPrint.ANSI.Leijen 
   ) where
 
-import qualified Text.PrettyPrint.ANSI.Leijen as D
-import Text.PrettyPrint.ANSI.Leijen (Doc)
+import Text.PrettyPrint.ANSI.Leijen hiding (Pretty(..))
+-- import Text.PrettyPrint.ANSI.Leijen (Doc)
 import System.IO (Handle)
 
 import qualified Data.Map as M 
@@ -22,43 +23,43 @@ class Pretty t where
 
   pprList :: Precedence -> [t] -> Doc
   pprList k ts =
-    D.brackets $ D.align $ D.cat $ D.punctuate D.comma $ map (pprPrec k) ts 
+    brackets $ align $ cat $ punctuate comma $ map (pprPrec k) ts 
 
 instance Pretty t => Pretty [t] where
   pprPrec = pprList 
 
 instance Pretty Int where
-  ppr = D.int
+  ppr = int
 
 instance Pretty Double where
-  ppr = D.double
+  ppr = double
 
 instance Pretty Char where
-  ppr = D.text . show
-  pprList _ = D.text . show 
+  ppr = text . show
+  pprList _ = text . show 
 
 instance (Pretty a, Pretty b) => Pretty (a, b) where
-  ppr (a, b) = D.parens $ D.align (ppr a) D.<> D.comma D.<+> D.align (ppr b)
+  ppr (a, b) = parens $ align (ppr a) <> comma <+> align (ppr b)
 
 prettyShow :: Pretty t => t -> String
 prettyShow x = show (ppr x)
 
 prettyPut :: Pretty t => t -> IO ()
-prettyPut x = D.putDoc (ppr x) 
+prettyPut x = putDoc (ppr x) 
 
 prettyPutLn :: Pretty t => t -> IO ()
-prettyPutLn x = D.putDoc (ppr x <> D.line) 
+prettyPutLn x = putDoc (ppr x <> line) 
 
 hPrettyPut :: Pretty t => Handle -> t -> IO ()
-hPrettyPut h x = D.hPutDoc h (ppr x) 
+hPrettyPut h x = hPutDoc h (ppr x) 
 
 hPrettyPutLn :: Pretty t => Handle -> t -> IO ()
-hPrettyPutLn h x = D.hPutDoc h (ppr x <> D.line) 
+hPrettyPutLn h x = hPutDoc h (ppr x <> line) 
 
 parensIf :: Bool -> Doc -> Doc 
-parensIf b d = if b then D.parens d else d 
+parensIf b d = if b then parens d else d 
 
 pprMap :: (Pretty k , Pretty v) => M.Map k v -> Doc
-pprMap m = D.align $ 
-  D.vsep [ ppr k D.<+> D.text "|->" D.<+> D.align (ppr v)
-         | (k, v) <- M.toList m ]
+pprMap m = align $ 
+  vsep [ ppr k <+> text "|->" <+> align (ppr v)
+       | (k, v) <- M.toList m ]

@@ -34,6 +34,7 @@ def comp = \x -> add (S Z) (mul !(S (S Z)) x)
 def q5 = fwd !comp
 def q6 = bwd !comp
 
+def qm = 1 + 2 * 3 + 4 * 5 
+
 def incL = lift !(\!x -> x + 1) !(\!x -> x - 1)
 
--- def q5 = 1 + 2 * 3 + 4 * 5 

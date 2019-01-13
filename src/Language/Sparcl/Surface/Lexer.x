@@ -4,24 +4,11 @@
 module Language.Sparcl.Surface.Lexer where
 
 import Language.Sparcl.Name
-import Language.Sparcl.SrcLoc
-import Language.Sparcl.Pretty
-
-import Data.List (break)
+import Language.Sparcl.SrcLoc (SrcSpan(..), Loc(..))
+import qualified Language.Sparcl.Pretty as D
 }
 
 %wrapper "monadUserState"
-
-@reserved =
-  if | then | else | case | of | let | in | with | where | abort
-  | import | module | with | lift | unlift | forward | backward
-  | def | sig | data | type 
-  | rev | end 
-  | qualified | as | forall
-
-@punct =
-  "." | "->" | "-o" | "(" | ")" | "{" | "}" | "[" | "]" | ";" | ":" | "," | "=" 
-  | "|" | "_" | "@" | "!" | "\" -- " 
 
 $nl = [\n\r\f]
 
@@ -34,16 +21,23 @@ $digit = 0-9
 @varId = $small ($small | $large | $digit | "'")*
 @conId = $large ($small | $large | $digit | "'")*
 
-$symbol = [\= \+ \- \* \/ \^ \< \> \$ \| \& \? \: \# \@ \!]
+$symbol = [\= \+ \- \* \/ \^ \< \> \$ \| \& \? \: \# \@ \! \.]
 
-@op = $symbol ($symbol | "'")* 
+@op = ($symbol # \:) ($symbol | "'")* 
 
 @modElem = $large ($small | $large) * 
 @moduleName = @modElem ("." @modElem)*
 
-@qVarId = (@moduleName ".")? @varId
-@qConId = (@moduleName ".")? @conId
-@qOp    = (@moduleName ".")? @op 
+@qVarId = (@moduleName ".") @varId
+@qConId = (@moduleName ".") @conId
+@qOp    = (@moduleName ".") @op 
+
+@lam = "\" | [\955] -- lambda 
+-- \"
+
+@rarr = "->" | \8594 -- ->
+
+@lolli = "-o" | \8888               
 
 @string = \" ( ($printable # [\"\\]) | "\" "\" | "\n" | "\t" | "\r" | "\" [\"] )
 * \" -- "
@@ -62,13 +56,72 @@ tokens :-
   <0> "--" .* ;
 
   <0> {
-  @reserved { tok $ TkKey }
-  @punct    { tok $ TkPunct } 
-  @char     { tok $ TkCharLit . read }
-  @decimal  { tok $ TkIntLit . read }
-  @qVarId    { tok $ TkVarID . mkName }
-  @qConId    { tok $ TkConID . mkName } 
-  @qOp       { tok $ TkOp . mkName } 
+  "if"      { theTok Tif }
+  "then"    { theTok Tthen }
+  "else"    { theTok Telse }
+
+  "let"     { theTok Tlet }
+  "in"      { theTok Tin  }
+  "where"   { theTok Twhere }
+  "end"     { theTok Tend }
+
+  "case"    { theTok Tcase }
+  "of"      { theTok Tof }
+  "with"    { theTok Twith }
+
+  "module"    { theTok Tmodule }
+  "import"    { theTok Timport }
+  "qualified" { theTok Tqualified }
+  "as"        { theTok Tas }
+  
+  "def"     { theTok Tdef }
+  "sig"     { theTok Tsig }
+  "fixity"  { theTok Tfixity } 
+  
+  "data"    { theTok Tdata }
+  "type"    { theTok Ttype }
+
+  "lift"    { theTok Tlift }
+  "unlift"  { theTok Tunlift }
+  "rev"     { theTok Trev }
+  
+  ".."      { theTok Tddot }
+  "."       { theTok Tdot }
+
+  "::"      { theTok Tdcolon }
+  ":"       { theTok Tcolon }
+
+  ";"       { theTok Tsemi }
+  ","       { theTok Tcomma } 
+  
+  
+  "!" { theTok Tbang }
+  "|" { theTok Tbar }
+  "_" { theTok Tunderscore }
+  "`" { theTok Tbackquote }
+
+  "(" { theTok Tlparen }
+  ")" { theTok Trparen }
+  "{" { theTok Tlbrace }
+  "}" { theTok Trbrace }
+  "[" { theTok Tlbracket }
+  "]" { theTok Trbracket }
+
+  "=" { theTok Tequal } 
+  
+  @lam   { theTok Tlam }
+  @rarr  { theTok Trarrow }
+  @lolli { theTok Tlollipop }
+  
+  @varId     { tok $ Tvarid . mkBName }
+  @conId     { tok $ Tconid . mkBName }
+  @op        { tok $ Top    . mkBName }
+  @qVarId    { tok $ uncurry Tqvarid . mkQName }
+  @qConId    { tok $ uncurry Tqconid . mkQName } 
+  @qOp       { tok $ uncurry Tqop    . mkQName } 
+
+  @char     { tok $ Tcharlit . read }
+  @decimal  { tok $ Tintlit . read }
   }
   
 
@@ -83,28 +136,101 @@ data AlexUserState
         }
 
 data Token
-  = TkKey     String
-  | TkOp      QName 
-  | TkVarID   QName
-  | TkConID   QName
-  | TkIntLit  Int
-  | TkCharLit Char
+  = Tif
+  | Tthen
+  | Telse
+
+  | Tlet
+  | Tin 
+  | Twhere
+  | Tend
+  
+  | Tcase
+  | Tof
+  | Twith
+
+  | Tmodule
+  | Timport
+  | Tqualified
+  | Tas
+
+  | Tdef
+  | Tsig
+  | Tfixity
+  | Tdata
+  | Ttype
+  | Tforall
+
+  | Trev
+  | Tlift
+  | Tunlift
+  
+
+  -- Key punctuations
+  | Tdot
+  | Tddot
+  | Tcolon
+  | Tdcolon 
+  | Tbang
+  | Tsemi
+  | Tcomma
+  | Tunderscore
+  | Tbackquote
+  | Tbar
+  
+  | Tlam   
+  | Tequal
+  | Tlollipop  
+  | Trarrow 
+
+  -- parens 
+  | Tlparen
+  | Trparen
+  | Tlbracket
+  | Trbracket
+  | Tlbrace
+  | Trbrace 
+  
+  | Top       NameBase
+  | Tvarid    NameBase
+  | Tconid    NameBase
+  | Tqop      ModuleName NameBase
+  | Tqvarid   ModuleName NameBase
+  | Tqconid   ModuleName NameBase 
+
+  | Tintlit  Int
+  | Tcharlit Char
     
-  | TkPunct String    
-  | TkEOF
+  | Teof
   deriving (Eq, Ord, Show)
 
 
-mkName :: String -> QName
-mkName = \s -> case splitByDots s of
-                 [s'] -> BName (NormalName s')
-                 ss   -> QName (init ss) $ NormalName (last ss)
+mkBName :: String -> NameBase
+mkBName s = User s
+
+mkQName :: String -> (ModuleName, NameBase)
+mkQName s = case splitByLastDot s of
+              (m, n) -> (ModuleName m, User n)
   where
-    splitByDots :: String -> [String] 
-    splitByDots s = case break (== '.') s of
-      ([], _)  -> []
-      (xs, []) -> [xs]
-      (xs, ys) -> xs : splitByDots (tail ys) 
+    splitByLastDot = go "" ""
+
+    go :: String -> String -> String -> (String, String) 
+    go xs ys [] = (reverse xs, reverse ys)
+    go xs ys (c:cs)
+      | c == '.'  = go (reverse ys ++ "." ++ xs) "" cs
+      | otherwise = go xs (c:ys) cs 
+    
+
+-- mkName :: String -> QName
+-- mkName = \s -> case splitByDots s of
+--                  [s'] -> BName (NormalName s')
+--                  ss   -> QName (init ss) $ NormalName (last ss)
+--   where
+--     splitByDots :: String -> [String] 
+--     splitByDots s = case break (== '.') s of
+--       ([], _)  -> []
+--       (xs, []) -> [xs]
+--       (xs, ys) -> xs : splitByDots (tail ys) 
 
 getUST :: Alex AlexUserState
 getUST = Alex $ \s@AlexState { alex_ust = ust } -> Right (s, ust)
@@ -148,7 +274,11 @@ lexError :: String -> Alex a
 lexError s = do
   fp <- getFilePath
   AlexPn _ l c <- getAlexPosn
-  alexError $ prettyShow (SrcSpan (SrcLoc fp l c) (SrcLoc fp l c)) ++ ":\n" ++ s
+  (_, _, _, rest) <- alexGetInput 
+  alexError $ show $ D.nest 2 $
+    D.ppr (SrcSpan fp l c l c) D.<> D.text ":" D.<$$>
+    D.text s D.</>
+    D.nest 2 (D.text "near:" D.</> D.text (take 60 $ takeWhile (not . (`elem` "\n\r")) rest))
 
 getAlexPosn :: Alex AlexPosn
 getAlexPosn = Alex $ \s -> Right (s, alex_pos s)
@@ -157,7 +287,7 @@ getSpan :: AlexAction SrcSpan
 getSpan _input len = do
   AlexPn _ sline scol <- getAlexPosn
   fp <- getFilePath
-  return $ SrcSpan (SrcLoc fp sline (scol - len)) (SrcLoc fp sline scol)
+  return $ SrcSpan fp sline (scol - len) sline scol
 
 -- mkTok :: SrcSpan -> Token -> Alex (Loc Token)
 -- mkTok span token = do
@@ -165,8 +295,11 @@ getSpan _input len = do
 
 tok :: (String -> Token) -> AlexAction (Loc Token) 
 tok f input@(_,_,_,str) len = do
-  span <- getSpan input len
-  return $ Loc span (f $ take len str)
+  sp <- getSpan input len
+  return $ Loc sp (f $ take len str)
+
+theTok :: Token -> AlexAction (Loc Token)
+theTok t = tok (const t) 
 
 beginComment :: AlexAction (Loc Token)
 beginComment _ _ = do
@@ -178,6 +311,6 @@ endComment _ _ = do
   _ <- popLexCode
   alexMonadScan
 
-alexEOF = return $ Loc NoLoc TkEOF  
+alexEOF = return $ Loc NoLoc Teof
 
 }

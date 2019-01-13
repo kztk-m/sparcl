@@ -1,72 +1,130 @@
+{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE TypeFamilyDependencies #-}
+{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE TypeFamilies #-}
 module Language.Sparcl.Surface.Syntax where
 
 import Language.Sparcl.SrcLoc
 
-import Language.Sparcl.Pretty 
-import qualified Text.PrettyPrint.ANSI.Leijen as D
+import Language.Sparcl.Pretty as D
 
 -- Surface Syntax
 
 import Language.Sparcl.Name
 import Language.Sparcl.Literal
+import Language.Sparcl.Pass
+import qualified Language.Sparcl.Typing.Type as Typing 
 
-makeTupleExp :: [LExp] -> LExp
-makeTupleExp [e] = e
-makeTupleExp es  = noLoc $ Con (nameTuple $ length es) es
+import Data.Kind 
+import Data.Void
 
-makeTuplePat :: [LPat] -> LPat
-makeTuplePat [p] = p
-makeTuplePat ps = noLoc $ PCon (nameTuple $ length ps) ps 
+-- makeTupleExp :: [LExp p] -> LExp p
+-- makeTupleExp [e] = e
+-- makeTupleExp es  = noLoc $ Con (nameTuple $ length es) es
 
-type LTy = Loc Ty -- located types (not linear) 
+-- makeTuplePat :: [LPat p] -> LPat p
+-- makeTuplePat [p] = p
+-- makeTuplePat ps = noLoc $ PCon (nameTuple $ length ps) ps 
 
-data Ty
-  = TVar    Name
-  | TCon    QName [LTy]
-  | TForall Name LTy
-  deriving Show
+type LTy p = Loc (Ty p) -- located types (not linear) 
 
-instance Pretty Ty where
+data Ty p
+  = TVar    (XTId p)
+  | TCon    (XTId p) [LTy p]
+  | TForall (XTId p) (LTy p)
+
+type family XTId (p :: Pass) where
+  XTId 'Parsing = SurfaceName
+  XTId _        = Name 
+
+instance AllPretty p => Pretty (Ty p) where
   pprPrec _ (TVar n) = ppr n
   pprPrec k (TCon c ts) = parensIf (k > 0) $
     ppr c D.<+> (D.hsep $ map (pprPrec 1) ts)
   pprPrec k (TForall n t) = parensIf (k > 0) $
     D.text "forall" D.<+> ppr n D.<+> pprPrec 0 t
 
-instance Pretty (Loc Ty) where
+instance AllPretty p => Pretty (Loc (Ty p)) where
   pprPrec k = pprPrec k . unLoc 
 
-type LExp = Loc Exp 
+type LExp p = Loc (Exp p)
+
+type family XId (p :: Pass) = q | q -> p where
+  XId 'Parsing   = SurfaceName
+  XId 'Renaming  = Name
+  XId 'TypeCheck = (Name, Typing.Ty) 
+
+
+class QueryName p where
+  checkTuple :: XId p -> Maybe Int
+  isRev      :: XId p -> Bool
+  isTyRev    :: XId p -> Bool
+  isTyBang   :: XId p -> Bool
+
+instance QueryName 'Parsing where
+  checkTuple (BuiltIn n) = checkTuple n
+  checkTuple _           = Nothing
+  
+  isRev (BuiltIn n) = isRev n
+  isRev _           = False
+
+  isTyRev = isRev
+  
+  isTyBang (BuiltIn n) = isTyBang n
+  isTyBang _           = False
+
+instance QueryName 'Renaming where
+  checkTuple (Original _ (System (NTuple n)) _) = Just n
+  checkTuple _                                  = Nothing
+
+  isRev (Original _ (System NRev) _) = True
+  isRev _                            = False
+
+  isTyRev = isRev
+
+  isTyBang (Original _ (System _) _) = True
+  isTyBang _                         = False
+
+instance QueryName 'TypeCheck where
+  checkTuple (n, _) = checkTuple n
+
+  isRev (n, _) = isRev n
+
+  isTyRev = isRev
+
+  isTyBang (n,_) = isTyBang n 
+
+
+type ForallX (f :: Type -> Constraint) p = (f (XId p), f (XTId p))
+type AllPretty p = (ForallX Pretty p, QueryName p)
 
 -- TODO: add "if" expression 
-data Exp
+data Exp p 
   = Lit Literal
-  | Var QName
-  | App LExp   LExp
-  | Abs [LPat] LExp
-  | Con QName [LExp]
-  | Bang LExp 
-  | Case LExp [ (LPat, Clause) ]
-  | Lift LExp LExp
-  | Sig  LExp LTy
-  | Let  [LDecl] LExp
+  | Var (XId p)
+  | App (LExp p) (LExp p)
+  | Abs [LPat p] (LExp p)
+  | Con (XId p) [(LExp p)]
+  | Bang (LExp p)
+  | Case (LExp p) [ (LPat p, Clause p) ]
+  | Lift (LExp p) (LExp p)
+  | Sig  (LExp p) (LTy p)
+  | Let  (Decls p (LDecl p)) (LExp p)
 
-  | Parens LExp -- for operators
-  | Op  QName LExp LExp 
+  | Parens   (LExp p) -- for operators
+  | Op  (XId p) (LExp p) (LExp p)
 
-  | Unlift LExp
-  | Fwd    LExp
-  | Bwd    LExp 
+  | Unlift (LExp p)
 
-  | RCon QName [LExp]
+  | RCon (XId p) [LExp p]
 --  | RCase LExp [ (LPat, Clause) ]
-  | RPin  LExp LExp
-  deriving Show -- for debugging
+  | RPin  (LExp p) (LExp p)
+--  deriving Show -- for debugging
 
-instance Pretty LExp where
+instance AllPretty p => Pretty (LExp p) where
   pprPrec k = pprPrec k . unLoc 
 
-instance Pretty Exp where
+instance AllPretty p => Pretty (Exp p) where
   pprPrec _ (Lit l) = ppr l
   pprPrec _ (Var q) = ppr q
   pprPrec k (App e1 e2) = parensIf (k > 9) $
@@ -97,12 +155,6 @@ instance Pretty Exp where
   pprPrec k (Unlift e) = parensIf (k > 9) $
     D.text "unlift" D.<+> D.align (pprPrec 10 e) 
 
-  pprPrec k (Fwd e) = parensIf (k > 9) $
-    D.text "forward" D.<+> D.align (pprPrec 10 e)
-
-  pprPrec k (Bwd e) = parensIf (k > 9) $
-    D.text "backward" D.<+> D.align (pprPrec 10 e) 
-
   pprPrec _ (Parens e) = D.parens (pprPrec 0 e)
   pprPrec k (Op q e1 e2) = parensIf (k > 8) $
     pprPrec 8 e1 D.<+> ppr q D.<+> pprPrec 9 e2 
@@ -110,10 +162,14 @@ instance Pretty Exp where
   pprPrec k (Sig e t) = parensIf (k > 0) $
     pprPrec 0 e D.<+> D.colon D.<+> ppr t
 
-  pprPrec k (Let ds e) = parensIf (k > 0) $
+  pprPrec k (Let decls e) = parensIf (k > 0) $
     D.align $
-     D.text "let" D.<+> D.align (D.semiBraces $ map ppr ds) D.</>
+     D.text "let" D.<+> D.align (pprDecls decls) D.</>
      D.text "in" D.<+> pprPrec 0 e
+
+    where
+      pprDecls (Decls _ ds)  = vcat $ map ppr ds
+      pprDecls (HDecls _ dss) = vcat $ map (vcat . map ppr) dss 
 
   pprPrec k (RCon c es) = parensIf (k > 9) $
     D.text "rev" D.<+> ppr c D.<+>
@@ -124,23 +180,28 @@ instance Pretty Exp where
         
     
 
-type LPat = Loc Pat
-data Pat = PVar Name
-         | PCon QName [LPat]
-         | PBang LPat
-         | PREV  LPat
-         | PWild 
+type LPat p = Loc (Pat p)
+data Pat p = PVar (XId p)
+           | PCon (XId p) [LPat p]
+           | PBang (LPat p)
+           | PREV  (LPat p)
+           | PWild (XPWild p) -- PWild x will be treated as !x after renaming
          -- TODO: Add literal pattern
-  deriving Show
+--   deriving Show
 
-instance Pretty (Loc Pat) where
+type family XPWild (p :: Pass) where
+  XPWild 'Parsing   = ()
+  XPWild 'Renaming  = XId 'Renaming
+  XPWild 'TypeCheck = XId 'TypeCheck 
+
+instance AllPretty p => Pretty (Loc (Pat p)) where
   pprPrec k = pprPrec k . unLoc 
 
-instance Pretty Pat where
+instance AllPretty p => Pretty (Pat p) where
   pprPrec _ (PVar n) = ppr n
 
   pprPrec _ (PCon c ps)
-    | c == nameTuple (length ps) =
+    | Just n <- checkTuple c,  n == length ps =
         D.parens $ D.hsep $ D.punctuate D.comma $ map (pprPrec 0) ps 
 
   pprPrec _ (PCon c []) = ppr c 
@@ -151,22 +212,26 @@ instance Pretty Pat where
   pprPrec k (PREV p) = parensIf (k > 0) $
     D.text "rev" D.<+> pprPrec 1 p 
   
-  pprPrec _ PWild = D.text "_" 
+  pprPrec _ (PWild _) = D.text "_" 
 
-data Clause = Clause { body :: LExp, whereClause :: [LDecl], withExp :: Maybe LExp } 
-  deriving Show 
+data Clause p = Clause { body :: LExp p, whereClause :: Decls p (LDecl p), withExp :: Maybe (LExp p) } 
+--  deriving Show 
 
-instance Pretty Clause where
-  ppr (Clause e ds w) =
+instance AllPretty p => Pretty (Clause p) where
+  ppr (Clause e decls w) =
     ppr e D.<+> (case w of
                    Nothing -> D.empty
                    Just e' -> D.text "with" D.<+> D.align (ppr e'))
-    D.<> pprWhere ds
+    D.<> pprDecls decls
     where
-      pprWhere [] = D.empty 
-      pprWhere ds = 
-        D.nest 2 (D.line D.<> D.nest 2 (D.text "where" D.</>
-                                         D.align (D.vcat $ map ppr ds)) D.</> D.text "end")
+      pprDecls (Decls  _ ds) = pprWhere ds
+      pprDecls (HDecls _ ds) = pprWhere (concat ds) 
+      pprWhere ds =
+        case ds of
+          [] -> D.empty 
+          _  -> 
+            D.nest 2 (D.line D.<> D.nest 2 (D.text "where" D.</>
+                                            D.align (D.vcat $ map ppr ds)) D.</> D.text "end")
        
 
 newtype Prec  = Prec Int
@@ -191,36 +256,47 @@ instance Pretty Assoc where
   ppr R = D.text "right"
   ppr N = D.empty 
 
-type LDecl = Loc Decl 
+type LDecl p = Loc (Decl p)
 
-data CDecl
-  = CDecl Name  -- constructor name
-          [LTy] -- constructor argument
-  deriving Show
+data CDecl p
+  = CDecl (XId p)  -- constructor name
+          [LTy p]    -- constructor argument
 
-instance Pretty (Loc CDecl) where
+instance AllPretty p => Pretty (Loc (CDecl p)) where
   ppr (Loc l d) =
     D.text "{-" D.<+> ppr l D.<+> D.text "-}"
     D.<$> ppr d 
     
-instance Pretty CDecl where
+instance AllPretty p => Pretty (CDecl p) where
   ppr (CDecl c []) = ppr c
   ppr (CDecl c args) = 
     ppr c D.<+> D.hsep [ pprPrec 1 a | a <- args ] 
 
-data TopDecl
-  = DDecl Decl 
-  | DData Name [Name] [Loc CDecl]
-  | DType Name [Name] LTy
+data Decls p x = Decls  (XDecls p)  [x]
+               | HDecls (XHDecls p) [[x]]
 
-data Decl
-  = DDef Name [ ([LPat],  Clause) ] 
-  | DSig Name LTy
-  | DFixity Name Prec Assoc -- TODO: will be replaced with "DDefOp" 
+type family XDecls p where
+  XDecls 'Parsing = ()
+  XDecls _        = Void
+
+type family XHDecls p where
+  XHDecls 'Parsing  = Void
+  XHDecls 'Renaming = ()
+  XHDecls 'TypeCheck = () 
+
+data TopDecl p
+  = DDecl (Decl p)
+  | DData (XId p) [(XId p)] [Loc (CDecl p)]
+  | DType (XId p) [(XId p)] (LTy p)
+
+data Decl p
+  = DDef (XId p) [ ([LPat p],  Clause p) ] 
+  | DSig (XId p) (LTy p)
+  | DFixity (XId p) Prec Assoc -- TODO: will be replaced with "DDefOp" 
   -- | DMutual [LDecl] 
-   deriving Show
 
-instance Pretty (Loc TopDecl) where
+
+instance AllPretty p => Pretty (Loc (TopDecl p)) where
   ppr (Loc l d) =
     D.text "{- " D.<+> ppr l D.<+> D.text "-}"
     D.<$> ppr d  
@@ -229,10 +305,10 @@ instance Pretty (Loc TopDecl) where
     D.vsep (map ppr ds) 
   
 
-instance Pretty TopDecl where
-  ppr (DData t targs cs) =
+instance AllPretty p => Pretty (TopDecl p) where
+  ppr (DData t targs constrs) =
     D.hsep [D.text "data", ppr t, D.align $ D.hsep (map ppr targs)] D.<>
-    D.nest 2 (D.line D.<> D.text "=" D.<+> D.group (pprCs cs))
+    D.nest 2 (D.line D.<> D.text "=" D.<+> D.group (pprCs constrs))
     where
       pprCs []     = D.empty
       pprCs [c]    = ppr c
@@ -244,7 +320,7 @@ instance Pretty TopDecl where
 
   ppr (DDecl d) = ppr d 
 
-instance Pretty Decl where
+instance AllPretty p => Pretty (Decl p) where
   ppr (DDef n pcs) =
     D.text "def" D.<+> ppr n D.<+>
     D.align (D.nest (-2) $
@@ -269,7 +345,7 @@ instance Pretty Decl where
   pprList _ ds =
     D.vsep (map ppr ds) 
                                            
-instance Pretty (Loc Decl) where
+instance AllPretty p => Pretty (Loc (Decl p)) where
   ppr (Loc l d) =
     D.text "{- " D.<+> ppr l D.<+> D.text "-}"
     D.<$> ppr d  
@@ -278,8 +354,8 @@ instance Pretty (Loc Decl) where
     D.vsep (map ppr ds) 
     
 
-data Module
-  = Module ModuleName (Maybe [Export]) [Import] [Loc TopDecl]
+data Module p
+  = Module ModuleName (Maybe [Export p]) [Import p] (Decls p (Loc (TopDecl p)))
 
-type Export = QName
-data Import = Import { importModuleName :: ModuleName, importingNames :: Maybe [QName] }
+type Export p = Loc (XId p)
+data Import p = Import { importModuleName :: ModuleName, importingNames :: Maybe [Loc (XId p)] }

@@ -3,9 +3,6 @@ module Language.Sparcl.Typing.TC where
 
 -- Type checking monad
 -- Here, we use int values for meta variables
-import Language.Sparcl.Core.Syntax
-import Language.Sparcl.Exception 
-import qualified Language.Sparcl.Surface.Syntax as S 
 
 import qualified Data.Map as M
 
@@ -14,8 +11,6 @@ import Data.Maybe (fromMaybe)
 import Control.Monad.Reader
 import Control.Monad.Except 
 
-import qualified Text.PrettyPrint.ANSI.Leijen as D
-import Language.Sparcl.Pretty 
 
 -- import Control.Arrow (first) 
 import Control.Exception (evaluate, Exception, throw, catch)
@@ -23,25 +18,34 @@ import Control.Exception (evaluate, Exception, throw, catch)
 import qualified Data.Sequence as Seq 
 import Data.IORef
 
+import Language.Sparcl.Exception
+import Language.Sparcl.Typing.Type as T
+import Language.Sparcl.SrcLoc
+import Language.Sparcl.Name
+import Language.Sparcl.Pass 
+import Language.Sparcl.Pretty as D hiding ((<$>))
+import qualified Language.Sparcl.Pretty as D 
+import qualified Language.Sparcl.Surface.Syntax as S 
+
 -- import Debug.Trace 
 
-data TypeError = TypeError (Maybe SrcSpan) (Seq.Seq S.LExp) ErrorDetail
+data TypeError = TypeError (Maybe SrcSpan) (Seq.Seq (S.LExp 'Renaming)) ErrorDetail
 
 data ErrorDetail
   = UnMatchTy  Ty Ty 
   | UnMatchTyD Ty Ty Ty Ty -- inferred and expected
   | OccurrenceCheck MetaTyVar Ty
-  | MultipleUse QName
-  | NoUse       QName
-  | Undefined   QName 
+  | MultipleUse Name
+  | NoUse       Name
+  | Undefined   Name 
   | Other       D.Doc 
   
 
 instance Pretty TypeError where
-  ppr (TypeError l es d) =
-    D.bold (D.text "[TYPE ERROR]") D.<+> D.nest 2
+  ppr (TypeError l exprs doc) =
+     -- D.bold (D.text "[TYPE ERROR]") D.<+> D.nest 2
      (maybe (D.text "*unknown place*") ppr l 
-      D.<$> pprDetail d D.<> pprContexts (Seq.drop (Seq.length es - 3) es))
+      D.<$> pprDetail doc D.<> pprContexts (Seq.drop (Seq.length exprs - 3) exprs))
     where
       pprDetail (UnMatchTy ty1 ty2) = 
         D.text "Types do not match"
@@ -49,23 +53,23 @@ instance Pretty TypeError where
 
       pprDetail (UnMatchTyD ty1 ty2 ty1' ty2') =
         D.text "Types do not match" D.<> D.nest 2 
-         ( D.line D.<> D.hsep [D.text "Expected: ", D.align (ppr ty1) ] D.<> 
-           D.line D.<> D.hsep [D.text "Inferred: ", D.align (ppr ty2) ] )
+         ( D.line D.<> D.nest 2 (D.sep [D.text "Expected:", D.align (ppr ty1) ]) D.<> 
+           D.line D.<> D.nest 2 (D.sep [D.text "Inferred:", D.align (ppr ty2) ]) )
         D.<$> D.text "More precisely, the following types do not match."
-        D.</> D.align (ppr ty1') D.<+> D.text "/=" D.<+> D.align (ppr ty2')
+        <> D.nest 2 (line <> D.align (ppr ty1') D.<+> D.text "/=" D.<+> D.align (ppr ty2'))
 
       pprDetail (OccurrenceCheck mv ty) =
         D.text "Cannot construct an infinite type:"
         D.<$> D.hsep[ ppr mv, D.text "=", D.align (ppr ty) ]
 
       pprDetail (MultipleUse v) =
-        D.hsep [ D.text "Variable", ppr (originalQName v), D.text "must not be used more than once." ]
+        D.hsep [ D.text "Variable", ppr v, D.text "must not be used more than once." ]
 
       pprDetail (NoUse v) =
-        D.hsep [ D.text "Variable", ppr (originalQName v), D.text "must be used at once." ]
+        D.hsep [ D.text "Variable", ppr v, D.text "must be used at once." ]
 
       pprDetail (Undefined v) =
-        D.hsep [ D.text "Unbound variable", ppr (originalQName v) ]
+        D.hsep [ D.text "Unbound variable", ppr v ]
         
       pprDetail (Other d) = d         
         
@@ -81,31 +85,30 @@ atLoc NoLoc m = m
 atLoc loc   m =
   catchError m $ \(TypeError oloc es reason) -> throwError (TypeError (maybe (Just loc) Just oloc) es reason)
 
-atExp :: MonadTypeCheck m => Maybe S.LExp -> m r -> m r
-atExp Nothing  m = m 
-atExp (Just e) m =
+atExp :: MonadTypeCheck m => S.LExp 'Renaming -> m r -> m r
+atExp e m =
   catchError m $ \(TypeError oloc es reason) -> throwError (TypeError oloc (e Seq.<| es) reason)
 
 instance Show TypeError where
   show = prettyShow
 instance Exception TypeError
 
-                                                
-  
 class (MonadError TypeError m, Monad m) => MonadTypeCheck m where
   typeError :: ErrorDetail -> m a
-  askType :: SrcSpan -> QName -> m Ty
+  askType :: SrcSpan -> Name -> m Ty
 
   readTyVar :: MetaTyVar -> m (Maybe Ty)
   writeTyVar :: MetaTyVar -> Ty -> m ()
   
   resolveSyn :: Ty -> m Ty 
 
-  withLVar :: QName -> Ty -> m r -> m r
-  withUVar :: QName -> Ty -> m r -> m r
+  withLVar :: Name -> Ty -> m r -> m r
+  withUVar :: Name -> Ty -> m r -> m r
+  withSyn  :: Name -> ([TyVar], Ty) -> m r -> m r 
+
 
   -- typing under empty linear environment 
-  withoutLinear :: m () -> m () 
+  withoutLinear :: m r -> m r
 
   newMetaTyVar :: m MetaTyVar
 
@@ -113,16 +116,41 @@ class (MonadError TypeError m, Monad m) => MonadTypeCheck m where
 
   newSkolemTyVar :: TyVar -> m TyVar 
 
+
+instance MonadTypeCheck m => MonadTypeCheck (ReaderT r m) where
+  typeError e = lift (typeError e)
+  askType s n = lift (askType s n)
+
+  readTyVar m = lift (readTyVar m)
+  writeTyVar m t = lift (writeTyVar m t)
+
+  resolveSyn = lift . resolveSyn
+
+  withLVar n t comp =
+    ReaderT $ runReaderT (withLVar n t comp)
+  withUVar n t comp =
+    ReaderT $ runReaderT (withUVar n t comp)
+  withSyn n sy comp =
+    ReaderT $ runReaderT (withSyn n sy comp)
+  withoutLinear comp =
+    ReaderT $ runReaderT (withoutLinear comp)
+
+  newMetaTyVar = lift newMetaTyVar
+  getMetaTyVarsInEnv = lift getMetaTyVarsInEnv
+
+  newSkolemTyVar = lift . newSkolemTyVar 
+    
+
 data Multiplicity = Omega | One | Zero 
 
-type TyEnv = M.Map QName (Multiplicity, Ty)
+type TyEnv = M.Map Name (Multiplicity, Ty)
 
 -- Instead of the reader monad, we use the state monad to
 -- handle linearity. 
 data TInfo
   = TInfo { tiTyEnv   :: IORef TyEnv, 
             tiMvCount :: !(IORef Int),
-            tiSyn     :: IORef (M.Map QName ([TyVar],  Ty)), 
+            tiSyn     :: IORef SynTable, 
             tiSvCount :: !(IORef Int)
           }    
 
@@ -171,8 +199,8 @@ runTC tinfo (TC m) = do
   
 
 freeTyVars :: MonadTypeCheck m => [Ty] -> m [TyVar]
-freeTyVars ts = do
-  ts' <- mapM zonkType ts
+freeTyVars types = do
+  ts' <- mapM zonkType types
   return $ go ts' []
     where
       go []     r = r
@@ -199,7 +227,7 @@ putTyEnv tyEnv = do
   ref <- asks tiTyEnv 
   liftIO $ writeIORef ref tyEnv
 
-lookupTyEnv :: SrcSpan -> QName -> TyEnv -> TC (Ty, TyEnv)
+lookupTyEnv :: SrcSpan -> Name -> TyEnv -> TC (Ty, TyEnv)
 lookupTyEnv l n tyEnv =
   case M.lookup n tyEnv of
     Just (Omega, ty) -> return (ty, tyEnv)
@@ -222,14 +250,19 @@ metaTyVars xs = go xs []
     goTy (TyMetaV m)    = \r -> if m `elem` r then r else m:r
     goTy _              = id 
 
+tupleConTy :: Int -> Ty
+tupleConTy n =
+  let tvs = map BoundTv [ Alpha i (User $ 't':show i) | i <- [1..n] ]
+      tys = map TyVar tvs
+  in TyForAll tvs $ foldr (-@) (tupleTy tys) tys        
+  
+
 instance MonadTypeCheck TC where
   typeError d = throwError (TypeError Nothing Seq.Empty d)
 
   askType l n
-    | Just k <- checkNameTuple n = do 
-        let tvs = map (BoundTv . NormalName) [ 't':show i | i <- [1..k] ]
-        let tys = map TyVar tvs
-        return $ TyForAll tvs $ foldr (-@) (tupleTy tys) tys        
+    | Just k <- checkNameTuple n = do
+        return $ tupleConTy k 
     | otherwise = do
         tyEnv <- getTyEnv 
         (ty, tyEnv') <- lookupTyEnv l n tyEnv
@@ -275,13 +308,22 @@ instance MonadTypeCheck TC where
         putTyEnv $ M.insert x ent tyEnvAfter
         return ret 
 
+  withSyn ty v m = do
+    ref <- asks tiSyn 
+    syn <- liftIO $ readIORef ref 
+    liftIO $ writeIORef ref $ M.insert ty v syn
+    ret <- m
+    liftIO $ modifyIORef ref $ M.delete ty 
+    return ret 
+
   withoutLinear m = do
     tyEnv <- getTyEnv 
     let (tyLEnv, tyUEnv) = M.partition isLinearEntry $ tyEnv 
     putTyEnv $ tyUEnv
-    m
+    res <- m
     tyEnvAfter <- getTyEnv 
     putTyEnv $ M.union tyLEnv tyEnvAfter
+    return res 
     where
       isLinearEntry (One, _) = True
       isLinearEntry _        = False 
@@ -302,15 +344,15 @@ instance MonadTypeCheck TC where
       go synMap (TyForAll ns t) =
         TyForAll ns <$> go synMap t
       go _synMap (TyMetaV m) = return (TyMetaV m)      
-      go synMap (TySyn origTy ty) =
-        TySyn origTy <$> go synMap ty
+      go synMap (TySyn origTy actualTy) =
+        TySyn origTy <$> go synMap actualTy
       go synMap orig@(TyCon c ts) = do
         case M.lookup c synMap of
           Nothing ->
             TyCon c <$> mapM (go synMap) ts 
-          Just (ns, ty)
+          Just (ns, tyBody)
             | length ns == length ts -> 
-              TySyn orig <$> go synMap (substTy (zip ns ts) ty)
+              TySyn orig <$> go synMap (substTy (zip ns ts) tyBody)
           Just _ ->
               typeError $ Other $ D.hsep [ D.text "Type synonym", D.dquotes (ppr c), D.text "must be fully-applied." ] 
 
@@ -324,11 +366,14 @@ instance MonadTypeCheck TC where
     cnt <- liftIO $ atomicModifyIORef' cref $ \cnt -> (cnt + 1, cnt)
     return $ SkolemTv ty cnt 
 
-withLVars :: MonadTypeCheck m => [ (QName, Ty) ] -> m r -> m r
+withLVars :: MonadTypeCheck m => [ (Name, Ty) ] -> m r -> m r
 withLVars ns m = foldr (uncurry withLVar) m ns
 
-withUVars :: MonadTypeCheck m => [ (QName, Ty) ] -> m r -> m r
+withUVars :: MonadTypeCheck m => [ (Name, Ty) ] -> m r -> m r
 withUVars ns m = foldr (uncurry withUVar) m ns 
+
+withSyns :: MonadTypeCheck m => [ (Name, ([TyVar], Ty)) ] -> m r -> m  r
+withSyns xs m = foldr (uncurry withSyn) m xs 
 
 newMetaTy :: MonadTypeCheck m => m Ty
 newMetaTy = fmap TyMetaV $ newMetaTyVar 
@@ -416,12 +461,4 @@ unifyUnboundMetaTyVar mv ty2 = do
       writeTyVar mv ty2'
 
         
-   
-  
-
-  
-
-
-    
-
   

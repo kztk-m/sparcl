@@ -1,3 +1,5 @@
+{-# OPTIONS_GHC -fprint-potential-instances #-}
+
 module Language.Sparcl.REPL where
 
 import Language.Sparcl.Module
@@ -6,7 +8,9 @@ import Language.Sparcl.Value
 import Language.Sparcl.Exception 
 import Language.Sparcl.Core.Syntax
 import Language.Sparcl.Typing.TC
-import Language.Sparcl.Typing.Typing 
+import Language.Sparcl.Typing.Typing
+import Language.Sparcl.Typing.Type
+import Language.Sparcl.Renaming (renameExp, runRenaming, NameTable, OpTable) 
 
 import Language.Sparcl.Desugar
 import Language.Sparcl.Class
@@ -16,11 +20,14 @@ import Language.Sparcl.Surface.Parsing
 import qualified System.Console.Haskeline as HL
 
 import Data.IORef 
-import Control.Monad.Reader
+import qualified Control.Monad.Reader as Rd
+import Control.Monad.IO.Class 
+import Control.Monad.Trans (lift) 
 
 import Control.DeepSeq
 
-import qualified Data.Map as M 
+import qualified Data.Map as M
+import qualified Data.Set as S 
 
 import Language.Sparcl.Pretty
 import qualified Text.PrettyPrint.ANSI.Leijen as D
@@ -34,7 +41,7 @@ import Data.Char (isSpace)
 import Control.Exception (IOException, SomeException, evaluate)
 
 import System.Directory (getCurrentDirectory, getHomeDirectory)
-import System.FilePath  ((</>))
+import qualified System.FilePath as FP ((</>))
 
 
 --
@@ -63,29 +70,29 @@ parseCommand spec cont initStr = go initTrie initStr
     initTrie = makeTrie spec
 
     go (Exec [] f)  str = f $ dropWhile isSpace str
-    go (Exec _red f) []  = f []
-    go (Exec (r:red) f) (c:cs) | r == c = go (Exec red f) cs
-    go (Exec _red f) (c:cs) | isSpace c = f $ dropWhile isSpace cs
+    go (Exec _ f) []  = f []
+    go (Exec (r:residual) f) (c:cs) | r == c = go (Exec residual f) cs
+    go (Exec _ f) (c:cs) | isSpace c = f $ dropWhile isSpace cs
     go (Exec _ _) _ = cont initStr 
     go (Choice mp) (c:cs) = case M.lookup c mp of
       Just tr -> go tr cs
       Nothing -> cont initStr 
     go _ _ = cont initStr
 
-    makeTrie :: [CommandSpec a] -> CommandTrie a
-    makeTrie spec = h (groupByFirstChar $ sortBy (compare `on` fst) $ map normalize spec)
+makeTrie :: [CommandSpec a] -> CommandTrie a
+makeTrie spec = h (groupByFirstChar $ sortBy (compare `on` fst) $ map normalize spec)
+  where
+    groupByFirstChar = groupBy ((==) `on` head' . fst)
       where
-        groupByFirstChar = groupBy ((==) `on` head' . fst)
-          where
-            head' []    = Nothing
-            head' (x:_) = Just x 
+        head' []    = Nothing
+        head' (x:_) = Just x 
         
-        normalize (NoArgCommand s f _)    = (s, const f)
-        normalize (StringCommand s f _ _) = (s, f)
+    normalize (NoArgCommand s f _)    = (s, const f)
+    normalize (StringCommand s f _ _) = (s, f)
 
-        h [[(s,f)]] = Exec s f -- there is only one choice for the first letter. 
-        h xss = Choice $ M.fromList $
-                map (\xs@((a:_,_):_) -> (a, h (groupByFirstChar $ map (first tail) xs))) xss 
+    h [[(s,f)]] = Exec s f -- there is only one choice for the first letter. 
+    h xss = Choice $ M.fromList $
+            map (\xs@((a:_,_):_) -> (a, h (groupByFirstChar $ map (first tail) xs))) xss 
 
 ------------------------
 
@@ -94,97 +101,169 @@ data Conf =
          confCurrentDir  :: FilePath, 
          confVerbosity   :: Int,
          confLastLoad    :: Maybe FilePath,
-         confTyInfo      :: TInfo,
-         confTables      :: IORef Tables,
-         confModuleTable :: IORef ModuleTable -- cache for manipulating modules 
+         confTInfo       :: TInfo,
+         confNameTable   :: IORef NameTable,
+         confOpTable     :: IORef OpTable,
+         confTypeTable   :: IORef TypeTable, 
+         confSynTable    :: IORef SynTable,
+         confValueTable  :: IORef ValueTable
        }
 
-type REPL = ReaderT Conf (HL.InputT IO) 
+newtype REPL a = REPL { runREPL :: Rd.ReaderT Conf (HL.InputT IO) a }
+  deriving (Functor, Applicative, Monad, MonadIO,
+            Rd.MonadReader Conf,
+            HL.MonadException) 
 
 
-instance HasSearchPath REPL where
-  getSearchPath = asks confSearchPath
-  localSearchPath f =
-    local $ \conf -> conf { confSearchPath = f (confSearchPath conf) } 
+instance Has KeySearchPath [FilePath] REPL where
+  ask _ = Rd.asks confSearchPath 
 
-instance HasTInfo REPL where
-  getTInfo = asks confTyInfo 
+instance Has KeyVerb Int REPL where
+  ask _ = Rd.asks confVerbosity
 
-instance HasModuleTable REPL where
-  getModuleTable = do
-    ref <- asks confModuleTable
+instance Local KeyVerb Int REPL where
+  local _ f =
+    Rd.local (\conf -> conf { confVerbosity = f (confVerbosity conf) })
+
+instance Has KeyName NameTable REPL where
+  ask _ = do
+    ref <- Rd.asks confNameTable
     liftIO $ readIORef ref
     
-instance ModifyModuleTable REPL where
-  modifyModuleTable f = do
-    ref <- asks confModuleTable
+instance Modify KeyName NameTable REPL where
+  modify _ f = do
+    ref <- Rd.asks confNameTable
     liftIO $ modifyIORef ref f 
+
+instance Local KeyName NameTable REPL 
+
+instance Has KeyOp OpTable REPL where
+  ask _ = do
+    ref <- Rd.asks confOpTable
+    liftIO $ readIORef ref
+
+instance Modify KeyOp OpTable REPL where
+  modify _ f = do
+    ref <- Rd.asks confOpTable
+    liftIO $ modifyIORef ref f
+instance Local KeyOp OpTable REPL
+
+
+instance Has KeyType TypeTable REPL where
+  ask _ = liftIO . readIORef =<< Rd.asks confTypeTable
+
+instance Local KeyType TypeTable REPL 
+
+instance Modify KeyType TypeTable REPL where
+  modify _ f = liftIO . flip modifyIORef f =<< Rd.asks confTypeTable
+
+
+instance Has KeySyn SynTable REPL where
+  ask _ = liftIO . readIORef =<< Rd.asks confSynTable
+
+instance Modify KeySyn SynTable REPL where
+  modify _ f = liftIO . flip modifyIORef f =<< Rd.asks confSynTable
+
+instance Local KeySyn SynTable REPL
+
+
+instance Has KeyValue ValueTable REPL where
+  ask _ = liftIO . readIORef =<< Rd.asks confValueTable
+
+instance Modify KeyValue ValueTable REPL where
+  modify _ f = liftIO . flip modifyIORef f =<< Rd.asks confValueTable
+
+instance Local KeyValue ValueTable REPL
+
+
+instance Has KeyTInfo TInfo REPL where
+  ask _ = Rd.asks confTInfo 
   
-class HasVerbosityLevel m where
-  getVerbosityLevel :: m VerbosityLevel
-  localVerbosityLevel :: (VerbosityLevel -> VerbosityLevel) -> m r -> m r 
 
-instance HasVerbosityLevel REPL where
-  getVerbosityLevel = asks confVerbosity
-  localVerbosityLevel f =
-    local (\conf -> conf { confVerbosity = f (confVerbosity conf) }) 
+  
+-- instances HasSearchPath REPL where
+--   getSearchPath = asks confSearchPath
+--   localSearchPath f =
+--     local $ \conf -> conf { confSearchPath = f (confSearchPath conf) } 
+
+-- instance HasTInfo REPL where
+--   getTInfo = asks confTyInfo 
+
+-- instance HasModuleTable REPL where
+--   getModuleTable = do
+--     ref <- asks confModuleTable
+--     liftIO $ readIORef ref
+    
+-- instance ModifyModuleTable REPL where
+--   modifyModuleTable f = do
+--     ref <- asks confModuleTable
+--     liftIO $ modifyIORef ref f 
+  
+-- class HasVerbosityLevel m where
+--   getVerbosityLevel :: m VerbosityLevel
+--   localVerbosityLevel :: (VerbosityLevel -> VerbosityLevel) -> m r -> m r 
+
+-- instance HasVerbosityLevel REPL where
+--   getVerbosityLevel = asks confVerbosity
+--   localVerbosityLevel f =
+--     local (\conf -> conf { confVerbosity = f (confVerbosity conf) }) 
     
 
-getTables :: REPL Tables
-getTables = do
-  ref <- asks confTables
-  liftIO $ readIORef ref 
+-- getTables :: REPL Tables
+-- getTables = do
+--   ref <- asks confTables
+--   liftIO $ readIORef ref 
 
 
-localTables :: (Tables -> Tables) -> REPL r -> REPL r
-localTables f m = do 
-  ref <- asks confTables
-  old <- liftIO $ readIORef ref
-  liftIO $ writeIORef ref (f old)
-  res <- m
-  liftIO $ writeIORef ref old
-  return res 
+-- localTables :: (Tables -> Tables) -> REPL r -> REPL r
+-- localTables f m = do 
+--   ref <- asks confTables
+--   old <- liftIO $ readIORef ref
+--   liftIO $ writeIORef ref (f old)
+--   res <- m
+--   liftIO $ writeIORef ref old
+--   return res 
 
-modifyTables :: (Tables -> Tables) -> REPL ()
-modifyTables f = do
-  ref <- asks confTables
-  liftIO $ modifyIORef ref f 
+-- modifyTables :: (Tables -> Tables) -> REPL ()
+-- modifyTables f = do
+--   ref <- asks confTables
+--   liftIO $ modifyIORef ref f 
 
-instance HasDefinedNames REPL where
-  getDefinedNames = tDefinedNames <$> getTables 
-  localDefinedNames =
-    localTables . setDefinedNames
+-- instance HasDefinedNames REPL where
+--   getDefinedNames = tDefinedNames <$> getTables 
+--   localDefinedNames =
+--     localTables . setDefinedNames
 
-instance ModifyDefinedNames REPL where
-  modifyDefinedNames = modifyTables . setDefinedNames 
+-- instance ModifyDefinedNames REPL where
+--   modifyDefinedNames = modifyTables . setDefinedNames 
     
-instance HasOpTable REPL where
-  getOpTable = tOpTable <$> getTables
-  localOpTable = localTables . setOpTable
+-- instance HasOpTable REPL where
+--   getOpTable = tOpTable <$> getTables
+--   localOpTable = localTables . setOpTable
 
-instance ModifyOpTable REPL where
-  modifyOpTable = modifyTables . setOpTable 
+-- instance ModifyOpTable REPL where
+--   modifyOpTable = modifyTables . setOpTable 
 
-instance HasTypeTable REPL where
-  getTypeTable = tTypeTable <$> getTables
-  localTypeTable = localTables . setTypeTable
+-- instance HasTypeTable REPL where
+--   getTypeTable = tTypeTable <$> getTables
+--   localTypeTable = localTables . setTypeTable
 
-instance ModifyTypeTable REPL where
-  modifyTypeTable = modifyTables . setTypeTable
+-- instance ModifyTypeTable REPL where
+--   modifyTypeTable = modifyTables . setTypeTable
 
-instance HasSynTable REPL where
-  getSynTable = tSynTable <$> getTables
-  localSynTable = localTables . setSynTable
+-- instance HasSynTable REPL where
+--   getSynTable = tSynTable <$> getTables
+--   localSynTable = localTables . setSynTable
 
-instance ModifySynTable REPL where
-  modifySynTable = modifyTables . setSynTable 
+-- instance ModifySynTable REPL where
+--   modifySynTable = modifyTables . setSynTable 
 
-instance HasValueTable REPL where
-  getValueTable   = tValueTable <$> getTables
-  localValueTable = localTables . setValueTable
+-- instance HasValueTable REPL where
+--   getValueTable   = tValueTable <$> getTables
+--   localValueTable = localTables . setValueTable
 
-instance ModifyValueTable REPL where
-  modifyValueTable = modifyTables . setValueTable
+-- instance ModifyValueTable REPL where
+--   modifyValueTable = modifyTables . setValueTable
 
     
 -- Verbosity is not implemented yet. 
@@ -193,19 +272,27 @@ type VerbosityLevel = Int
 initConf :: IO Conf
 initConf = do
   tinfo <- initTInfo
-  ref   <- newIORef initTables
-  ref'  <- newIORef M.empty 
+  refNt <- newIORef M.empty
+  refOt <- newIORef M.empty
+  refSt <- newIORef M.empty
+  refTt <- newIORef M.empty
+  refVt <- newIORef M.empty
+  
   return $ Conf { confSearchPath = [],
                   confCurrentDir = ".", 
                   confVerbosity = 0,
                   confLastLoad = Nothing,
-                  confTyInfo = tinfo,
-                  confTables = ref,
-                  confModuleTable = ref' }
-
+                  confTInfo = tinfo,
+                  confNameTable  = refNt,
+                  confOpTable    = refOt,
+                  confTypeTable  = refTt, 
+                  confSynTable   = refSt,
+                  confValueTable = refVt
+                }
+  
 localLastLoad :: FilePath -> REPL r -> REPL r 
 localLastLoad fp m = do
-  local (\conf -> conf { confLastLoad = Just fp }) m 
+  Rd.local (\conf -> conf { confLastLoad = Just fp }) m 
   --liftIO $ modifyIORef ref $ \conf -> conf { confLastLoad = Just fp }
   
 
@@ -215,14 +302,14 @@ localLastLoad fp m = do
 --   liftIO $ readIORef ref 
 
 
-replCompletion :: IORef Tables -> HL.CompletionFunc IO
-replCompletion cref (curr, rest) =
-  case checkLoadMode curr of
+replCompletion :: IORef NameTable -> HL.CompletionFunc IO
+replCompletion cref (curr0, rest0) =
+  case checkLoadMode curr0 of
     Just (prefix, sp, r) -> do
-      (s, cs) <- HL.completeFilename (reverse r, rest)
+      (s, cs) <- HL.completeFilename (reverse r, rest0)
       return (s ++ reverse (prefix ++ sp), cs)
     Nothing ->
-      completeIDs (curr, rest)
+      completeIDs (curr0, rest0)
   where
     completeIDs :: HL.CompletionFunc IO
     completeIDs (curr, rest) =
@@ -230,16 +317,16 @@ replCompletion cref (curr, rest) =
       where
         f :: String -> IO [HL.Completion]
         f str = do
-          names <- tDefinedNames <$> readIORef cref
+          names <- fmap M.keys $ readIORef cref
           return $ map HL.simpleCompletion $ filter (str `isPrefixOf`) $ commands curr ++ makeNameStrings names
 
-        makeNameStrings :: [QName] -> [String]
+        makeNameStrings :: [SurfaceName] -> [String]
         makeNameStrings ns =
-          [ s | BName (NormalName s) <- ns ] ++
+          [ s | Bare (User s) <- ns ] ++
           [ s | (_, s) <- qualified ] ++
-          [ moduleNameToStr m ++ "." ++ s | (m, s) <- qualified ] 
+          [ m ++ "." ++ s | (m, s) <- qualified ] 
           where
-            qualified = [ (m,n) | QName m (NormalName n) <- ns ] 
+            qualified = [ (m,n) | Qual (ModuleName m) (User n) <- ns ] 
 
 
         commands :: String -> [String]
@@ -280,13 +367,13 @@ startREPL vl searchPath inputFile = do
              Just fps -> fps 
   let conf' = conf { confVerbosity = vl, confSearchPath = sp, confCurrentDir = currentDir }
   homedir <- getHomeDirectory
-  let historyFilePath = homedir </> ".sparcl_history"
-  let setting = HL.setComplete (replCompletion $ confTables conf') HL.defaultSettings
+  let historyFilePath = homedir FP.</> ".sparcl_history"
+  let setting = HL.setComplete (replCompletion $ confNameTable conf') HL.defaultSettings
                 { HL.historyFile = Just historyFilePath }
   let comp = case inputFile of
         Just fp -> procLoad fp
         Nothing -> waitCommand
-  HL.runInputT setting $ runReaderT (setModule baseModuleInfo >> comp) conf'
+  HL.runInputT setting $ Rd.runReaderT (runREPL $ resetModule >> comp) conf'
 
 commandSpec :: [CommandSpec (REPL ())]
 commandSpec = [
@@ -325,24 +412,34 @@ tryExec m =
 
 
 
-setModule :: ModuleInfo -> REPL ()
+setModule :: ModuleInfo Value -> REPL ()
 setModule m = do
-  modifyTables $ mergeTables (miTables m)
+  modify (key @KeyName)  $ M.unionWith S.union (miNameTable m)
+  modify (key @KeyOp)    $ M.union (miOpTable m)
+  modify (key @KeyType)  $ M.union (miTypeTable m)
+  modify (key @KeySyn)   $ M.union (miSynTable m)
+  modify (key @KeyValue) $ M.union (miValueTable m) 
+
+  -- modifyTables $ mergeTables (miTables m)
   -- ref <- ask
   -- liftIO $ modifyIORef ref $ \ci -> ci {
   --   confTables = mergeTables (miTables m) (confTables ci)
   --   }
-  vt <- getDefinedNames
-  liftIO $ print $ ppr vt
-  liftIO $ putStrLn $ "Module: " ++ moduleNameToStr (miModuleName m) ++ " has been loaded."
+  debugPrint 1 $ text "Module:" <+> ppr (miModuleName m) <+> text " has been loaded."
 
 
 resetModule :: REPL ()
 resetModule = do
-  modifyTables $ const initTables
+  set (key @KeyName)  $ M.empty
+  set (key @KeyOp)    $ M.empty
+  set (key @KeyType)  $ M.empty
+  set (key @KeySyn)   $ M.empty
+  set (key @KeyValue) $ M.empty 
+  
+--  modifyTables $ const initTables
   -- ref <- ask
   -- liftIO $ modifyIORef ref $ \conf -> conf { confTables = initTables } 
-  setModule baseModuleInfo
+  local (key @KeyVerb) (const 0) $ setModule baseModuleInfo
         
   
             
@@ -352,9 +449,9 @@ procLoad :: String -> REPL ()
 procLoad fp = do
   -- searchPath <- getSearchPath
   -- tinfo <- getTInfo
-  currentDir <- asks confCurrentDir 
-  let fp' = currentDir </> trimSpace fp
-  res <- checkError (fmap Just $ {- liftIO $ runM searchPath tinfo $ -} readModule fp')
+  currentDir <- Rd.asks confCurrentDir 
+  let fp' = currentDir FP.</> trimSpace fp
+  res <- checkError (fmap Just $ runM $ readModule fp' (\env bind -> M.toList $ runEval (evalUBind env bind)))
                     (return Nothing) 
   case res of
     Nothing  -> waitCommand
@@ -382,7 +479,7 @@ procLoad fp = do
 
 procReload :: REPL ()
 procReload = do
-  lastLoad <- asks confLastLoad 
+  lastLoad <- Rd.asks confLastLoad 
   case lastLoad of
     Nothing -> do
       liftIO $ putStrLn "Command :load has not been performed yet. Do nothing."
@@ -404,8 +501,8 @@ procType str = do
   --                                return (Just t)) (return Nothing)
 
   res <- tryExec $ do
-    e <- parseAndDesugarExp str
-    typeCheckExp e 
+    (_, ty) <- readExp str
+    return ty
   
   case res of
     Nothing -> waitCommand
@@ -416,35 +513,55 @@ procType str = do
                                  
   
 -- parseAndDesugarExp :: VerbosityLevel -> [QName] -> OpTable -> String -> IO OLExp
-parseAndDesugarExp :: (HasVerbosityLevel m,
-                       HasDefinedNames m,
-                       HasOpTable m, MonadIO m) => String -> m OLExp 
-parseAndDesugarExp str = do
-  definedNames <- getDefinedNames
-  vl <- getVerbosityLevel
-  opTable <- getOpTable
-  exp  <- either (staticError . D.text) return $ parseExp str
-  exp' <- liftIO $ runDesugar ["<interactive>"] definedNames opTable (desugarLExp exp)
-  when (vl >= 1) $ liftIO $ 
-    print $ D.dullwhite (D.text "[DEBUG]") D.<+>
-            D.nest 2 (D.text "Desugarred exp:" D.</> D.align (ppr exp'))
-  liftIO $ evaluate exp' 
+readExp ::
+  (Has KeyVerb Int m,
+   Has KeyName NameTable m,
+   Has KeyOp   OpTable m,
+   Has KeyTInfo TInfo m,
+   Has KeyType  TypeTable m,
+   Has KeySyn   SynTable m, 
+   MonadIO m) => String -> m (Exp Name, Ty) 
+readExp str = do
+  nameTable <- ask (key @KeyName)
+  opTable   <- ask (key @KeyOp)
   
--- typeCheckExp :: TInfo -> TypeTable -> SynTable -> OLExp -> IO Ty
-typeCheckExp :: (HasTInfo m, HasTypeTable m, HasSynTable m, MonadIO m) => OLExp -> m Ty
-typeCheckExp exp = do
-  tinfo <- getTInfo
-  tt <- getTypeTable
-  st <- getSynTable
-  liftIO $ setEnvs tinfo tt st     
---  t <- fmap (either staticError id) $ runTC tinfo $ inferExp exp
-  t <- liftIO $ runTC tinfo $ inferExp exp 
-  liftIO $ evaluate t
+  parsedExp       <- either (staticError . D.text) return $ parseExp' "*repl*" str
+  (renamedExp, _) <- either nameError return $ runRenaming nameTable opTable (renameExp 0 M.empty parsedExp)
+
+
+  tinfo <- ask (key @KeyTInfo)
+
+  typeTable <- ask (key @KeyType)
+  synTable  <- ask (key @KeySyn) 
+  
+  liftIO $ setEnvs tinfo typeTable synTable   
+  (typedExp, ty) <- liftIO $ runTC tinfo $ inferTy renamedExp 
+
+  desugaredExp <- liftIO $ runTC tinfo $ runDesugar $ desugarExp typedExp
+
+  debugPrint 2 $ text "Desugarred:" </> align (ppr desugaredExp)
+
+  desugaredExp' <- liftIO $ evaluate desugaredExp
+  ty'         <- liftIO $ evaluate ty
+  return (desugaredExp', ty')
+  where
+    nameError (loc, d) = staticError $ nest 2 $ vcat [ppr loc, d]
+  
+-- -- typeCheckExp :: TInfo -> TypeTable -> SynTable -> OLExp -> IO Ty
+-- typeCheckExp :: (HasTInfo m, HasTypeTable m, HasSynTable m, MonadIO m) => OLExp -> m Ty
+-- typeCheckExp exp = do
+--   tinfo <- getTInfo
+--   tt <- getTypeTable
+--   st <- getSynTable
+--   liftIO $ setEnvs tinfo tt st     
+-- --  t <- fmap (either staticError id) $ runTC tinfo $ inferExp exp
+--   t <- liftIO $ runTC tinfo $ inferExp exp 
+--   liftIO $ evaluate t
 
 -- evalExp :: ValueTable -> OLExp -> IO Value
-evalExp :: (HasValueTable m, MonadIO m) => OLExp -> m Value 
+evalExp :: (Has KeyVerb Int m, Has KeyValue ValueTable m, MonadIO m) => Exp Name -> m Value 
 evalExp e = do
-  env <- getValueTable
+  env <- ask (key @KeyValue) -- getValueTable
   liftIO $ evaluate $ force $ runEval (evalU env e)
 
 
@@ -465,8 +582,7 @@ procExp str = do
   --                                v  <- evalExp valueTable e 
   --                                return (Just v)) (return Nothing)
   res <- tryExec $ do
-    e <- parseAndDesugarExp str
-    _ <- typeCheckExp e
+    (e, _) <- readExp str
     evalExp e 
   
   case res of
@@ -478,7 +594,7 @@ procExp str = do
 
 waitCommand :: REPL ()
 waitCommand = do  
-  maybeLine <- lift $ HL.getInputLine "Sparcl> "
+  maybeLine <- REPL $ lift $ HL.getInputLine "Sparcl> "
   case maybeLine of
     Nothing -> do
       liftIO $ putStrLn "Quitting..."

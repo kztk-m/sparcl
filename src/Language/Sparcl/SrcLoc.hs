@@ -1,9 +1,8 @@
 module Language.Sparcl.SrcLoc where
 
-import Language.Sparcl.Pretty 
-import qualified Text.PrettyPrint.ANSI.Leijen as D
+import Language.Sparcl.Pretty as D
 
-data SrcLoc = SrcLoc { filename :: Maybe FilePath, row :: Int, col :: Int } 
+data SrcLoc = SrcLoc { slFilename :: Maybe FilePath, slRow :: Int, slCol :: Int } 
   deriving (Eq, Ord, Show) 
 
 instance Pretty SrcLoc where
@@ -19,22 +18,22 @@ pprMaybeFilePath Nothing  = D.text "*unknown source*"
 pprMaybeFilePath (Just s) = D.text s
 
 
-data SrcSpan = SrcSpan SrcLoc SrcLoc
+data SrcSpan = SrcSpan (Maybe FilePath) Int Int Int Int 
              | NoLoc 
              deriving (Eq, Ord, Show) 
 
 instance Pretty SrcSpan where
   ppr NoLoc = D.angles $ D.text "*unknown loc*"
-  ppr (SrcSpan s1 s2) =
-    D.angles $ D.hcat [pprMaybeFilePath $ filename s1,
-                       D.colon, pprPos (row s1) (col s1) (row s2) (col s2) ]
+  ppr (SrcSpan fp r1 c1 r2 c2) =
+    D.angles $ D.hcat [pprMaybeFilePath fp,
+                       D.colon, pprPos ]
     where
-      pprPos l1 c1 l2 c2
-        | l1 == l2 && c1 == c2 = D.hcat [ D.int l1, D.colon, D.int c1]
-        | l1 == l2 && c1 /= c2 = D.hcat [ D.int l1, D.colon, D.int c1, D.text "-", D.int c2 ]
-        | otherwise            = D.hcat [ D.parens (D.hcat [D.int l1, D.colon, D.int c1]),
+      pprPos
+        | r1 == r2 && c1 == c2 = D.hcat [ D.int r1, D.colon, D.int c1]
+        | r1 == r2 && c1 /= c2 = D.hcat [ D.int r1, D.colon, D.int c1, D.text "-", D.int c2 ]
+        | otherwise            = D.hcat [ D.parens (D.hcat [D.int r1, D.colon, D.int c1]),
                                           D.text "-",
-                                          D.parens (D.hcat [D.int l2, D.colon, D.int c2])] 
+                                          D.parens (D.hcat [D.int r2, D.colon, D.int c2])] 
 
 
 
@@ -43,17 +42,21 @@ noLoc = Loc NoLoc
 
 instance Semigroup SrcSpan where
   NoLoc <> e = e
-  SrcSpan s1 e1 <> SrcSpan s2 e2 = SrcSpan (min s1 s2) (max e1 e2)
-  s@(SrcSpan _s1 _e1) <> NoLoc = s 
+  SrcSpan fp ls1 cs1 le1 ce1  <> SrcSpan _ ls2 cs2 le2 ce2 =
+    let (ls, cs) = min (ls1, cs1) (ls2, cs2)
+        (le, ce) = max (le1, ce1) (le2, ce2) 
+    in SrcSpan fp ls cs le ce 
+  s@(SrcSpan _ _ _ _ _) <> NoLoc = s 
 
 instance Monoid SrcSpan where
   mempty = NoLoc 
-
   
 data Loc a = Loc {location :: SrcSpan, unLoc :: a}
   deriving (Eq, Ord, Show, Functor, Foldable, Traversable) 
 
-
 instance Applicative Loc where
   pure a = Loc NoLoc a
   Loc l1 a <*> Loc l2 b = Loc (l1 <> l2) (a b) 
+
+extend :: Loc a -> Loc b -> Loc b
+extend (Loc s1 _) (Loc s2 x) = Loc (s1 <> s2) x 

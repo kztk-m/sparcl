@@ -1,7 +1,5 @@
 module Language.Sparcl.Surface.Parsing (
-  parseExp, parseModule, parseDecl,
-  parseExpTest, parseDeclTest, parseModuleTest
-
+  parseExp, parseExp', parseModule, parseDecl
   ) where
 
 import Language.Sparcl.Surface.Syntax
@@ -9,28 +7,24 @@ import Language.Sparcl.Surface.Syntax
 import Language.Sparcl.Surface.Lexer
 import Language.Sparcl.Surface.Parser
 import Language.Sparcl.SrcLoc
+import Language.Sparcl.Pass
 
-import qualified Control.Monad.Fail as Fail
+-- import qualified Control.Monad.Fail as Fail
 
-parseExp :: String -> Either String LExp
+parseExp :: String -> Either String (LExp 'Parsing)
 parseExp s = runAlex s pExp 
 
-parseModule :: FilePath -> String -> Either String Module
+parseExp' :: FilePath -> String -> Either String (LExp 'Parsing)
+parseExp' fp s = runAlex s (setFilePath fp >> pExp) 
+
+parseModule :: FilePath -> String -> Either String (Module 'Parsing)
 parseModule fp s = runAlex s (setFilePath fp >> pModule) 
 
-parseDecl :: String -> Either String [Loc TopDecl]
+parseDecl :: String -> Either String (Decls 'Parsing (Loc (TopDecl 'Parsing)))
 parseDecl s = runAlex s pDecls
 
-toIO :: Either String a -> IO a
-toIO m = case m of
-  Left s  -> Fail.fail s
-  Right a -> return a 
+-- toIO :: Either String a -> IO a
+-- toIO m = case m of
+--   Left s  -> Fail.fail s
+--   Right a -> return a 
 
-parseExpTest :: String -> IO LExp
-parseExpTest = toIO . parseExp
-
-parseDeclTest :: String -> IO [Loc TopDecl]
-parseDeclTest = toIO . parseDecl 
-
-parseModuleTest :: FilePath -> String -> IO Module
-parseModuleTest fp = toIO . parseModule fp 

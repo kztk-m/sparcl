@@ -1,4 +1,4 @@
-cabal-version: 1.12
+cabal-version: 2.2
 
 name:           sparcl
 version:        0.1.0.0
@@ -7,41 +7,15 @@ description:
 author:         Kazutaka Matsuda
 maintainer:     kztk@ecei.tohoku.ac.jp
 copyright:      2018 Kazutaka Matsuda
-license:        BSD3
+license:        BSD-3-Clause
 license-file:   LICENSE
 build-type:     Simple
 
 extra-source-files:
     README.md
-    ChangeLog.md
+--    ChangeLog.md
 
-library
-  exposed-modules:
-      Language.Sparcl.SrcLoc,
-      Language.Sparcl.Name,
-      Language.Sparcl.Literal,
-      Language.Sparcl.Pretty,
-      Language.Sparcl.Class,
-      Language.Sparcl.Surface.Syntax,
-      Language.Sparcl.Surface.Lexer, 
-      Language.Sparcl.Surface.Parser,
-      Language.Sparcl.Surface.Parsing, 
-      Language.Sparcl.Surface.ParserAux,
-      Language.Sparcl.Core.Syntax,       
-      Language.Sparcl.Typing.Typing,
-      Language.Sparcl.Typing.TC,
-      Language.Sparcl.Module,
-      Language.Sparcl.Desugar,
-      Language.Sparcl.Value,
-      Language.Sparcl.Exception,
-      Language.Sparcl.Eval,
-      Language.Sparcl.REPL
-                     
-
-  other-modules:
-
-  hs-source-dirs:
-      src
+common deps
   build-depends:
       base >=4.7 && <5,
       mtl,
@@ -54,10 +28,7 @@ library
       ansi-wl-pprint
 
   ghc-options: 
-      -Wall -Wno-name-shadowing -Wno-unticked-promoted-constructors
-
-  build-tool-depends: 
-      alex:alex, happy:happy 
+      -Wall 
 
   default-language: Haskell2010
 
@@ -72,35 +43,65 @@ library
      DeriveFunctor, DeriveFoldable, DeriveTraversable, 
      GeneralizedNewtypeDeriving
 
-     
-  
-executable sparcl-exe
+
+       
+       
+
+library
+  import: deps
+  exposed-modules:
+      Language.Sparcl.SrcLoc
+      Language.Sparcl.Name
+      Language.Sparcl.Pass
+      Language.Sparcl.Literal
+      Language.Sparcl.Pretty
+      Language.Sparcl.Typing.Type
+      Language.Sparcl.Surface.Syntax
+      Language.Sparcl.Surface.Lexer 
+      Language.Sparcl.Surface.Parser
+      Language.Sparcl.Surface.Parsing,
+      Language.Sparcl.Surface.ParserAux
+      Language.Sparcl.Renaming
+      Language.Sparcl.Typing.Typing
+      Language.Sparcl.Typing.TC
+      Language.Sparcl.Exception
+      Language.Sparcl.Core.Syntax  
+      Language.Sparcl.Desugar
+      Language.Sparcl.Value
+      Language.Sparcl.Eval
+      Language.Sparcl.Class
+      Language.Sparcl.Module
+      Language.Sparcl.REPL
+                     
+
+  other-modules:
+
+  hs-source-dirs:
+      src
+  build-tool-depends: 
+      alex:alex, happy:happy 
+
+
+executable sparcl-exe  
+  import: deps 
   main-is: Main.hs
+
   other-modules:
 
   hs-source-dirs:
       app
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
   build-depends:
-      base >=4.7 && <5
-    , sparcl
-  default-language: Haskell2010
-
-  default-extensions:
-    GADTs
+    sparcl
 
 test-suite sparcl-test
+  import: deps 
   type: exitcode-stdio-1.0
   main-is: Spec.hs
+
   other-modules:
   hs-source-dirs:
       test
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
   build-depends:
-      base >=4.7 && <5
-    , containers
-    , sparcl
-  default-language: Haskell2010
-
-  default-extensions:
-    GADTs
+    sparcl
