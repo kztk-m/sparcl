@@ -52,8 +52,10 @@ instance Pretty n => Pretty (Exp n) where
   pprPrec _ (Con c []) =
     ppr c 
 
-  pprPrec k (Con c es) = parensIf (k > 9) $
-    ppr c D.<+> D.hsep (map (pprPrec 10) es)
+  pprPrec _ (Con c es) =
+    ppr c <> align (parens $ hsep $ punctuate comma $ (map (pprPrec 0) es))
+    -- parensIf (k > 9) $
+    -- ppr c D.<+> D.hsep (map (pprPrec 10) es)
 
   pprPrec _ (Bang e) =
     D.text "!" D.<> pprPrec 10 e
@@ -103,7 +105,7 @@ instance Pretty n => Pretty (Pat n) where
 
   pprPrec _ (PCon c []) = ppr c 
   pprPrec k (PCon c ps) = parensIf (k > 0) $
-    ppr c D.<+> D.hsep (map (pprPrec 1) ps)
+    ppr c D.<> align (parens $ D.hsep $ punctuate comma $ map (pprPrec 1) ps)
   pprPrec _ (PBang p)   =
     D.text "!" D.<> pprPrec 1 p
 

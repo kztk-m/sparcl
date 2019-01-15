@@ -84,6 +84,8 @@ tokens :-
   "lift"    { theTok Tlift }
   "unlift"  { theTok Tunlift }
   "rev"     { theTok Trev }
+  "pin"     { theTok Tpin }
+ 
   
   ".."      { theTok Tddot }
   "."       { theTok Tdot }
@@ -164,7 +166,7 @@ data Token
   | Trev
   | Tlift
   | Tunlift
-  
+  | Tpin 
 
   -- Key punctuations
   | Tdot

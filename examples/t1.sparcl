@@ -38,3 +38,24 @@ def qm = 1 + 2 * 3 + 4 * 5
 
 def incL = lift !(\!x -> x + 1) !(\!x -> x - 1)
 
+-- Example of a parameterised datatype.
+data List a = Nil | Cons a (List a) 
+
+{-
+Transformations from sets of numbers (expressed as a sorted list) to lists of numbers. 
+-}
+
+def s2l = go !0 
+    where 
+      def go !n (rev Nil)       = rev Nil
+           | !n (rev Cons x xs) = 
+               case pin x (\x -> go x xs) of 
+                  rev (x', r) -> rev Cons (dec !n x') r
+               end 
+    end
+
+def dec !n r = 
+   case eqInt n 0 of 
+   | True  -> r 
+   | False -> dec !(n-1) ((\!x -> x) (invert incL) r)
+   end 

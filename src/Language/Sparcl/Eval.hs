@@ -114,12 +114,12 @@ evalU env expr = case expr of
     let c = nameTuple 2 
     return $ VRes (\hp -> do
                       a <- f1 hp
-                      VRes f2 _ <- h a
+                      VRes f2 _ <- h (VBang a)
                       b <- f2 hp
                       return $ VCon c [a, b])
                   (\v -> case v of
                            VCon c' [a,b] | c' == c -> do 
-                                             VRes _ b2 <- h a
+                                             VRes _ b2 <- h (VBang a)
                                              hp2 <- b2 b
                                              hp1 <- b1 a
                                              return $ unionHeap hp1 hp2
@@ -130,7 +130,7 @@ evalU env expr = case expr of
 
     
 evalCase :: Env -> Value -> [ (Pat Name, Exp Name) ] -> Eval Value
-evalCase _   _ [] = rtError $ text "pattern match error"
+evalCase _   v [] = rtError $ text "pattern match error" <+> ppr v 
 evalCase env v ((p, e):pes) =
   case findMatch v p of
     Just binds -> evalU (extendsEnv binds env) e

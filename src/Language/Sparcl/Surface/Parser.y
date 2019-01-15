@@ -64,6 +64,7 @@ import Language.Sparcl.Pass
 
   "lift"   { Loc _ Tlift }
   "unlift" { Loc _ Tunlift }
+  "pin"    { Loc _ Tpin } 
 
   "def"    { Loc _ Tdef }
   "sig"    { Loc _ Tsig }
@@ -186,14 +187,15 @@ OpExp :: { Loc ExpP }
 
 AppExp :: { Loc ExpP }
   : AppExp SimpleExp { lapp $1 $2 }
-  | "lift" SimpleExp SimpleExp { expandLoc $1 $ Loc (location $2 <> location $3) $ Lift $2 $3 }
-  | "unlift" SimpleExp         { expandLoc $1 $ Loc (location $2) $ Unlift $2 }
   | SimpleExp        { $1 }
 
 SimpleExp :: { Loc ExpP }
   : QVarOrOp       { fmap Var $1 }
-  | ConQName       { fmap (\c -> Con c []) $1 }
-  | "rev" ConQName { fmap (\c -> RCon c []) $2 }
+  | ConQName       { fmap (\c -> Con c) $1 }
+  | "rev" ConQName { fmap (\c -> RCon c) $2 }
+  | "lift"         { Loc (location $1) $ Lift }
+  | "unlift"       { Loc (location $1) $ Unlift }
+  | "pin"          { Loc (location $1) $ RPin }
   | Literal        { fmap Lit $1 } 
   | "!" SimpleExp  { expandLoc $1 $ Loc (location $2) (Bang $2) }
   | TupleExp       { $1 }

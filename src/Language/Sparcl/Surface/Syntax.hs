@@ -104,22 +104,21 @@ data Exp p
   | Var (XId p)
   | App (LExp p) (LExp p)
   | Abs [LPat p] (LExp p)
-  | Con (XId p) [(LExp p)]
+  | Con (XId p)
   | Bang (LExp p)
   | Case (LExp p) [ (LPat p, Clause p) ]
-  | Lift (LExp p) (LExp p)
+  | Lift 
   | Sig  (LExp p) (LTy p)
   | Let  (Decls p (LDecl p)) (LExp p)
 
   | Parens   (LExp p) -- for operators
   | Op  (XId p) (LExp p) (LExp p)
 
-  | Unlift (LExp p)
+  | Unlift 
 
-  | RCon (XId p) [LExp p]
---  | RCase LExp [ (LPat, Clause) ]
-  | RPin  (LExp p) (LExp p)
---  deriving Show -- for debugging
+  | RCon (XId p)
+  | RPin 
+
 
 instance AllPretty p => Pretty (LExp p) where
   pprPrec k = pprPrec k . unLoc 
@@ -132,11 +131,7 @@ instance AllPretty p => Pretty (Exp p) where
   pprPrec k (Abs x e) = parensIf (k > 0) $
     D.text "\\" D.<> D.hsep (map ppr x) D.<+> D.text "->" D.<+> D.align (D.nest 2 (pprPrec 0 e))
 
-  pprPrec _ (Con c []) =
-    ppr c 
-
-  pprPrec k (Con c es) = parensIf (k > 9) $
-    ppr c D.<+> D.hsep (map (pprPrec 10) es)
+  pprPrec _ (Con c) = ppr c 
 
   pprPrec _ (Bang e) =
     D.text "!" D.<> pprPrec 10 e
@@ -149,11 +144,8 @@ instance AllPretty p => Pretty (Exp p) where
       pprPs (p, c) = D.text "|" D.<+>
                      D.align (pprPrec 1 p D.<+> D.text "->" D.<+> (D.nest 2 $ ppr c))
 
-  pprPrec k (Lift e1 e2) = parensIf (k > 9) $
-    D.text "lift" D.<+> D.align (pprPrec 10 e1 D.</> pprPrec 10 e2)
-
-  pprPrec k (Unlift e) = parensIf (k > 9) $
-    D.text "unlift" D.<+> D.align (pprPrec 10 e) 
+  pprPrec _ Lift   = text "lift"
+  pprPrec _ Unlift = text "unlift" 
 
   pprPrec _ (Parens e) = D.parens (pprPrec 0 e)
   pprPrec k (Op q e1 e2) = parensIf (k > 8) $
@@ -171,12 +163,12 @@ instance AllPretty p => Pretty (Exp p) where
       pprDecls (Decls _ ds)  = vcat $ map ppr ds
       pprDecls (HDecls _ dss) = vcat $ map (vcat . map ppr) dss 
 
-  pprPrec k (RCon c es) = parensIf (k > 9) $
-    D.text "rev" D.<+> ppr c D.<+>
-     D.hsep (map (pprPrec 10) es)
+  pprPrec _ (RCon c) = ppr c
 
-  pprPrec k (RPin e1 e2) = parensIf (k > 9) $
-    D.text "pin" D.<+> pprPrec 10 e1 D.<+> pprPrec 10 e2 
+
+  pprPrec _ RPin = text "pin"
+  -- pprPrec k (RPin e1 e2) = parensIf (k > 9) $
+  --   D.text "pin" D.<+> pprPrec 10 e1 D.<+> pprPrec 10 e2 
         
     
 

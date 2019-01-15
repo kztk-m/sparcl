@@ -20,6 +20,7 @@ import Language.Sparcl.Name
 import qualified Language.Sparcl.Core.Syntax as C
 -- import Language.Sparcl.Typing.Type 
 import Language.Sparcl.Typing.TC
+import qualified Language.Sparcl.Typing.Type as T 
 import Language.Sparcl.Pass
 
 -- import Language.Sparcl.Pretty hiding ((<$>))
@@ -45,6 +46,10 @@ withNewNames n k = do
 runDesugar :: MonadTypeCheck m => Desugar m a -> m a
 runDesugar m = runReaderT m 0 
 
+numberOfArgs :: T.Ty -> Int
+numberOfArgs (_ T.:-@ t) = numberOfArgs t + 1
+numberOfArgs _           = 0 
+
 desugarExp :: forall m. MonadDesugar m => S.LExp 'TypeCheck -> m (C.Exp Name) 
 desugarExp (Loc _ expr) = go expr
   where
@@ -52,16 +57,21 @@ desugarExp (Loc _ expr) = go expr
     go (S.Var (x, _)) = return $ C.Var x
     go (S.Lit l)      = return $ C.Lit l
     go (S.App e1 e2)  = do
-      C.App <$> desugarExp e1 <*> desugarExp e2 
+      mkApp <$> desugarExp e1 <*> desugarExp e2 
 
     go (S.Abs [] e) = desugarExp e 
     go (S.Abs (p:ps) e) = withNewName $ \n -> do
       r <- desugarAlts [(p, S.Clause (noLoc $ S.Abs ps e) (S.HDecls () []) Nothing)]
-      return $ C.Abs n (makeCase (C.Var n) r)
+      return $ mkAbs n (makeCase (C.Var n) r)
 
-    -- FIXME: make fully-applied by using ty
-    go (S.Con (c,_ty) es) =
-      C.Con c <$> mapM desugarExp es
+    go (S.Con (c, ty)) = do
+      ty' <- zonkType ty
+      let n = numberOfArgs ty'
+      withNewNames n $ \xs -> do 
+        let b = C.Con c [ C.Var x | x <- xs ]
+        return $ foldr C.Abs b xs 
+    -- go (S.Con (c,_ty) es) =
+    --   C.Con c <$> mapM desugarExp es
 
     go (S.Bang e) =
       C.Bang <$> desugarExp e
@@ -71,9 +81,10 @@ desugarExp (Loc _ expr) = go expr
       rs' <- desugarAlts alts
       return (C.Case e' rs')
 
-    go (S.Lift e1 e2) =
-      C.Lift <$> desugarExp e1 <*> desugarExp e2
-
+    go S.Lift = 
+      withNewNames 2 $ \[x, y] -> 
+      return $ foldr C.Abs (C.Lift (C.Var x) (C.Var y)) [x,y] 
+      
     go (S.Sig e _) = desugarExp e
 
     go (S.Let (S.Decls v _) _) = absurd v
@@ -94,14 +105,21 @@ desugarExp (Loc _ expr) = go expr
       e2' <- desugarExp e2
       return $ C.App (C.App (C.Var op) e1') e2' 
     
+    go S.Unlift =
+      withNewName $ \x ->
+      return $ C.Abs x (C.Unlift (C.Var x))
 
-    go (S.Unlift e) = C.Unlift <$> desugarExp e
-
-    go (S.RPin e1 e2) = C.RPin <$> desugarExp e1 <*> desugarExp e2
+    go S.RPin =
+      withNewName $ \x -> withNewName $ \y -> 
+      return $ C.Abs x $ C.Abs y $ C.RPin (C.Var x) (C.Var y)
 
     -- FIXME: make fully-applied by using ty
-    go (S.RCon (c, _ty) es) =
-      C.RCon c <$> mapM desugarExp es 
+    go (S.RCon (c, ty)) = do
+      ty' <- zonkType ty
+      let n = numberOfArgs ty'
+      withNewNames n $ \xs -> do 
+        let b = C.RCon c [ C.Var x | x <- xs ]
+        return $ foldr C.Abs b xs 
       
 makeTupleExpC :: [C.Exp Name] -> C.Exp Name
 makeTupleExpC [e] = e
@@ -119,11 +137,112 @@ makeTuplePatC ps  = C.PCon (nameTuple (length ps)) ps
 
 makeCase :: Eq n => C.Exp n -> [(C.Pat n, C.Exp n)] -> C.Exp n
 makeCase (C.Con n []) [(C.PCon m [], e)] | n == m = e
-makeCase e0 [(C.PVar x, e)] = C.App (C.Abs x e) e0 
+makeCase e0 [(C.PVar x, e)] = mkApp (mkAbs x e) e0 
 makeCase e0 alts = C.Case e0 alts 
   
 
-                    
+-- Removes apparent eta-redex.
+-- This is correct as Abs binds linear variable. So, occurence of x in "\x -> e x" means that
+-- there is not free occurrence x in e. 
+mkAbs :: Eq n => n -> C.Exp n -> C.Exp n
+mkAbs n (C.App e (C.Var m)) | n == m = e
+mkAbs n e                    = C.Abs n e 
+
+mkApp :: Eq n => C.Exp n -> C.Exp n -> C.Exp n
+mkApp (C.Abs n e) e1 = subst n e1 e
+mkApp e1 e2          = C.App e1 e2
+
+data CheckSubst a = Substituted a
+                  | Untouched   a
+                  deriving Functor
+
+
+runCheckSubst :: CheckSubst a -> a
+runCheckSubst (Substituted a)  = a
+runCheckSubst (Untouched a) = a
+
+-- subst n e e1 = Left  e1' means that e1 does not contain n (and e1' = e1) 
+-- subst n e e1 = Right e1' means that e1 contains n (no futher substitution is needed)
+subst :: Eq n => n -> C.Exp n -> C.Exp n -> C.Exp n
+subst n t = runCheckSubst . go
+  where
+    go (C.Var x) | n == x    = Substituted t
+                 | otherwise = Untouched (C.Var x)
+    go (C.Lit l) = Untouched (C.Lit l)
+    go (C.App e1 e2) =
+      case go e1 of
+        Substituted e1' -> Substituted (C.App e1' e2)
+        Untouched   e1' -> C.App e1' <$> go e2
+
+    go (C.Abs x e) | x == n    = Untouched (C.Abs x e)
+                   | otherwise = C.Abs x <$> go e  
+
+    go (C.Con c es) =
+      C.Con c <$> gos es
+    
+    go (C.Bang e) = C.Bang <$> go e
+    go (C.Case e0 alts) =
+      case go e0 of
+        Substituted e0' -> Substituted $ C.Case e0' alts
+        Untouched e0'   -> C.Case e0' <$> goAlts alts
+
+    go (C.Let bind e) =
+      case goBind bind of
+        Substituted bind' -> Substituted (C.Let bind' e) 
+        Untouched bind'   -> C.Let bind' <$> go e
+
+    go (C.Lift e1 e2) =
+      uncurry C.Lift <$> goPair e1 e2 
+
+    go (C.Unlift e) = C.Unlift <$> go e
+
+    go (C.RCon c es) = C.RCon c <$> gos es
+    
+    go (C.RCase e ralts) = case go e of
+      Substituted e' -> Substituted (C.RCase e' ralts)
+      Untouched   e' -> C.RCase e' <$> goRAlts ralts
+
+    go (C.RPin e1 e2) =
+      uncurry C.RPin  <$> goPair e1 e2 
+
+    gos [] = Untouched []
+    gos (e:es) =
+      case go e of
+        Substituted e' -> Substituted (e':es)
+        Untouched   e' -> (e':) <$> gos es 
+
+    goPair e1 e2 =
+      case go e1 of
+        Substituted e1' -> Substituted (e1', e2)
+        Untouched   e1' -> (\y -> (e1', y)) <$> go e2 
+
+    goAlts [] = Untouched []
+    goAlts ((p,e):alts) =
+      if n `elem` C.freeVarsP p then
+        ((p,e):) <$> goAlts alts
+      else
+        case go e of
+          Substituted e' -> Substituted ((p,e'):alts)
+          Untouched   e' -> ((p,e'):) <$> goAlts alts 
+        
+    goRAlts [] = Untouched []
+    goRAlts ((p,e1,e2):ralts) =
+      if n `elem ` C.freeVarsP p then
+        ((p,e1,e2):) <$> goRAlts ralts
+      else
+        case goPair e1 e2 of
+          Substituted (e1', e2') -> Substituted ((p,e1',e2'):ralts)
+          Untouched   (e1', e2') -> ((p,e1',e2'):) <$> goRAlts ralts
+
+    goBind bs =
+      if n `elem` lhs then
+        Untouched bs
+      else
+        zip lhs <$> gos rhs 
+      where
+        lhs = map fst bs
+        rhs = map snd bs
+                               
 desugarRHS :: MonadDesugar m => [([S.LPat 'TypeCheck], S.Clause 'TypeCheck)] -> m (C.Exp Name)
 desugarRHS pcs = withNewNames len $ \ns -> do 
   let e0 = makeTupleExpC [C.Var n | n <- ns]  

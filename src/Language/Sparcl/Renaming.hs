@@ -132,20 +132,17 @@ renameExp level localnames (Loc loc expr) = first (Loc loc) <$> go expr
       renamePats level localnames S.empty ps $ \ps' level' localnames' bvP -> do
       (e', fv) <- renameExp level' localnames' e 
       return (Abs ps' e', fv S.\\ bvP) 
-                        
-    go (Con c es) = do
-      c'  <- resolveImportedName loc c
-      (es', fvs) <- unzip <$> mapM (renameExp level localnames) es
-      return (Con c' es', S.unions fvs) 
 
+    go (Con c) = do
+      c' <- resolveImportedName loc c
+      return (Con c', S.empty) 
+        
     go (Bang e) = do
       (e', fv) <- renameExp level localnames e
       return (Bang e', fv) 
 
-    go (Lift e1 e2) = do
-      (e1', fv1) <- renameExp level localnames e1
-      (e2', fv2) <- renameExp level localnames e2
-      return (Lift e1' e2', S.union fv1 fv2)
+    go Lift = return (Lift, S.empty)
+    
 
     go (Sig e t) = do
       (e', fv) <- renameExp level localnames e
@@ -172,19 +169,14 @@ renameExp level localnames (Loc loc expr) = first (Loc loc) <$> go expr
       (e', fv) <- rearrangeOp loc level localnames n' e1 e2
       return (unLoc e', S.insert n' fv)
 
-    go (RCon c es) = do 
-      c'  <- resolveImportedName loc c
-      (es', fvs) <- unzip <$> mapM (renameExp level localnames) es
-      return (RCon c' es', S.unions fvs)
 
-    go (Unlift e) = do
-      (e', fv) <- renameExp level localnames e
-      return (Unlift e', fv)
+    go (RCon c) = do
+      e' <- RCon <$> resolveImportedName loc c
+      return (e', S.empty) 
 
-    go (RPin e1 e2) = do
-      (e1', fv1) <- renameExp level localnames e1
-      (e2', fv2) <- renameExp level localnames e2
-      return (RPin e1' e2', S.union fv1 fv2)
+    go Unlift = return (Unlift, S.empty)
+
+    go RPin = return (RPin, S.empty)
       
 
 {-

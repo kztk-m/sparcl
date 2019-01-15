@@ -420,12 +420,14 @@ setModule m = do
   modify (key @KeySyn)   $ M.union (miSynTable m)
   modify (key @KeyValue) $ M.union (miValueTable m) 
 
-  -- modifyTables $ mergeTables (miTables m)
-  -- ref <- ask
-  -- liftIO $ modifyIORef ref $ \ci -> ci {
-  --   confTables = mergeTables (miTables m) (confTables ci)
-  --   }
   debugPrint 1 $ text "Module:" <+> ppr (miModuleName m) <+> text " has been loaded."
+  debugPrint 3 $ text "  " <>
+    align (vcat [
+              fillBreak 8 (text "names:")    <+> align (pprMap $ M.map S.toList $ miNameTable m),
+              fillBreak 8 (text "ops:")      <+> align (pprMap $ miOpTable m),
+              fillBreak 8 (text "types")     <+> align (pprMap $ miTypeTable m),
+              fillBreak 8 (text "synonyms:") <+> align (pprMap $ miSynTable m) ,
+              fillBreak 8 (text "values:")   <+> align (pprMap $ miValueTable m) ])
 
 
 resetModule :: REPL ()
@@ -524,22 +526,32 @@ readExp ::
 readExp str = do
   nameTable <- ask (key @KeyName)
   opTable   <- ask (key @KeyOp)
-  
+
+  debugPrint 1 $ text "Parsing expression..."
   parsedExp       <- either (staticError . D.text) return $ parseExp' "*repl*" str
+  debugPrint 1 $ text "Parsing Ok."
+  debugPrint 1 $ text "Renaming expression..."
   (renamedExp, _) <- either nameError return $ runRenaming nameTable opTable (renameExp 0 M.empty parsedExp)
+  debugPrint 1 $ text "Renaming Ok."
 
 
   tinfo <- ask (key @KeyTInfo)
 
   typeTable <- ask (key @KeyType)
   synTable  <- ask (key @KeySyn) 
+
+  debugPrint 1 $ text "Type checking expression..."
+  debugPrint 3 $ text "under:" <+> align (vcat [text "tyenv: " <+> align (pprMap typeTable),
+                                                text "synenv:" <+> align (pprMap synTable) ])
   
   liftIO $ setEnvs tinfo typeTable synTable   
-  (typedExp, ty) <- liftIO $ runTC tinfo $ inferTy renamedExp 
+  (typedExp, ty) <- liftIO $ runTC tinfo $ inferExp renamedExp 
+  debugPrint 1 $ text "Type checking Ok."
 
+  debugPrint 1 $ text "Desugaring expression..."
   desugaredExp <- liftIO $ runTC tinfo $ runDesugar $ desugarExp typedExp
-
-  debugPrint 2 $ text "Desugarred:" </> align (ppr desugaredExp)
+  debugPrint 1 $ text "Desugaring Ok."
+  debugPrint 2 $ text "Desugared:" </> align (ppr desugaredExp)
 
   desugaredExp' <- liftIO $ evaluate desugaredExp
   ty'         <- liftIO $ evaluate ty

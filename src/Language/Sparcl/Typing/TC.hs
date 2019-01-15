@@ -106,6 +106,8 @@ class (MonadError TypeError m, Monad m) => MonadTypeCheck m where
   withUVar :: Name -> Ty -> m r -> m r
   withSyn  :: Name -> ([TyVar], Ty) -> m r -> m r 
 
+  -- a and b must consumes the same environment. 
+  parWith :: (a -> b -> r) -> m a -> m b -> m r
 
   -- typing under empty linear environment 
   withoutLinear :: m r -> m r
@@ -135,6 +137,9 @@ instance MonadTypeCheck m => MonadTypeCheck (ReaderT r m) where
   withoutLinear comp =
     ReaderT $ runReaderT (withoutLinear comp)
 
+  parWith f m1 m2 = ReaderT $ \r ->
+    parWith f (runReaderT m1 r) (runReaderT m2 r) 
+
   newMetaTyVar = lift newMetaTyVar
   getMetaTyVarsInEnv = lift getMetaTyVarsInEnv
 
@@ -142,6 +147,7 @@ instance MonadTypeCheck m => MonadTypeCheck (ReaderT r m) where
     
 
 data Multiplicity = Omega | One | Zero 
+  deriving Eq 
 
 type TyEnv = M.Map Name (Multiplicity, Ty)
 
@@ -356,6 +362,22 @@ instance MonadTypeCheck TC where
           Just _ ->
               typeError $ Other $ D.hsep [ D.text "Type synonym", D.dquotes (ppr c), D.text "must be fully-applied." ] 
 
+
+  parWith f m1 m2 = do
+    tyEnvBefore <- getTyEnv
+    r1 <- m1 
+    tyEnvAfter  <- getTyEnv 
+
+    putTyEnv tyEnvBefore
+    r2 <- m2
+    tyEnvAfter2 <- getTyEnv
+
+    -- Checking multiplicity part is enough. 
+    when (M.map fst tyEnvAfter /= M.map fst tyEnvAfter2) $
+      typeError $ Other $ D.hsep [ text "Branches use different set of variables" ]
+    return (f r1 r2) 
+    
+
   getMetaTyVarsInEnv = do
     tyEnv <- getTyEnv
     let ts = map snd $ M.elems tyEnv
@@ -365,6 +387,12 @@ instance MonadTypeCheck TC where
     cref <- asks tiSvCount
     cnt <- liftIO $ atomicModifyIORef' cref $ \cnt -> (cnt + 1, cnt)
     return $ SkolemTv ty cnt 
+
+parallel :: MonadTypeCheck m => [ m r ] -> m [r]
+parallel []     = return []
+parallel [m]    = (:[]) <$> m 
+parallel (m:ms) =
+  parWith (:) m (parallel ms)
 
 withLVars :: MonadTypeCheck m => [ (Name, Ty) ] -> m r -> m r
 withLVars ns m = foldr (uncurry withLVar) m ns

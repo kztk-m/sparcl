@@ -22,19 +22,7 @@ import Language.Sparcl.Pretty as D hiding ((<$>))
 import Data.List ((\\))
 
 -- import Control.Exception (evaluate)
-
--- import Debug.Trace 
-
--- checkUnificationError :: MonadTypeCheck m => SrcSpan -> Ty -> Ty -> m a -> m a
--- checkUnificationError loc ty1 ty2 e = do
---   catchError e $ \d -> do 
---       ty1' <- zonkType ty1
---       ty2' <- zonkType ty2
---       throwError $ ppr loc D.<$> (D.align $ D.nest 2 $ 
---                                   D.vsep [D.text "Type error",
---                                           D.nest 2 $ D.hsep [D.text "Expected:", D.align $ ppr ty2'],
---                                           D.nest 2 $ D.hsep [D.text "Inferred:", D.align $ ppr ty1'] ])
---                    D.<$> D.text "Detail:" D.<+> d
+import Debug.Trace 
 
 ty2ty :: S.LTy 'Renaming -> Ty
 ty2ty (Loc _ ty) = go ty
@@ -106,7 +94,7 @@ inferExp expr = do
   envMetaVars <- getMetaTyVarsInEnv
   let mvs = metaTyVars [ty']
   polyTy <- quantify (mvs \\ envMetaVars) ty'
-  return (expr', polyTy) 
+  trace (prettyShow ty' ++ " --> " ++ prettyShow polyTy) $ return (expr', polyTy) 
   
   
 inferTy :: MonadTypeCheck m => LExp 'Renaming -> m (LExp 'TypeCheck, BodyTy)
@@ -180,17 +168,22 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (Loc loc) $ atLoc loc $ atExp lexp
       tryUnify loc resTy expectedTy
       return (App e1' e2')
 
-    go (Con c es) = do
+    go (Con c) = do 
       tyOfC <- instantiate =<< askType loc c
-      (es', retTy) <- foldM inferApp ([], tyOfC) es
---      trace (show $ ppr c D.<+> D.colon D.<+> D.align (ppr tyOfC)) $
-      tryUnify loc retTy expectedTy
-      return (Con (c, tyOfC) (reverse es'))
-        where
-          inferApp (es', ty) e = do 
-            (argTy, resTy) <- ensureFunTy (location e) ty
-            e' <- checkTy e argTy
-            return (e':es', resTy)
+      tryUnify loc tyOfC expectedTy
+      return $ Con (c, tyOfC)
+
+--     go (Con c es) = do
+--       tyOfC <- instantiate =<< askType loc c
+--       (es', retTy) <- foldM inferApp ([], tyOfC) es
+-- --      trace (show $ ppr c D.<+> D.colon D.<+> D.align (ppr tyOfC)) $
+--       tryUnify loc retTy expectedTy
+--       return (Con (c, tyOfC) (reverse es'))
+--         where
+--           inferApp (es', ty) e = do 
+--             (argTy, resTy) <- ensureFunTy (location e) ty
+--             e' <- checkTy e argTy
+--             return (e':es', resTy)
 
     go (Bang e) = do
       ty <- ensureBangTy loc expectedTy
@@ -208,37 +201,58 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (Loc loc) $ atLoc loc $ atExp lexp
     -- --------------
     -- lift e1 e2 : !(rev a -o rev b) 
 
-    go (Lift e1 e2) = do
-      ty <- ensureBangTy loc expectedTy
-      (argTy, resTy) <- ensureFunTy loc ty
-      tyA <- ensureRevTy loc argTy
-      tyB <- ensureRevTy loc resTy
-      let expectedTy1 = bangTy (bangTy tyA -@ tyB)
-      let expectedTy2 = bangTy (bangTy tyB -@ tyA)
-      e1' <- checkTy e1 expectedTy1
-      e2' <- checkTy e2 expectedTy2
-      return (Lift e1' e2')
+    -- lift : !(!a -o b) -o !(!b -o a) -o !(rev a -o rev b)
+    go Lift = do
+      tyA <- newMetaTy
+      tyB <- newMetaTy
+      
+      tryUnify loc (bangTy (bangTy tyA -@ tyB)
+                    -@ bangTy (bangTy tyB -@ tyA)
+                    -@ bangTy (revTy tyA -@ revTy tyB)) expectedTy
+      return Lift 
+      
+    -- go (Lift e1 e2) = do
+    --   ty <- ensureBangTy loc expectedTy
+    --   (argTy, resTy) <- ensureFunTy loc ty
+    --   tyA <- ensureRevTy loc argTy
+    --   tyB <- ensureRevTy loc resTy
+    --   let expectedTy1 = bangTy (bangTy tyA -@ tyB)
+    --   let expectedTy2 = bangTy (bangTy tyB -@ tyA)
+    --   e1' <- checkTy e1 expectedTy1
+    --   e2' <- checkTy e2 expectedTy2
+    --   return (Lift e1' e2')
   
     -- e : !(rev a -o rev b)
     -- ---------------------
     -- unlift e : (!(!a -o b) x !(!b -o a))
 
-    go (Unlift e) = do
-      (tyFst, tySnd) <- ensurePairTy loc expectedTy 
-      
-      tyFst' <- ensureBangTy loc tyFst -- !a -o b
-      tySnd' <- ensureBangTy loc tySnd -- !b -o a
+    -- unlift : !(rev a -o rev b) -o (!(!a -o b) x !(!b -o a))
+    go Unlift = do
+      tyA <- newMetaTy
+      tyB <- newMetaTy
 
-      (tyBangA,  tyB) <- ensureFunTy loc tyFst'
-      (tyBangB', tyA') <- ensureFunTy loc tySnd'
-      tyA  <- ensureBangTy loc tyBangA
-      tyB' <- ensureBangTy loc tyBangB'
-
-      tryUnify loc tyA' tyA
-      tryUnify loc tyB' tyB 
+      tryUnify loc (bangTy (revTy tyA -@ revTy tyB)
+                    -@ (tupleTy [bangTy (bangTy tyA -@ tyB),
+                                 bangTy (bangTy tyB -@ tyA)]))
+                   expectedTy
+      return Unlift 
+    
+    -- go (Unlift e) = do
+    --   (tyFst, tySnd) <- ensurePairTy loc expectedTy 
       
-      e' <- checkTy e (bangTy $ revTy tyA -@ revTy tyB)
-      return (Unlift e')
+    --   tyFst' <- ensureBangTy loc tyFst -- !a -o b
+    --   tySnd' <- ensureBangTy loc tySnd -- !b -o a
+
+    --   (tyBangA,  tyB) <- ensureFunTy loc tyFst'
+    --   (tyBangB', tyA') <- ensureFunTy loc tySnd'
+    --   tyA  <- ensureBangTy loc tyBangA
+    --   tyB' <- ensureBangTy loc tyBangB'
+
+    --   tryUnify loc tyA' tyA
+    --   tryUnify loc tyB' tyB 
+      
+    --   e' <- checkTy e (bangTy $ revTy tyA -@ revTy tyB)
+    --   return (Unlift e')
         
     go (Sig e tySyn) = do
       let ty = ty2ty tySyn       
@@ -261,19 +275,28 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (Loc loc) $ atLoc loc $ atExp lexp
       return $ Op (op, tyOfOp) e1' e2' 
 
 
-    go (RCon c es) = do
+    go (RCon c) = do
       tyOfC <- fmap addRev . instantiate =<< askType loc c
-      (es',retTy) <- foldM inferApp ([], tyOfC) es
-      tryUnify loc retTy expectedTy
-      return $ RCon (c, tyOfC) (reverse es')
+      tryUnify loc tyOfC expectedTy
+      return $ RCon (c, tyOfC)
         where
-          inferApp (es',ty) e = do 
-            (argTy, resTy) <- ensureFunTy (location e) ty
-            e' <- checkTy e argTy
-            return (e':es', resTy)
-
           addRev (TyCon t [t1,t2]) | t == nameTyLArr = TyCon t [revTy t1, addRev t2]
           addRev t                                   = revTy t 
+      
+
+    -- go (RCon c es) = do
+    --   tyOfC <- fmap addRev . instantiate =<< askType loc c
+    --   (es',retTy) <- foldM inferApp ([], tyOfC) es
+    --   tryUnify loc retTy expectedTy
+    --   return $ RCon (c, tyOfC) (reverse es')
+    --     where
+    --       inferApp (es',ty) e = do 
+    --         (argTy, resTy) <- ensureFunTy (location e) ty
+    --         e' <- checkTy e argTy
+    --         return (e':es', resTy)
+
+    --       addRev (TyCon t [t1,t2]) | t == nameTyLArr = TyCon t [revTy t1, addRev t2]
+    --       addRev t                                   = revTy t 
                                                        
     -- go (RCase e ralts) = do
     --   tyPat <- newMetaTy 
@@ -286,14 +309,27 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (Loc loc) $ atLoc loc $ atExp lexp
     -- ----------------
     -- pin e1 e2 : rev (a, b)
 
-    go (RPin e1 e2) = do
-      tyAB <- ensureRevTy loc expectedTy
-      (tyA, tyB) <- ensurePairTy loc tyAB 
+    -- pin : rev a -o (!a -o rev b) -> rev (a x b)
+    go RPin = do
+      tyA <- newMetaTy
+      tyB <- newMetaTy
 
-      e1' <- checkTy e1 (revTy tyA)
-      e2' <- checkTy e2 (bangTy tyA -@ revTy tyB)
+      tryUnify loc
+        (revTy tyA
+         -@ (bangTy tyA -@ revTy tyB)
+         -@ revTy (tupleTy [tyA, tyB]))
+        expectedTy
 
-      return (RPin e1' e2')
+      return RPin
+
+    -- go (RPin e1 e2) = do
+    --   tyAB <- ensureRevTy loc expectedTy
+    --   (tyA, tyB) <- ensurePairTy loc tyAB 
+
+    --   e1' <- checkTy e1 (revTy tyA)
+    --   e2' <- checkTy e2 (bangTy tyA -@ revTy tyB)
+
+    --   return (RPin e1' e2')
 
     go (Let decls e) = do
       (decls', bind) <- inferDecls decls 
@@ -313,7 +349,7 @@ inferMutual decls = do
 
   nts0 <- withUVars (zip ns tys) $ forM defs $ \(loc, n, pcs) -> do
     ty  <- newMetaTy
-    pcs' <- mapM (flip (checkTyPC loc) ty) pcs 
+    pcs' <- parallel $ map (flip (checkTyPC loc) ty) pcs 
     tyE <- askType loc n -- type of n in the environment 
     when (not $ M.member n sigMap) $
       -- Defer unification if a declaration comes with a signature because
@@ -467,7 +503,7 @@ allFancyBinders = map (BoundTv . Local . User) $
 checkAltsTy ::
   MonadTypeCheck m => [ (LPat 'Renaming, Clause 'Renaming) ] ->
   MonoTy -> BodyTy -> m [ (LPat 'TypeCheck, Clause 'TypeCheck) ]
-checkAltsTy alts patTy bodyTy = mapM checkAltTy alts
+checkAltsTy alts patTy bodyTy = parallel $ map checkAltTy alts
   where
     checkAltTy (p, c) = do
       (p', ubind, lbind) <- checkPatTy p patTy

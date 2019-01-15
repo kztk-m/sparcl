@@ -72,8 +72,8 @@ lpcon (Loc l c) ps =
   Loc (l <> mconcat (map location ps)) $ PCon c ps 
 
 lapp :: LExpP -> LExpP -> LExpP
-lapp (Loc l (Con c es)) e = Loc (l <> location e) $ Con c (es ++ [e])
-lapp (Loc l (RCon c es)) e = Loc (l <> location e) $ RCon c (es ++ [e])
+-- lapp (Loc l (Con c es)) e = Loc (l <> location e) $ Con c (es ++ [e])
+-- lapp (Loc l (RCon c es)) e = Loc (l <> location e) $ RCon c (es ++ [e])
 lapp e1 e2 = Loc (location e1 <> location e2) $ App e1 e2 
 
 locationClause :: ClauseP -> SrcSpan
@@ -94,9 +94,9 @@ mkTupleTy ts  = Loc (mconcat $ map location ts) $
 
 mkTupleExp :: [LExpP] -> LExpP
 mkTupleExp [e] = Loc (location e) $ Parens e
-mkTupleExp es = Loc (mconcat $ map location es) $
-                Con (BuiltIn $ nameTuple $ length es) es
-
+mkTupleExp es =
+  foldl lapp (noLoc $ Con $ BuiltIn $ nameTuple (length es)) es
+  
 mkTuplePat :: [LPatP] -> LPatP
 mkTuplePat [p] = p
 mkTuplePat ps  = Loc (mconcat $ map location ps) $

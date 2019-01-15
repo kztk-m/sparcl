@@ -1,3 +1,4 @@
+{-# LANGUAGE ViewPatterns #-}
 module Language.Sparcl.Typing.Type where
 
 import qualified Data.Map as M
@@ -85,6 +86,11 @@ revTy ty = TyCon nameTyRev [ty]
 (-@) :: Ty -> Ty -> Ty
 t1 -@ t2 = TyCon nameTyLArr [t1, t2]
 
+pattern (:-@) :: Ty -> Ty -> Ty 
+pattern t1 :-@ t2 <- TyCon ((== nameTyLArr) -> True) [t1, t2] 
+  where
+    t1 :-@ t2 = TyCon nameTyLArr [t1, t2]
+
 boolTy :: Ty
 boolTy = TyCon nameTyBool []
 
@@ -97,7 +103,8 @@ tupleTy ts = TyCon (nameTyTuple $ length ts) ts
 typeKi :: Ty
 typeKi = TyCon nameKindType []
 
-infixr 4 -@ 
+infixr 4 -@
+infixr 4 :-@
 
 type TypeTable = M.Map Name Ty
 type SynTable  = M.Map Name ([TyVar], Ty)
