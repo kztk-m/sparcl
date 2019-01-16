@@ -162,9 +162,9 @@ LocalDecls :: { DeclsP LDeclP }
   : sequence(LocalDecl) { Decls () $1 }
   
 LocalDecl :: { LDeclP }
-  : "def" VarName sepBy1(Def, "|")
+  : "def" VarOrOp sepBy1(Def, "|")
       { expandLoc $1 $ lddef (unLoc $2) $3 }
-  | "sig" VarName ":" Ty
+  | "sig" VarOrOp ":" Ty
       { expandLoc $1 $ Loc (location $4) $ DSig (unLoc $2) $4 }
   | "fixity" Op int Assoc
       { Loc (location $1 <> location $4) $ DFixity (unLoc $2) (Prec $ intTk $ unLoc $3) (unLoc $4) }

@@ -39,6 +39,8 @@ $symbol = [\= \+ \- \* \/ \^ \< \> \$ \| \& \? \: \# \@ \! \.]
 
 @lolli = "-o" | \8888               
 
+@forall = "forall" | \8704               
+                
 @string = \" ( ($printable # [\"\\]) | "\" "\" | "\n" | "\t" | "\r" | "\" [\"] )
 * \" -- "
 @char   = \' ( ($printable # [\'\\]) | "\" "\" | "\n" | "\t" | "\r" | "\" [\"] )
@@ -114,6 +116,7 @@ tokens :-
   @lam   { theTok Tlam }
   @rarr  { theTok Trarrow }
   @lolli { theTok Tlollipop }
+  @forall { theTok Tforall }
   
   @varId     { tok $ Tvarid . mkBName }
   @conId     { tok $ Tconid . mkBName }
