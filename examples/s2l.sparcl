@@ -1,6 +1,13 @@
 -- Example of a parameterised datatype.
 data List a = Nil | Cons a (List a) 
 
+def fwd f = case unlift f of (!x, _) -> x end 
+def bwd f = case unlift f of (_, !x) -> x end 
+            
+
+def null !Nil = True
+       |   _  = False 
+
 {-
 Transformations from sets of numbers (expressed as a sorted list) to lists of numbers. 
 -}
@@ -8,7 +15,7 @@ Transformations from sets of numbers (expressed as a sorted list) to lists of nu
 sig s2l : rev (List Int) -o rev (List Int)
 def s2l = go !0 
     where 
-      def go !n (rev Nil)       = rev Nil
+      def go !n (rev Nil)       = rev Nil with !null
            | !n (rev Cons x xs) = 
                case pin x (\x -> go x xs) of 
                   rev (x', r) -> rev Cons (flipsub !n x') r
