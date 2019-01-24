@@ -18,6 +18,8 @@ extra-source-files:
 common deps
   build-depends:
       base >=4.7 && <5,
+--      ghc  >=8.4 && <8.8,
+      hint >= 0.8 && <1,
       mtl,
       containers, 
       directory, 
@@ -72,7 +74,7 @@ library
       Language.Sparcl.Class
       Language.Sparcl.Module
       Language.Sparcl.REPL
-                     
+      Language.Sparcl.CodeGen.Haskell
 
   other-modules:
 

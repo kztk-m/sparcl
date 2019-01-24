@@ -1,0 +1,24 @@
+cabal-version: 2.2
+
+name:           sparcl-runtime
+version:        0.1.0.0
+synopsis:       A language for partial reversible computation with linear types
+description:    
+author:         Kazutaka Matsuda
+maintainer:     kztk@ecei.tohoku.ac.jp
+copyright:      2018 Kazutaka Matsuda
+license:        BSD-3-Clause
+license-file:   LICENSE
+build-type:     Simple
+
+library
+  build-depends: 
+    base >= 4.7 && <5
+  ghc-options: 
+    -Wall
+  default-language: Haskell2010
+  exposed-modules: 
+    Language.Sparcl.Runtime                                             
+
+  hs-source-dirs:
+      src

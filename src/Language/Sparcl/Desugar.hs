@@ -36,12 +36,12 @@ type MonadDesugar m = (MonadReader Int m, MonadTypeCheck m)
 withNewName :: MonadDesugar m => (Name -> m r) -> m r
 withNewName k = do
   i <- ask
-  local (+1) (k (Generated i))
+  local (+1) (k (Generated i Desugaring))
 
 withNewNames :: MonadDesugar m => Int -> ([Name] -> m r) -> m r
 withNewNames n k = do
   i <- ask
-  local (+ n) (k $ map Generated [i..i+n-1])
+  local (+ n) (k $ map (flip Generated Desugaring) [i..i+n-1])
   
 runDesugar :: MonadTypeCheck m => Desugar m a -> m a
 runDesugar m = runReaderT m 0 

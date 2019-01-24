@@ -26,6 +26,8 @@ import Language.Sparcl.Typing.Type
 import Language.Sparcl.Typing.TC
 import Language.Sparcl.Class
 
+import Language.Sparcl.CodeGen.Haskell (toDocDec, genBind) 
+
 import Language.Sparcl.Surface.Parsing 
 
 -- import Control.Exception (Exception, throw)
@@ -38,9 +40,11 @@ data KeySearchPath
 data KeyValue
 data KeyTInfo 
 data KeyVerb
+data KeyLoadPath 
 
 type MonadModule v m =
-  (MonadIO m, 
+  (MonadIO m,
+   Has   KeyLoadPath   FilePath m, 
    Has   KeyTInfo      TInfo m,
    Has   KeyVerb       Int   m, 
    Local KeyName       NameTable m, 
@@ -515,6 +519,15 @@ readModule fp interp = do
 
     debugPrint 1 $ text "Desugaring Ok."
     debugPrint 2 $ text "Desugared:" <> line <> align (vcat (map ppr bind))
+
+    -- for de
+    liftIO $ writeFile "./runtime/tmp.hs" $ show $
+      vcat [ text "module Sparcl.Main where",
+             text "import Language.Sparcl.Runtime",
+             text "import Language.Sparcl.Base",
+             text "data Nat = Z | S Nat",
+             text "data List a = Nil | Cons a (List a)",
+             toDocDec $ genBind bind ]
 
     valEnv <- ask (key @KeyValue)
     let newValueEnv = interp valEnv bind 

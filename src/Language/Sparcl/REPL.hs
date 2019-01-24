@@ -98,6 +98,7 @@ makeTrie spec = h (groupByFirstChar $ sortBy (compare `on` fst) $ map normalize 
 
 data Conf =
   Conf { confSearchPath  :: [FilePath],
+         confLoadPath    :: FilePath, 
          confCurrentDir  :: FilePath, 
          confVerbosity   :: Int,
          confLastLoad    :: Maybe FilePath,
@@ -114,6 +115,9 @@ newtype REPL a = REPL { runREPL :: Rd.ReaderT Conf (HL.InputT IO) a }
             Rd.MonadReader Conf,
             HL.MonadException) 
 
+
+instance Has KeyLoadPath FilePath REPL where
+  ask _ = Rd.asks confLoadPath 
 
 instance Has KeySearchPath [FilePath] REPL where
   ask _ = Rd.asks confSearchPath 
@@ -278,7 +282,8 @@ initConf = do
   refTt <- newIORef M.empty
   refVt <- newIORef M.empty
   
-  return $ Conf { confSearchPath = [],
+  return $ Conf { confSearchPath = ["."],
+                  confLoadPath   = ".sparcl", 
                   confCurrentDir = ".", 
                   confVerbosity = 0,
                   confLastLoad = Nothing,

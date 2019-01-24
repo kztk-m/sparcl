@@ -36,14 +36,19 @@ data Name
   = Local     NameBase
   | Original  ModuleName NameBase SurfaceName     
   | Alpha     !Int NameBase
-  | Generated !Int 
+  | Generated !Int Phase
   deriving Show
+
+data Phase = Desugaring | CodeGen deriving (Eq, Show, Ord)
+
+instance NFData Phase where
+  rnf x = seq x ()
 
 instance Eq Name where
   Local n1 == Local n2 = n1 == n2
   Original m1 n1 _ == Original m2 n2 _ = m1 == m2 && n1 == n2
   Alpha i1 _ == Alpha i2 _ = i1 == i2
-  Generated i1 == Generated i2 = i1 == i2
+  Generated i1 p1 == Generated i2 p2 = i1 == i2 && (p1 == p2)
   _ == _ = False 
 
 instance Ord Name where
@@ -54,12 +59,12 @@ instance Ord Name where
   compare (Original m1 n1 _) (Original m2 n2 _) = compare (m1, n1) (m2, n2)
   compare (Original _ _ _)   _       = LT 
 
-  compare (Alpha _ _)  (Generated _) = LT
+  compare (Alpha _ _)  (Generated _ _) = LT
   compare (Alpha i1 _) (Alpha i2 _)  = compare i1 i2 
   compare (Alpha _ _)  _             = GT
 
-  compare (Generated i1) (Generated i2) = compare i1 i2
-  compare (Generated _ ) _              = GT
+  compare (Generated i1 p1) (Generated i2 p2) = compare (p1, i1) (p2, i2)
+  compare (Generated _ _) _              = GT
 
 
 instance NFData SurfaceName where
@@ -70,8 +75,8 @@ instance NFData SurfaceName where
 instance NFData Name where
   rnf (Local n)      = rnf n
   rnf (Original m n orig) = rnf (m, n, orig)
-  rnf (Alpha i n)    = rnf (i, n)
-  rnf (Generated i)  = rnf i
+  rnf (Alpha _ n)      = rnf n
+  rnf (Generated _ p)  = rnf p
 
 newtype ModuleName = ModuleName String
   deriving (Show, Eq, Ord, NFData) 
@@ -88,7 +93,7 @@ instance Pretty SurfaceName where
 -- Basically, the method pretty-print names as the original without additional
 -- information introduced in the system. 
 instance Pretty Name where
-  ppr (Generated  i)   = text "_" <> int i 
+  ppr (Generated  i p) = text "_" <> text (case p of { Desugaring -> "d" ; CodeGen -> "c"}) <> int i 
   ppr (Alpha _i   n)   = ppr n
   ppr (Local n)        = ppr n
   ppr (Original _ _ o) = ppr o
