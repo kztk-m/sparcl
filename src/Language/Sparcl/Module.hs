@@ -529,7 +529,7 @@ readModule fp interp = do
     bind <- liftIO $ runTC tinfo $ runDesugar $ desugarTopDecls typedDecls 
 
     debugPrint 1 $ text "Desugaring Ok."
-    debugPrint 2 $ text "Desugared:" <> line <> align (vcat (map ppr bind))
+    debugPrint 2 $ text "Desugared:" <> line <> align (vcat (map (\(x,_,e) -> ppr (x,e)) bind))
 
 
     loadPath <- ask (key @KeyLoadPath)

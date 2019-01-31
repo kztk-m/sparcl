@@ -1,8 +1,8 @@
 -- Example of a parameterised datatype.
 data List a = Nil | Cons a (List a) 
 
-def fwd f = case unlift f of (!x, _) -> x end 
-def bwd f = case unlift f of (_, !x) -> x end 
+-- def fwd f = case unlift f of (!x, _) -> x end 
+-- def bwd f = case unlift f of (_, !x) -> x end 
             
 
 def null !Nil = True

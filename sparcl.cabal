@@ -21,6 +21,7 @@ common deps
 --      ghc  >=8.4 && <8.8,
       hint >= 0.8 && <1,
       exceptions >= 0.10 && <0.11, 
+      template-haskell, 
       mtl,
       containers, 
       directory, 
@@ -77,6 +78,7 @@ library
       Language.Sparcl.Command 
       Language.Sparcl.REPL
       Language.Sparcl.CodeGen.Haskell
+      Language.Sparcl.TH
 
   other-modules:
 
@@ -109,4 +111,6 @@ test-suite sparcl-test
       test
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
   build-depends:
-    sparcl
+    sparcl,
+    sparcl-runtime
+

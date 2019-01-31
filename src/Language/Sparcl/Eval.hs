@@ -23,7 +23,7 @@ import Language.Sparcl.Pretty hiding ((<$>))
                     
 evalUBind :: Env -> Bind Name -> Eval Env
 evalUBind env ds = do
-    rec ev  <- mapM (\(n,e) -> do
+    rec ev  <- mapM (\(n,_,e) -> do
                         v <- evalU env' e
                         return (n,v)) ds
         let env' = extendsEnv ev env

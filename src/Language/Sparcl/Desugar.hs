@@ -93,9 +93,9 @@ desugarExp (Loc _ expr) = go expr
         [] -> desugarExp e
         bs:rest -> do 
           e' <- go (S.Let (S.HDecls xinfo rest) e)
-          bs' <- mapM (\(Loc _ (S.DDef (n,_) pcs)) -> do
+          bs' <- mapM (\(Loc _ (S.DDef (n,ty) pcs)) -> do
                           r <- desugarRHS pcs
-                          return (n, r)) bs 
+                          return (n, ty, r)) bs 
           return $ C.Let bs' e'            
 
     go (S.Parens e) = desugarExp e
@@ -235,13 +235,13 @@ subst n t = runCheckSubst . go
           Untouched   (e1', e2') -> ((p,e1',e2'):) <$> goRAlts ralts
 
     goBind bs =
-      if n `elem` lhs then
+      if n `elem` map fst lhs then
         Untouched bs
       else
-        zip lhs <$> gos rhs 
+        zipWith (\(x,ty) e -> (x,ty,e)) lhs <$> gos rhs 
       where
-        lhs = map fst bs
-        rhs = map snd bs
+        lhs = map (\(x,ty,_) -> (x,ty)) bs
+        rhs = map (\(_,_, e) -> e)      bs
                                
 desugarRHS :: MonadDesugar m => [([S.LPat 'TypeCheck], S.Clause 'TypeCheck)] -> m (C.Exp Name)
 desugarRHS pcs = withNewNames len $ \ns -> do 
@@ -358,10 +358,10 @@ desugarTopDecls ::
   MonadDesugar m => S.Decls 'TypeCheck (S.LDecl 'TypeCheck) -> m (C.Bind Name)
 desugarTopDecls (S.Decls v _) = absurd v
 desugarTopDecls (S.HDecls _ bss) = do 
-  let defs = [ (n, pcs) | bs <- bss, Loc _ (S.DDef (n, _ty) pcs) <- bs ]
-  forM defs $ \(n, pcs) -> do
+  let defs = [ (n, ty, pcs) | bs <- bss, Loc _ (S.DDef (n, ty) pcs) <- bs ]
+  forM defs $ \(n, ty, pcs) -> do
     e <- desugarRHS pcs
-    return (n, e)
+    return (n, ty, e)
     
                 
   

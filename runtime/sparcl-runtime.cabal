@@ -19,6 +19,7 @@ library
   default-language: Haskell2010
   exposed-modules: 
     Language.Sparcl.Runtime                                             
+    Language.Sparcl.Base
 
   hs-source-dirs:
       src

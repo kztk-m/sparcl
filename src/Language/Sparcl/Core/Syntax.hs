@@ -76,7 +76,7 @@ instance Pretty n => Pretty (Exp n) where
 
   pprPrec k (Let ds e) = parensIf (k > 0) $
     D.align $
-     D.text "let" D.<+> D.align (D.semiBraces $ map ppr ds) D.</>
+     D.text "let" D.<+> D.align (D.semiBraces $ map (\(n,_,ne) -> ppr n <+> text "=" <+> ppr ne) ds) D.</>
      D.text "in" D.<+> pprPrec 0 e
 
   pprPrec k (Unlift e) = parensIf (k > 9) $
@@ -118,7 +118,7 @@ freeVarsP (PCon _ ps) = concatMap freeVarsP ps
 freeVarsP (PBang p)   = freeVarsP p 
 
 
-type Bind n = [ (n, Exp n) ] 
+type Bind n = [ (n, Ty, Exp n) ] 
 
 
 -- | Datatype declarations 
