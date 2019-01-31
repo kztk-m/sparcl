@@ -5,12 +5,15 @@ module Language.Sparcl.Core.Syntax (
   module Language.Sparcl.Name,
   module Language.Sparcl.Literal,
   module Language.Sparcl.SrcLoc,
-  S.Module(..), S.Import(..)
+  S.Module(..), S.Import(..),
+  DDecl(..), TDecl(..)
   ) where
 
 import Language.Sparcl.Name
 import Language.Sparcl.Literal
 import Language.Sparcl.SrcLoc 
+
+import Language.Sparcl.Typing.Type
 
 import qualified Language.Sparcl.Surface.Syntax as S
 
@@ -117,3 +120,9 @@ freeVarsP (PBang p)   = freeVarsP p
 
 type Bind n = [ (n, Exp n) ] 
 
+
+-- | Datatype declarations 
+data DDecl n = DDecl n [TyVar] [(n, [Ty])]
+
+-- | Type synonym declarations 
+data TDecl n = TDecl n [TyVar] Ty

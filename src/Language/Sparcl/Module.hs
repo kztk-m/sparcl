@@ -5,8 +5,8 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 
 
-import System.Directory as Dir (doesFileExist)
-import qualified System.FilePath as FP ((</>), (<.>))
+import System.Directory as Dir (doesFileExist, createDirectoryIfMissing)
+import qualified System.FilePath as FP ((</>), (<.>), takeDirectory)
 
 import qualified Control.Monad.State as St
 import Control.Monad.IO.Class
@@ -26,7 +26,7 @@ import Language.Sparcl.Typing.Type
 import Language.Sparcl.Typing.TC
 import Language.Sparcl.Class
 
-import Language.Sparcl.CodeGen.Haskell (toDocDec, genBind) 
+import Language.Sparcl.CodeGen.Haskell (toDocTop, targetFilePath) 
 
 import Language.Sparcl.Surface.Parsing 
 
@@ -60,7 +60,8 @@ data ModuleInfo v = ModuleInfo {
   miOpTable    :: OpTable,
   miTypeTable  :: TypeTable,
   miSynTable   :: SynTable,
-  miValueTable :: M.Map Name v 
+  miValueTable :: M.Map Name v,
+  miHsFile     :: FilePath 
   }
 
 -- for caching.
@@ -227,7 +228,8 @@ baseModuleInfo = ModuleInfo {
   miOpTable    = opTable,
   miTypeTable  = typeTable,
   miSynTable   = synTable,
-  miValueTable = valueTable
+  miValueTable = valueTable,
+  miHsFile     = "Language.Sparcl.Base"
   }
   where
     eqInt = base "eqInt"
@@ -370,12 +372,17 @@ ext :: String
 ext = "sparcl"
 
 moduleNameToFilePath :: ModuleName -> FilePath
-moduleNameToFilePath (ModuleName mo) = go (\k -> k "") mo 
+moduleNameToFilePath (ModuleName mo) = go mo 
   where
-    go fp [] = fp (FP.<.> ext)
-    go fp (c:cs)
-      | c == '.'   = fp (FP.</> go (\k -> k "") cs)
-      | otherwise  = go (\k -> fp (k . (c:))) cs 
+    go = go2' id
+    
+    go2' ds [] = ds "" FP.<.> ext 
+    go2' ds (c:cs)
+      | c == '.'  = ds "" FP.</> go2' id cs
+      | otherwise = go2' (ds . (c:)) cs  
+
+
+
     
 --  (foldr1 (FP.</>) mn) FP.<.> ext
 
@@ -447,7 +454,11 @@ exportNames ns m = do
         vcat [ppr loc,
               text "Unbound name in the export list:" <+> ppr n] 
 
-  return $ restrictNames onames (ModuleInfo (miModuleName m) nameTbl opTbl typeTbl synTbl valTbl)
+  return $ restrictNames onames $ m { miNameTable = nameTbl,
+                                      miOpTable = opTbl,
+                                      miTypeTable = typeTbl,
+                                      miSynTable = synTbl,
+                                      miValueTable = valTbl }
 
   
 
@@ -510,7 +521,7 @@ readModule fp interp = do
     debugPrint 1 $ text "Type checking ..."
     debugPrint 2 $ text "under ty env" </> pprMap tyEnv
 
-    (typedDecls, nts, newTypeTable, newSynTable) <-
+    (typedDecls, nts, dataDecls', typeDecls', newTypeTable, newSynTable) <-
       liftIO $ runTC tinfo $ inferTopDecls renamedDecls tyDecls synDecls
 
     debugPrint 1 $ text "Type checking Ok." 
@@ -520,14 +531,16 @@ readModule fp interp = do
     debugPrint 1 $ text "Desugaring Ok."
     debugPrint 2 $ text "Desugared:" <> line <> align (vcat (map ppr bind))
 
+
+    loadPath <- ask (key @KeyLoadPath)
+    let hsFile = loadPath FP.</> targetFilePath currentModule
+
+    liftIO $ do let dir = FP.takeDirectory hsFile
+                Dir.createDirectoryIfMissing True dir
+                writeFile hsFile $
+                  show $ toDocTop currentModule exports imports dataDecls' typeDecls' bind
+    
     -- for de
-    liftIO $ writeFile "./runtime/tmp.hs" $ show $
-      vcat [ text "module Sparcl.Main where",
-             text "import Language.Sparcl.Runtime",
-             text "import Language.Sparcl.Base",
-             text "data Nat = Z | S Nat",
-             text "data List a = Nil | Cons a (List a)",
-             toDocDec $ genBind bind ]
 
     valEnv <- ask (key @KeyValue)
     let newValueEnv = interp valEnv bind 
@@ -545,7 +558,8 @@ readModule fp interp = do
           miNameTable = newNameTable,
           miSynTable  = newSynTable,
           miTypeTable = foldr (uncurry M.insert) newTypeTable nts, 
-          miValueTable = M.fromList newValueEnv
+          miValueTable = M.fromList newValueEnv,
+          miHsFile     = hsFile
           }                
 
     newMod' <- case exports of

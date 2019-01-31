@@ -16,13 +16,15 @@ import Language.Sparcl.Desugar
 import Language.Sparcl.Class
 
 import Language.Sparcl.Surface.Parsing 
+import Language.Sparcl.Command
 
 import qualified System.Console.Haskeline as HL
 
 import Data.IORef 
 import qualified Control.Monad.Reader as Rd
 import Control.Monad.IO.Class 
-import Control.Monad.Trans (lift) 
+import Control.Monad.Trans (MonadTrans, lift)
+import Control.Monad (join, liftM2) 
 
 import Control.DeepSeq
 
@@ -32,69 +34,19 @@ import qualified Data.Set as S
 import Language.Sparcl.Pretty
 import qualified Text.PrettyPrint.ANSI.Leijen as D
 
-import Data.Function (on)
-import Data.List (isPrefixOf, sortBy, groupBy)
+import Data.List (isPrefixOf)
 
-import Control.Arrow (first)
 import Data.Char (isSpace)
 
 import Control.Exception (IOException, SomeException, evaluate)
+import Control.Monad.Catch
 
 import System.Directory (getCurrentDirectory, getHomeDirectory)
 import qualified System.FilePath as FP ((</>))
 
+import qualified Language.Haskell.Interpreter as Hint
 
---
-
-type CommandName = String
-type Description = D.Doc 
-data CommandSpec a
-  = NoArgCommand  CommandName  a                    Description
-  | StringCommand CommandName  (String -> a) String Description
-
-data CommandTrie a
-  = Exec   String (String -> a)
-  | Choice (M.Map Char (CommandTrie a))
-
-commandUsage :: [CommandSpec a] -> Doc
-commandUsage spec = D.align $ D.vsep $ map pprCommand spec 
-  where
-    pprCommand (NoArgCommand c _ d) =
-      D.nest 4 (D.text c D.<$> d)
-    pprCommand (StringCommand c _ a d) =
-      D.nest 4 (D.text c D.<+> D.text a D.<$> d) 
-
-parseCommand :: [CommandSpec a] -> (String -> a) -> String -> a
-parseCommand spec cont initStr = go initTrie initStr
-  where
-    initTrie = makeTrie spec
-
-    go (Exec [] f)  str = f $ dropWhile isSpace str
-    go (Exec _ f) []  = f []
-    go (Exec (r:residual) f) (c:cs) | r == c = go (Exec residual f) cs
-    go (Exec _ f) (c:cs) | isSpace c = f $ dropWhile isSpace cs
-    go (Exec _ _) _ = cont initStr 
-    go (Choice mp) (c:cs) = case M.lookup c mp of
-      Just tr -> go tr cs
-      Nothing -> cont initStr 
-    go _ _ = cont initStr
-
-makeTrie :: [CommandSpec a] -> CommandTrie a
-makeTrie spec = h (groupByFirstChar $ sortBy (compare `on` fst) $ map normalize spec)
-  where
-    groupByFirstChar = groupBy ((==) `on` head' . fst)
-      where
-        head' []    = Nothing
-        head' (x:_) = Just x 
-        
-    normalize (NoArgCommand s f _)    = (s, const f)
-    normalize (StringCommand s f _ _) = (s, f)
-
-    h [[(s,f)]] = Exec s f -- there is only one choice for the first letter. 
-    h xss = Choice $ M.fromList $
-            map (\xs@((a:_,_):_) -> (a, h (groupByFirstChar $ map (first tail) xs))) xss 
-
-------------------------
+-- import Data.Coerce 
 
 data Conf =
   Conf { confSearchPath  :: [FilePath],
@@ -110,10 +62,63 @@ data Conf =
          confValueTable  :: IORef ValueTable
        }
 
-newtype REPL a = REPL { runREPL :: Rd.ReaderT Conf (HL.InputT IO) a }
+-- To avoid orphan instances
+newtype MyInputT m a = MyInputT { runMyInputT :: HL.InputT m a }
+  deriving (Functor, Applicative, Monad, MonadIO, HL.MonadException, MonadTrans)
+
+instance HL.MonadException m => MonadThrow (MyInputT m) where
+  throwM = HL.throwIO
+
+instance HL.MonadException m => MonadCatch (MyInputT m) where
+  catch = HL.catch 
+
+-- FIXME: I am not sure the following implementation is OK or not.
+instance (HL.MonadException m) => MonadMask (MyInputT m) where
+  mask k = HL.controlIO $ \(HL.RunIO run) -> liftIO $ mask' $ \restore ->
+    run $ k (\y -> join $ liftIO $ restore $ run y)  
+    where
+      mask' = mask @IO
+
+  uninterruptibleMask k = HL.controlIO $ \(HL.RunIO run) -> liftIO $ uninterruptibleMask' $ \restore ->
+    run $ k (\y -> join $ liftIO $ restore $ run y)  
+    where
+      uninterruptibleMask' = uninterruptibleMask @IO
+
+  generalBracket before after comp =
+    HL.controlIO $ \(HL.RunIO run) -> fmap (uncurry $ liftM2 (,)) $ 
+                     generalBracket' (run before)
+                             (\ma me -> run (do { a <- ma; e <- c2c me; after a e}))
+                             (\ma -> run (ma >>= comp))
+    where
+      c2c :: forall mm b. Monad mm => ExitCase (mm b) -> mm (ExitCase b)
+      c2c (ExitCaseSuccess mb)  = do
+        b <- mb
+        return (ExitCaseSuccess b) 
+      c2c (ExitCaseException e) = return (ExitCaseException e)
+      c2c ExitCaseAbort         = return ExitCaseAbort
+      
+      generalBracket' :: IO a -> (a -> ExitCase b -> IO c) -> (a -> IO b) -> IO (b, c)
+      generalBracket' = generalBracket 
+  
+
+newtype REPL a = REPL { unREPL :: Rd.ReaderT Conf (Hint.InterpreterT (MyInputT IO)) a }
   deriving (Functor, Applicative, Monad, MonadIO,
             Rd.MonadReader Conf,
-            HL.MonadException) 
+            MonadThrow, MonadCatch, MonadMask) 
+
+instance Hint.MonadInterpreter REPL where
+  fromSession s = REPL $ lift (Hint.fromSession s)
+  modifySessionRef s f = REPL $ lift (Hint.modifySessionRef s f)
+  runGhc c = REPL $ lift (Hint.runGhc c)
+  
+
+runREPL :: HL.Settings IO -> Conf -> REPL a -> IO a
+runREPL setting conf comp = do
+  let rethrow :: (MonadThrow m, Exception e) => m (Either e a) -> m a 
+      rethrow m = m >>= either throwM return  
+  HL.runInputT setting $ runMyInputT $ rethrow $ Hint.runInterpreter $ Rd.runReaderT (unREPL $ resetModule >> comp) conf
+  
+  
 
 
 instance Has KeyLoadPath FilePath REPL where
@@ -184,90 +189,6 @@ instance Has KeyTInfo TInfo REPL where
   ask _ = Rd.asks confTInfo 
   
 
-  
--- instances HasSearchPath REPL where
---   getSearchPath = asks confSearchPath
---   localSearchPath f =
---     local $ \conf -> conf { confSearchPath = f (confSearchPath conf) } 
-
--- instance HasTInfo REPL where
---   getTInfo = asks confTyInfo 
-
--- instance HasModuleTable REPL where
---   getModuleTable = do
---     ref <- asks confModuleTable
---     liftIO $ readIORef ref
-    
--- instance ModifyModuleTable REPL where
---   modifyModuleTable f = do
---     ref <- asks confModuleTable
---     liftIO $ modifyIORef ref f 
-  
--- class HasVerbosityLevel m where
---   getVerbosityLevel :: m VerbosityLevel
---   localVerbosityLevel :: (VerbosityLevel -> VerbosityLevel) -> m r -> m r 
-
--- instance HasVerbosityLevel REPL where
---   getVerbosityLevel = asks confVerbosity
---   localVerbosityLevel f =
---     local (\conf -> conf { confVerbosity = f (confVerbosity conf) }) 
-    
-
--- getTables :: REPL Tables
--- getTables = do
---   ref <- asks confTables
---   liftIO $ readIORef ref 
-
-
--- localTables :: (Tables -> Tables) -> REPL r -> REPL r
--- localTables f m = do 
---   ref <- asks confTables
---   old <- liftIO $ readIORef ref
---   liftIO $ writeIORef ref (f old)
---   res <- m
---   liftIO $ writeIORef ref old
---   return res 
-
--- modifyTables :: (Tables -> Tables) -> REPL ()
--- modifyTables f = do
---   ref <- asks confTables
---   liftIO $ modifyIORef ref f 
-
--- instance HasDefinedNames REPL where
---   getDefinedNames = tDefinedNames <$> getTables 
---   localDefinedNames =
---     localTables . setDefinedNames
-
--- instance ModifyDefinedNames REPL where
---   modifyDefinedNames = modifyTables . setDefinedNames 
-    
--- instance HasOpTable REPL where
---   getOpTable = tOpTable <$> getTables
---   localOpTable = localTables . setOpTable
-
--- instance ModifyOpTable REPL where
---   modifyOpTable = modifyTables . setOpTable 
-
--- instance HasTypeTable REPL where
---   getTypeTable = tTypeTable <$> getTables
---   localTypeTable = localTables . setTypeTable
-
--- instance ModifyTypeTable REPL where
---   modifyTypeTable = modifyTables . setTypeTable
-
--- instance HasSynTable REPL where
---   getSynTable = tSynTable <$> getTables
---   localSynTable = localTables . setSynTable
-
--- instance ModifySynTable REPL where
---   modifySynTable = modifyTables . setSynTable 
-
--- instance HasValueTable REPL where
---   getValueTable   = tValueTable <$> getTables
---   localValueTable = localTables . setValueTable
-
--- instance ModifyValueTable REPL where
---   modifyValueTable = modifyTables . setValueTable
 
     
 -- Verbosity is not implemented yet. 
@@ -378,7 +299,10 @@ startREPL vl searchPath inputFile = do
   let comp = case inputFile of
         Just fp -> procLoad fp
         Nothing -> waitCommand
-  HL.runInputT setting $ Rd.runReaderT (runREPL $ resetModule >> comp) conf'
+  runREPL setting conf' $ do
+    -- hsSp <- Hint.get Hint.searchPath 
+    -- Hint.set [ Hint.searchPath Hint.:= hsSp ]
+    comp 
 
 commandSpec :: [CommandSpec (REPL ())]
 commandSpec = [
@@ -395,23 +319,23 @@ procHelp = do
   liftIO $ print $ commandUsage commandSpec
   waitCommand 
 
-checkError :: (HL.MonadException m, MonadIO m) => m a -> m a -> m a
+checkError :: (MonadCatch m, MonadIO m) => m a -> m a -> m a
 checkError m f =
-  m `HL.catch` (\(e :: RunTimeException) -> do
+  m `catch` (\(e :: RunTimeException) -> do
                    liftIO $ putStrLn (show e)
                    f )
-    `HL.catch` (\(e :: StaticException) -> do
+    `catch` (\(e :: StaticException) -> do
                    liftIO $ putStrLn (show e)
                    f )
-    `HL.catch` (\(e :: IOException) -> do
+    `catch` (\(e :: IOException) -> do
                   liftIO $ putStrLn (show e)
                   f)
-    `HL.catch` (\(e :: SomeException) -> do
+    `catch` (\(e :: SomeException) -> do
                    liftIO $ putStrLn "Unexpected exception is thrown." 
                    liftIO $ putStrLn (show e)
                    f) 
 
-tryExec :: (HL.MonadException m, MonadIO m) => m a -> m (Maybe a)
+tryExec :: (MonadCatch m, MonadIO m) => m a -> m (Maybe a)
 tryExec m =
   checkError (fmap Just m) (return Nothing) 
 
@@ -424,6 +348,10 @@ setModule m = do
   modify (key @KeyType)  $ M.union (miTypeTable m)
   modify (key @KeySyn)   $ M.union (miSynTable m)
   modify (key @KeyValue) $ M.union (miValueTable m) 
+
+  -- if miModuleName m == baseModule
+  --   then Hint.setImports [miHsFile m ]
+  --   else Hint.loadModules [miHsFile m]
 
   debugPrint 1 $ text "Module:" <+> ppr (miModuleName m) <+> text " has been loaded."
   debugPrint 3 $ text "  " <>
@@ -442,6 +370,8 @@ resetModule = do
   set (key @KeyType)  $ M.empty
   set (key @KeySyn)   $ M.empty
   set (key @KeyValue) $ M.empty 
+
+--  Hint.reset
   
 --  modifyTables $ const initTables
   -- ref <- ask
@@ -611,7 +541,7 @@ procExp str = do
 
 waitCommand :: REPL ()
 waitCommand = do  
-  maybeLine <- REPL $ lift $ HL.getInputLine "Sparcl> "
+  maybeLine <- REPL $ lift $ lift $ MyInputT $ HL.getInputLine "Sparcl> "
   case maybeLine of
     Nothing -> do
       liftIO $ putStrLn "Quitting..."

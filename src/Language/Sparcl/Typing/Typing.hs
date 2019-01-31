@@ -11,6 +11,8 @@ import Language.Sparcl.Pass
 import Language.Sparcl.Literal
 import Language.Sparcl.Name
 
+import qualified Language.Sparcl.Core.Syntax as C (DDecl(..), TDecl(..)) 
+
 import qualified Language.Sparcl.Surface.Syntax as S
 
 
@@ -403,12 +405,20 @@ inferTopDecls ::
   [Loc (Name, [Name], [Loc (CDecl 'Renaming)])] -> 
   [Loc (Name, [Name], LTy 'Renaming)] ->
   m (Decls 'TypeCheck (LDecl 'TypeCheck), [(Name, PolyTy)],
+     [C.DDecl Name],
+     [C.TDecl Name], 
      TypeTable, SynTable)
-inferTopDecls decls dataDecls typeDecls = do 
+inferTopDecls decls dataDecls typeDecls = do
+  let dataDecls' = [ C.DDecl n (map BoundTv ns) [ (cn, map ty2ty tys) | Loc _ (CDecl cn tys) <- cdecls ] 
+                   | Loc _ (n,ns,cdecls) <- dataDecls ]
+
+  let typeDecls' = [ C.TDecl n (map BoundTv ns) (ty2ty lty) | Loc _ (n, ns, lty) <- typeDecls ]
+  
   let synTable = M.fromList $ 
         flip map typeDecls $ \(Loc _ (n, ns, lty)) ->
                                let ty = ty2ty lty
                                in (n, (map BoundTv ns, ty))
+
         
   let typeTable = M.fromList $
         [ (n, foldr (-@) typeKi (map (const typeKi) ns)) | Loc _ (n, ns, _) <- dataDecls ]
@@ -421,7 +431,7 @@ inferTopDecls decls dataDecls typeDecls = do
   withUVars (M.toList typeTable) $
    withSyns (M.toList synTable) $ do
      (decls', nts) <- inferDecls decls
-     return (decls', nts, typeTable, synTable)
+     return (decls', nts, dataDecls', typeDecls', typeTable, synTable)
 
 checkClauseTy :: MonadTypeCheck m => Clause 'Renaming -> Ty -> m (Clause 'TypeCheck)
 checkClauseTy (Clause e ws wi) expectedTy = do

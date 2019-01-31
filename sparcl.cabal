@@ -20,6 +20,7 @@ common deps
       base >=4.7 && <5,
 --      ghc  >=8.4 && <8.8,
       hint >= 0.8 && <1,
+      exceptions >= 0.10 && <0.11, 
       mtl,
       containers, 
       directory, 
@@ -73,6 +74,7 @@ library
       Language.Sparcl.Eval
       Language.Sparcl.Class
       Language.Sparcl.Module
+      Language.Sparcl.Command 
       Language.Sparcl.REPL
       Language.Sparcl.CodeGen.Haskell
 
@@ -94,7 +96,8 @@ executable sparcl-exe
       app
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
   build-depends:
-    sparcl
+    sparcl,
+    sparcl-runtime
 
 test-suite sparcl-test
   import: deps 

@@ -140,6 +140,9 @@ checkNameTuple :: Name -> Maybe Int
 checkNameTuple (Original _ (System (NTuple m)) _) = Just m
 checkNameTuple _                                  = Nothing 
 
+checkNameTyTuple :: Name -> Maybe Int
+checkNameTyTuple = checkNameTuple 
+
 nameUnit :: Name
 nameUnit = nameTuple 0 
 
