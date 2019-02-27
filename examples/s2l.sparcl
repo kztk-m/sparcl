@@ -33,7 +33,7 @@ def dec = (\!x -> x) $ lift !(\!x -> x - 1) !(\!x -> x + 1)
 
 sig flipsub : Int -> rev Int -o rev Int 
 def flipsub !n r = 
-   case eqInt n 0 of 
+   case eqInt !n !0 of 
    | True  -> r 
    | False -> flipsub !(n-1) (dec r)
    end 

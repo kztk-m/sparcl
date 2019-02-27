@@ -149,7 +149,7 @@ evalCaseF env hp f0 alts = do
   go v0 [] alts
   where
     go :: Value -> [Value -> Eval Bool] -> [ (Pat Name, Exp Name, Value -> Eval Bool) ] -> Eval Value
-    go _  _       [] = rtError $ text "pattern match failure (fwd)"
+    go v0  _       [] = rtError $ text $ "pattern match failure (fwd): " ++ prettyShow v0
     go v0 checker ((p,e,ch) : pes) =
       case findMatch v0 p of
         Nothing -> do

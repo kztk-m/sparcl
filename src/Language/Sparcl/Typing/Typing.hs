@@ -563,12 +563,12 @@ checkPatsTy (p:ps) (t:ts) = do
 checkPatsTy _ _ = error "checkPatsTy: Cannot happen."
 
 checkPatTy :: MonadTypeCheck m => LPat 'Renaming -> MonoTy -> m (LPat 'TypeCheck, [(Name, MonoTy)], [(Name,MonoTy)] )
-checkPatTy = checkPatTyWork False
+checkPatTy = checkPatTyWork False False
 
 checkPatTyWork ::
   MonadTypeCheck m =>
-  Bool -> LPat 'Renaming -> MonoTy -> m (LPat 'TypeCheck, [(Name, MonoTy)], [(Name, MonoTy)])
-checkPatTyWork flg (Loc loc pat) expectedTy = do
+  Bool -> Bool -> LPat 'Renaming -> MonoTy -> m (LPat 'TypeCheck, [(Name, MonoTy)], [(Name, MonoTy)])
+checkPatTyWork isUnderRev isUnderBang (Loc loc pat) expectedTy = do
   (pat', ubind, lbind) <- go pat
   return (Loc loc pat', ubind, lbind)
     where
@@ -577,7 +577,7 @@ checkPatTyWork flg (Loc loc pat) expectedTy = do
         
       go (PBang p) = do
         ty <- ensureBangTy loc expectedTy
-        (p', ubind, lbind) <- checkPatTyWork flg p ty
+        (p', ubind, lbind) <- checkPatTyWork isUnderRev True p ty
         return (PBang p', ubind ++ lbind, [])
         
       go (PCon c ps) = do
@@ -596,23 +596,27 @@ checkPatTyWork flg (Loc loc pat) expectedTy = do
        where
          inferApp (ps', ty, ubind, lbind) p = do 
            (argTy, resTy) <- ensureFunTy (location p) ty
-           (p', ubind', lbind') <- checkPatTyWork flg p argTy 
+           (p', ubind', lbind') <- checkPatTyWork isUnderRev isUnderBang p argTy 
            return (p':ps', resTy, ubind'++ubind, lbind' ++ lbind)
 
       go (PREV p)
-        | flg = atLoc loc $ typeError $ Other $ text "rev patterns cannot be nested."
+        | isUnderRev = atLoc loc $ typeError $ Other $ text "rev patterns cannot be nested."
         | otherwise = do
             ty <- ensureRevTy loc expectedTy
-            (p', ubind, lbind) <- checkPatTyWork True p ty
+            (p', ubind, lbind) <- checkPatTyWork True isUnderBang p ty
             when (not $ null ubind) $
               atLoc loc $ typeError $ Other $ text "rev patterns cannot contain !."
             let ubind' = map (\(x, t) -> (x, revTy t)) ubind
             let lbind' = map (\(x, t) -> (x, revTy t)) lbind
             return (PREV p', ubind', lbind')
 
-      go (PWild x) = do 
-        (PBang (Loc _ (PVar x')), ubind, lbind) <- go (PBang (noLoc $ PVar x))
-        return (PWild x', ubind, lbind) 
+      go (PWild x)
+        | isUnderBang = do
+            (PVar x', ubind, lbind) <- go (PVar x)
+            return (PWild x', ubind, lbind)
+        | otherwise = do 
+            (PBang (Loc _ (PVar x')), ubind, lbind) <- go (PBang (noLoc $ PVar x))
+            return (PWild x', ubind, lbind) 
         
 --   where
 --      go (PVar x) expectedTy = return ([], [(BName x,expectedTy)])

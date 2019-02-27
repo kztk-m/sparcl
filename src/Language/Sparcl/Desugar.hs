@@ -24,7 +24,7 @@ import qualified Language.Sparcl.Typing.Type as T
 import Language.Sparcl.Pass
 
 -- import Language.Sparcl.Pretty hiding ((<$>))
--- import Debug.Trace
+import Debug.Trace
 
 
 -- Desugaring may refer to types, so it will use type checking monad. 
@@ -258,26 +258,26 @@ data CPat = CPHole
           | CPVar  Name
           | CPCon  Name [ CPat ]
           | CPBang CPat
-          deriving Eq 
+          deriving (Eq , Show)
 
 separatePat :: S.LPat 'TypeCheck -> (CPat, [S.LPat 'TypeCheck])
-separatePat pat = go (unLoc pat) 
+separatePat pat = go False (unLoc pat) 
   where
-    go (S.PVar (x, _ty)) = (CPVar x, [])
-    go (S.PCon (c, _ty) ps) =
-      let (ps', subs) = gos ps
+    go _ (S.PVar (x, _ty)) = (CPVar x, [])
+    go b (S.PCon (c, _ty) ps) =
+      let (ps', subs) = gos b ps
       in (CPCon c ps', subs) 
       
-    go (S.PREV p)  = (CPHole, [p])
-    go (S.PWild (x, _ty)) = (CPBang (CPVar x), [])
-    go (S.PBang p) =
-      let (p', subs) = go (unLoc p)
+    go _ (S.PREV p)  = (CPHole, [p])
+    go b (S.PWild (x, _ty)) = (if b then CPVar x else CPBang (CPVar x), [])
+    go _ (S.PBang p) =
+      let (p', subs) = go True (unLoc p)
       in (CPBang p', subs)
 
-    gos []       = ([], []) 
-    gos (p:ps) =
-      let (p', subsP) = go (unLoc p)
-          (ps', subsPs) = gos ps
+    gos _ []       = ([], []) 
+    gos b (p:ps) =
+      let (p', subsP) = go b (unLoc p)
+          (ps', subsPs) = gos b ps
       in (p':ps', subsP ++ subsPs) 
 
 fillCPat :: CPat -> [C.Pat Name] -> C.Pat Name
@@ -318,7 +318,7 @@ desugarAlts alts = do
                       let (cp, subs) = separatePat p
                       in (cp, subs, c)) alts
   -- grouping alts that have the same unidir patterns.
-  let altss = groupBy ((==) `on` (\(cp,_,_) -> cp)) alts'
+  let altss = trace ("> " ++ show [ cp | (cp, _, _) <- alts']) $ groupBy ((==) `on` (\(cp,_,_) -> cp)) alts'
   mapM makeBCases altss
   where
     makeBCases :: [ (CPat, [S.LPat 'TypeCheck], S.Clause 'TypeCheck) ] -> m (C.Pat Name, C.Exp Name)

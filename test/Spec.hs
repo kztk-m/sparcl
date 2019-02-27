@@ -10,12 +10,15 @@ import Language.Sparcl.TH
 
 
 -- [sparcl| def f = 1 |]
-[sparclf|./examples/t1.sparcl|]
-[sparclf|./examples/s2l.sparcl|]
+-- [sparclf|./examples/t1.sparcl|]
+-- [sparclf|./examples/s2l.sparcl|]
 
+[sparclf|./examples/pi.sparcl|]
+
+  
  
-deriving instance Show(Nat)
- 
+deriving instance Show a => Show(List a)
+deriving instance Show(Tree)
+
 main :: IO ()
-main =
-  print q0 
+main = print () 

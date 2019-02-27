@@ -4,6 +4,7 @@ module Language.Sparcl.Module where
 import qualified Data.Map as M
 import qualified Data.Set as S
 
+import Data.Function (on) 
 
 import System.Directory as Dir (doesFileExist, createDirectoryIfMissing)
 import qualified System.FilePath as FP ((</>), (<.>), takeDirectory)
@@ -238,7 +239,10 @@ baseModuleInfo = ModuleInfo {
     eqChar = base "eqChar"
     leChar = base "leChar"
     ltChar = base "ltChar"
- 
+
+    unBang (VBang v) = v
+    unBang _         = rtError $ text "Not a bang"
+  
     unInt  (VLit (LitInt n)) = n
     unInt  _                 = rtError $ text "Not an integer"
     unChar (VLit (LitChar n)) = n
@@ -250,12 +254,12 @@ baseModuleInfo = ModuleInfo {
           base "+" |-> intTy -@ (intTy -@ intTy),
           base "-" |-> intTy -@ (intTy -@ intTy),
           base "*" |-> intTy -@ (intTy -@ intTy),
-          eqInt  |-> intTy -@ intTy -@ boolTy,
-          leInt  |-> intTy -@ intTy -@ boolTy,
-          ltInt  |-> intTy -@ intTy -@ boolTy,
-          eqChar |-> charTy -@ charTy -@ boolTy,
-          leChar |-> charTy -@ charTy -@ boolTy,
-          ltChar |-> charTy -@ charTy -@ boolTy,
+          eqInt  |-> bangTy intTy -@ bangTy intTy -@ boolTy,
+          leInt  |-> bangTy intTy -@ bangTy intTy -@ boolTy,
+          ltInt  |-> bangTy intTy -@ bangTy intTy -@ boolTy,
+          eqChar |-> bangTy charTy -@ bangTy charTy -@ boolTy,
+          leChar |-> bangTy charTy -@ bangTy charTy -@ boolTy,
+          ltChar |-> bangTy charTy -@ bangTy charTy -@ boolTy,
 
           nameTyInt  |-> typeKi,
           nameTyBool |-> typeKi,
@@ -274,12 +278,12 @@ baseModuleInfo = ModuleInfo {
           base "+" |-> intOp (+),
           base "-" |-> intOp (-),
           base "*" |-> intOp (*),
-          eqInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool (unInt n == unInt m)),
-          leInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool (unInt n <= unInt m)),
-          ltInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool (unInt n <  unInt m)),
-          eqChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool (unChar c == unChar d)),
-          leChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool (unChar c <= unChar d)),
-          ltChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool (unChar c <  unChar d))
+          eqInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool $ ((==) `on` (unInt . unBang)) n m),
+          leInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool $ ((<=) `on` (unInt . unBang)) n m),
+          ltInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool $ ((<)  `on` (unInt . unBang)) n m),
+          eqChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool $ ((==) `on` (unChar . unBang)) c d),
+          leChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool $ ((<=) `on` (unChar . unBang)) c d),
+          ltChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool $ ((<)  `on` (unChar . unBang)) c d)
           ]
 
     names = M.keys typeTable

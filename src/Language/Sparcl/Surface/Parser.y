@@ -202,6 +202,7 @@ SimpleExp :: { Loc ExpP }
 
 TupleExp :: { Loc ExpP }
   : "(" sepBy(Exp, ",") ")" { expandLoc $1 $ expandLoc $3 $ mkTupleExp $2 }
+  | "rev" "(" sepBy(Exp, ",") ")" { expandLoc $1 $ expandLoc $4 $  mkTupleExpR $3 }
 
 Literal :: { Loc Literal }
   : int  { fmap (LitInt . intTk) $1 }

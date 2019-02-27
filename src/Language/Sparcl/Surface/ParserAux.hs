@@ -96,6 +96,11 @@ mkTupleExp :: [LExpP] -> LExpP
 mkTupleExp [e] = Loc (location e) $ Parens e
 mkTupleExp es =
   foldl lapp (noLoc $ Con $ BuiltIn $ nameTuple (length es)) es
+
+mkTupleExpR :: [LExpP] -> LExpP
+mkTupleExpR [e] = Loc (location e) $ Parens e
+mkTupleExpR es =
+  foldl lapp (noLoc $ RCon $ BuiltIn $ nameTuple (length es)) es
   
 mkTuplePat :: [LPatP] -> LPatP
 mkTuplePat [p] = p
