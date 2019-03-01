@@ -8,6 +8,7 @@ Important Difference from the Paper
 * The syntax for the case expression is different (see `./examples` folder)
 * Since rational numbers are not supported, we have not implemented the arithmetic coding
 
+
 How to Use
 ----------
 
@@ -47,7 +48,8 @@ We have the following examples under `./examples` in this distribution.
   * t1.sparcl
   * s2l.sparcl
   * pi.sparcl 
-  
+  * huff.sparcl 
+
 Seeing `./examples/t1.sparcl` would be useful for knowing sparcl.
 
 Known Bugs 
