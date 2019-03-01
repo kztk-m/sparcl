@@ -1,0 +1,71 @@
+type Symbol = Char
+data Huff = Lf Symbol | Br Huff Huff
+
+data Bit = Z | O 
+data List a = Nil | Cons a (List a) 
+
+def lift' f g = (\!h -> h) (lift f g) 
+
+sig const : forall a. !(!a -o !a -o Bool) -o !a -o rev a 
+def const !eq !c = lift' !(\_ -> c) !(\!c' -> case eq !c !c' of True -> () end) (rev ())
+
+sig invert : forall a b. !(rev a -o rev b) -o rev b -o rev a 
+def invert h = 
+   case unlift h of 
+   | (!f, !g) -> lift' !g !f 
+   end
+
+sig decR : !Huff -o rev (List Bit) -o rev (Symbol, List Bit)
+def decR !(Lf s)   ys = rev (const !eqChar !s, ys) 
+       | !(Br l r) ys = case ys of 
+         | rev (Cons Z ys') -> decR !l ys' with !(\!(s, _) ->  member !s !l)
+         | rev (Cons O ys') -> decR !r ys' 
+         end 
+
+sig encR : !Huff -o rev Symbol -o rev (List Bit) -o rev (List Bit) 
+def encR !h s ys = invert !(decR !h) (rev (s, ys))
+
+sig member : !Symbol -o !Huff -o Bool 
+def member !s !(Lf s')  = eqChar !s !s' 
+         | !s !(Br l r) = 
+           case member !s !l of 
+           | True  -> True 
+           | False -> member !s !r
+           end 
+
+-- This dummy function always returns the same huffman tree. We could 
+-- implement usual construction of Huffman tree but this function is entirely 
+-- unidirectional. 
+
+sig makeHuff : !(List Symbol) -o Huff
+def makeHuff _ = Br (Lf 'a') (Br (Lf 'b') (Br (Lf 'c') (Lf 'd')))
+
+sig huffCompress : rev (List Symbol) -o rev (Huff, List Bit)
+def huffCompress s = case pin s (\!s' -> const !eqHuff !(makeHuff !s')) of 
+         | rev (s, h) -> pin h (\h' -> encode h' s)
+         end
+
+sig encode : !Huff -o rev (List Symbol) -o rev (List Bit)
+def encode !h (rev Nil)       = rev Nil with !null
+         | !h (rev Cons s ss) = encR !h s (encode !h ss) 
+
+
+sig null : forall a. !(List a) -o Bool 
+def null !Nil = True
+      |    _  = False 
+
+
+sig eqHuff : !Huff -o !Huff -o Bool 
+def eqHuff !(Lf s) !(Lf s') = eqChar !s !s' 
+        |  !(Br l r) !(Br l' r') =
+          case eqHuff !l !l' of
+          | True  -> eqHuff !r !r' 
+          | False -> False 
+          end
+        |  _         _ = False 
+
+def fwd h = case unlift h of 
+            | (!x, !y) -> x 
+            end 
+
+def t0 = fwd !huffCompress !(Cons 'a' (Cons 'a' (Cons 'b' (Cons 'a' (Cons 'c' (Cons 'a' (Cons 'b' (Cons 'd' (Cons 'a' (Cons 'a' Nil))))))))))

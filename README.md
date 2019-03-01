@@ -1,6 +1,13 @@
 Sparcl: A Language for Partially-Invertible Computation
 =======================================================
 
+Important Difference from the Paper
+-----------------------------------
+
+* Instead of `R`, we use `rev`
+* The syntax for the case expression is different (see `./examples` folder)
+* Since rational numbers are not supported, we have not implemented the arithmetic coding
+
 How to Use
 ----------
 
@@ -42,7 +49,6 @@ We have the following examples under `./examples` in this distribution.
   * pi.sparcl 
   
 Seeing `./examples/t1.sparcl` would be useful for knowing sparcl.
-
 
 Known Bugs 
 ----------
