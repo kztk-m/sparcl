@@ -1,8 +1,5 @@
-Note
-====
-
-Sugared Syntax
---------------
+Syntactic Sugars
+================
 
 The language is not indentation sensitive, as being indentation
 sensitive complicates parsing process and makes it hard-wired to
@@ -35,7 +32,7 @@ Every nonempty combination of letters and symbols are identifiers. Some combinat
 like `!` has the special meaning. 
 -->
 
-### Desugaring of Patterns in Rules
+## Desugaring of Patterns in Rules
 
 As Haskell, the language supports Haskell-like patterns. 
 
@@ -59,6 +56,42 @@ let f x1 x2 ... xn = case (x1,...,xn) of
 ```
 
 This means that `ei` must come up with `with` clause if one of `Pij` contains `rev`.
+
+## [Planned] Syntactic Sugar for `pin`
+
+The `pin` operator is typically used in the form of:
+
+```
+let R (a, b) = pin ea (\a -> ...)  
+in ... 
+```
+
+We propose a syntax 
+
+```
+let defer x1 = e1
+          x2 = e2
+          ...
+          xn = en 
+in e          
+```
+
+which will be desugared into
+
+```
+let R (x1, (x2, ..., (x{n-1},xn)) ...) =
+   pin e1 (\x1 -> 
+    pin e2 (\x2 -> 
+     ... 
+     pin e{n-1} (\x{n-1} -> en
+    ))
+in e 
+```
+
+The idea is the values of `x1`,.., `x{n-1}` are exposed in the `let`-body (`e2`,..,`en`).
+
+
+
 
 
 

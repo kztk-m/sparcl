@@ -13,6 +13,8 @@ import Language.Sparcl.Pretty as D
 import Language.Sparcl.Name
 import Language.Sparcl.Literal
 import Language.Sparcl.Pass
+import Language.Sparcl.Multiplicity 
+
 import qualified Language.Sparcl.Typing.Type as Typing 
 
 import Data.Kind 
@@ -28,21 +30,39 @@ import Data.Void
 
 type LTy p = Loc (Ty p) -- located types (not linear) 
 
+{-
+The following would be a bit generous definition, but
+we want to allow types that are parameterized by multiplicity. 
+-}
+
 data Ty p
   = TVar    (XTId p)
   | TCon    (XTId p) [LTy p]
   | TForall (XTId p) (LTy p)
+  | TQual   [TConstraint p] (LTy p) 
+  | TMult   Multiplicity
+
+-- TODO: Maybe, we should add Eq or Ord later. 
+data TConstraint p = MSub   (LTy p) (LTy p)          -- p ≦ q
+                   | MEqMax (LTy p) (LTy p) (LTy p) -- p = max q r 
 
 type family XTId (p :: Pass) where
   XTId 'Parsing = SurfaceName
   XTId _        = Name 
 
+instance AllPretty p => Pretty (TConstraint p) where
+  ppr (MSub p1 p2)      = ppr p1 <+> text "<=" <+> ppr p2
+  ppr (MEqMax p1 p2 p3) = ppr p1 <+> text "~" <+> ppr p2 <+> text "*" <+> ppr p3 
+
 instance AllPretty p => Pretty (Ty p) where
   pprPrec _ (TVar n) = ppr n
   pprPrec k (TCon c ts) = parensIf (k > 0) $
     ppr c D.<+> (D.hsep $ map (pprPrec 1) ts)
+  pprPrec k (TQual cs t) = parensIf (k > 0) $ 
+    parens (hsep $ D.punctuate comma $ map ppr cs) D.<+> D.text "=>" D.<+> pprPrec 0 t 
   pprPrec k (TForall n t) = parensIf (k > 0) $
     D.text "forall" D.<+> ppr n D.<+> pprPrec 0 t
+  pprPrec _ (TMult m) = ppr m
 
 instance AllPretty p => Pretty (Loc (Ty p)) where
   pprPrec k = pprPrec k . unLoc 

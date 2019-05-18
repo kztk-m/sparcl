@@ -19,7 +19,7 @@ import Language.Sparcl.Name
 
 import qualified Language.Sparcl.Core.Syntax as C
 -- import Language.Sparcl.Typing.Type 
-import Language.Sparcl.Typing.TC
+import Language.Sparcl.Typing.TCMonad
 import qualified Language.Sparcl.Typing.Type as T 
 import Language.Sparcl.Pass
 

@@ -389,7 +389,7 @@ genTyVar _           = error "Cannot happen."
 
 genTy :: MiniHaskellType n t => Ty -> t
 genTy (TyCon c tys)
-  | c == nameTyLArr, [t1,t2] <- tys =
+  | c == nameTyArr, [_,t1,t2] <- tys =
       tyfun (genTy t1) (tycon (rtName "R") [genTy t2])
   | c == nameTyList, [t1] <- tys =
       tylist (genTy t1)
@@ -409,12 +409,12 @@ genTy (TyCon c tys)
       tycon (hsName "Prelude.Bool") []
   | otherwise =
       tycon (fromName c) $ map genTy tys 
-genTy (TyForAll tvs ty) =
+genTy (TyForAll tvs (TyQual _ ty)) =
   tyforall (map genTyVar tvs) (genTy ty)
 genTy (TyVar tv) = tyvar (genTyVar tv) 
 genTy (TySyn ty _) = genTy ty
 genTy (TyMetaV _)  = error "Cannot happen." 
-          
+genTy (TyMult _)   = error "Cannot happen."           
             
 
 type Gen = StateT Int 

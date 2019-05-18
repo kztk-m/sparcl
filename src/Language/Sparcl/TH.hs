@@ -6,7 +6,7 @@ import Language.Sparcl.CodeGen.Haskell as Gen
 import Language.Sparcl.Core.Syntax as C
 import Language.Sparcl.Pretty hiding ((<$>))
 -- import Language.Sparcl.Typing.Type as C
-import Language.Sparcl.Typing.TC 
+import Language.Sparcl.Typing.TCMonad
 -- import Language.Sparcl.Literal
 
 import Language.Sparcl.Surface.Parsing (parseDecl)
@@ -66,6 +66,7 @@ instance MiniHaskellExp TH.Q HName TH.Pat TH.Exp TH.Dec TH.Stmt TH.Type where
       l2l (LitChar c) = TH.CharL c
       l2l (LitDouble d) = TH.DoublePrimL (realToFrac d)
       l2l (LitInt i)    = TH.IntegerL (fromIntegral i)
+      l2l (LitRational r) = TH.RationalL r 
       
   app e1 e2 = return $ TH.AppE e1 e2
   abs x e = return $ TH.LamE [TH.VarP $ hLhsName x] e
@@ -179,11 +180,11 @@ parseToQDec str = do
   (renamedDecls, dataDecls, synDecls, _newNames, _newOpTable) <-
       liftIO $ either nameError return $ runRenaming nameTable opTable $ renameTopDecls currentModule decls
 
-  tinfo <- liftIO initTInfo
-  liftIO $ setEnvs tinfo (miTypeTable baseModuleInfo) (miSynTable baseModuleInfo)
+  tinfo <- liftIO initTypingContext
+  -- liftIO $ setEnvs tinfo (miTypeTable baseModuleInfo) (miSynTable baseModuleInfo)
 
   (typedDecls, _nts, dataDecls', typeDecls', _newTypeTable, _newSynTable) <-
-      liftIO $ runTC tinfo $ inferTopDecls renamedDecls dataDecls synDecls
+      liftIO $ runTCWith tinfo (miTypeTable baseModuleInfo) (miSynTable baseModuleInfo) $ inferTopDecls renamedDecls dataDecls synDecls
 
   desugarred <- liftIO $ runTC tinfo $ runDesugar $ desugarTopDecls typedDecls
 

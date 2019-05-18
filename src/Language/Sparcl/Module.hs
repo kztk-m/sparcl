@@ -24,7 +24,7 @@ import Language.Sparcl.Value
 import Language.Sparcl.Exception 
 import Language.Sparcl.Typing.Typing
 import Language.Sparcl.Typing.Type
-import Language.Sparcl.Typing.TC
+import Language.Sparcl.Typing.TCMonad
 import Language.Sparcl.Class
 
 import Language.Sparcl.CodeGen.Haskell (toDocTop, targetFilePath) 
@@ -39,14 +39,14 @@ data KeyType
 data KeySyn
 data KeySearchPath
 data KeyValue
-data KeyTInfo 
+data KeyTC
 data KeyVerb
 data KeyLoadPath 
 
 type MonadModule v m =
   (MonadIO m,
    Has   KeyLoadPath   FilePath m, 
-   Has   KeyTInfo      TInfo m,
+   Has   KeyTC         TypingContext m,
    Has   KeyVerb       Int   m, 
    Local KeyName       NameTable m, 
    Local KeyOp         OpTable   m,
@@ -517,16 +517,15 @@ readModule fp interp = do
 
     debugPrint 1 $ text "Renaming Ok."
 
-    tinfo  <- ask (key @KeyTInfo)
+    tinfo  <- ask (key @KeyTC)
     tyEnv  <- ask (key @KeyType)
     synEnv <- ask (key @KeySyn)
-    liftIO $ setEnvs tinfo tyEnv synEnv
 
     debugPrint 1 $ text "Type checking ..."
     debugPrint 2 $ text "under ty env" </> pprMap tyEnv
 
     (typedDecls, nts, dataDecls', typeDecls', newTypeTable, newSynTable) <-
-      liftIO $ runTC tinfo $ inferTopDecls renamedDecls tyDecls synDecls
+      liftIO $ runTCWith tinfo tyEnv synEnv $ inferTopDecls renamedDecls tyDecls synDecls
 
     debugPrint 1 $ text "Type checking Ok." 
     debugPrint 1 $ text "Desugaring ..."

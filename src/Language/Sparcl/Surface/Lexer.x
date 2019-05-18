@@ -34,7 +34,9 @@ $symbol = [\= \+ \- \* \/ \^ \< \> \$ \| \& \? \: \# \@ \! \.]
 
 @lam = "\" | [\955] -- lambda 
 -- \"
-
+@sharp = "#"
+@omega = \969 -- ω
+  
 @rarr = "->" | \8594 -- ->
 
 @lolli = "-o" | \8888               
@@ -117,6 +119,8 @@ tokens :-
   @rarr  { theTok Trarrow }
   @lolli { theTok Tlollipop }
   @forall { theTok Tforall }
+  @sharp  { theTok Tsharp }
+  @omega  { theTok Tomega } 
   
   @varId     { tok $ Tvarid . mkBName }
   @conId     { tok $ Tconid . mkBName }
@@ -187,6 +191,8 @@ data Token
   | Tequal
   | Tlollipop  
   | Trarrow 
+  | Tsharp
+  | Tomega 
 
   -- parens 
   | Tlparen

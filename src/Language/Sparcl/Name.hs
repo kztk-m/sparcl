@@ -16,14 +16,14 @@ instance Pretty NameBase where
   ppr (User n)   = text n
   ppr (System s) = ppr s  
 
-data SystemName = NTuple Int | NLinearArrow | NBang | NRev 
+data SystemName = NTuple Int | NArrow | NBang | NRev 
   deriving (Eq, Ord, Show)
 
 instance Pretty SystemName where
-  ppr (NTuple n)   = text "<Tup" <+> int n <> text ">"
-  ppr NLinearArrow = text "-o"
-  ppr NBang        = text "!"
-  ppr NRev         = text "rev"
+  ppr (NTuple n) = text "<Tup" <+> int n <> text ">"
+  ppr NArrow     = text "->" -- NB: ternaly (Multiplicity -> Type -> Type -> Type) instead of binary 
+  ppr NBang      = text "!"  -- TODO: will be removed 
+  ppr NRev       = text "rev"
 
 
 data SurfaceName
@@ -167,11 +167,20 @@ nameTyChar = nameInBase (User "Char")
 nameTyBool :: Name
 nameTyBool = nameInBase (User "Bool") 
 
+nameTyRational :: Name
+nameTyRational = nameInBase (User "Rational")
+
 nameTyList :: Name
 nameTyList = nameInBase (User "List")
 
-nameTyLArr :: Name
-nameTyLArr = nameInBase (System NLinearArrow) 
+-- nameTyLArr :: Name
+-- nameTyLArr = nameInBase (System NLinearArrow) 
+
+nameTyArr :: Name
+nameTyArr = nameInBase (System NArrow) 
 
 nameKindType :: Name
 nameKindType = nameInBase (User "Type") 
+
+nameKindMultiplicity :: Name
+nameKindMultiplicity = nameInBase (User "Multiplicity")

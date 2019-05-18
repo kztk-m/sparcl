@@ -10,7 +10,7 @@ import Language.Sparcl.SrcLoc
 import Language.Sparcl.Name
 import Language.Sparcl.Literal
 import Language.Sparcl.Pass
-
+import Language.Sparcl.Multiplicity 
 
 }
 
@@ -39,6 +39,8 @@ import Language.Sparcl.Pass
   "->" { Loc _ Trarrow }
   "."  { Loc _ Tdot }
   "forall" { Loc _ Tforall }
+  "#"  { Loc _ Tsharp }
+  "ω" { Loc _ Tomega } 
 
   "-o" { Loc _ Tlollipop }
 
@@ -75,10 +77,15 @@ import Language.Sparcl.Pass
   "module" { Loc _ Tmodule } 
   "import" { Loc _ Timport } 
 
+  -- {- a trick to allow 1/One/Omega/Many in the context where multiplicity is expected -}
+  -- "1"     { Loc _ (Tintlit 1) } 
+  -- "One"   { Loc _ (Tconid (User "One"))   }
+  -- "Many"  { Loc _ (Tconid (User "Many"))  }
+  -- "Omega" { Loc _ (Tconid (User "Omega")) } 
 
-  {- a trick to allow "left" and "right" to occur as usual variables -}
-  "left"   { Loc _ (Tvarid (User "left")) }
-  "right"  { Loc _ (Tvarid (User "right")) } 
+  -- {- a trick to allow "left" and "right" to occur as usual variables -}
+  -- "left"   { Loc _ (Tvarid (User "left")) }
+  -- "right"  { Loc _ (Tvarid (User "right")) } 
 
   op     { Loc _ (Top _) }
   qop    { Loc _ (Tqop _ _) }
@@ -118,14 +125,30 @@ ModuleName :: { ModuleName }
   
 Ty :: { Loc TyP }
   : "forall" sequence(VarName) "." Ty { foldr (\n r -> Loc (location n <> location r) $ TForall (unLoc n) r) $4 $2 }
-  | AppTy "->" Ty  { Loc (location $1 <> location $3) $ TCon (BuiltIn nameTyLArr) [Loc (location $1) (TCon (BuiltIn nameTyBang) [$1]), $3] }
-  | AppTy "-o" Ty  { Loc (location $1 <> location $3) $ TCon (BuiltIn nameTyLArr) [$1, $3] } 
+  | AppTy "->" Ty  { Loc (location $1 <> location $3) $ TCon (BuiltIn nameTyArr) [noLoc $ TMult Omega, $1, $3] }
+  | AppTy "-o" Ty  { Loc (location $1 <> location $3) $ TCon (BuiltIn nameTyArr) [noLoc $ TMult One,   $1, $3] }
+  | AppTy "#" Multiplicity "->" Ty { Loc (location $1 <> location $3) $ TCon (BuiltIn nameTyArr) [$3, $1, $5] } 
   | AppTy          { $1 }
+
+Multiplicity :: { Loc TyP }
+  : VarName { fmap TVar $1 }
+  | MConst  { fmap TMult $1 }
+
+MConst :: { Loc Multiplicity }
+  : int     {% case intTk (unLoc $1) of { 1 -> return $ Loc (location $1) One; n -> lexError $ show n ++ " is not a valid multiplicity" }}
+  | "ω"    { Loc (location $1) Omega }
+  | conid {% case unLoc $1 of
+                 Tconid (User "One")   -> return $ Loc (location $1) One
+                 Tconid (User "Many")  -> return $ Loc (location $1) Omega
+                 Tconid (User "Omega") -> return $ Loc (location $1) Omega
+                 Tconid c              -> lexError $ show c ++ " is not a valid multiplicity"}
+                 
 
 AppTy :: { Loc TyP }
   : ConQName nonEmptySequence(SimpleTy) { Loc (location $1 <> mconcat (map location $2)) $ TCon (unLoc $1) $2 }
   | "rev" SimpleTy { Loc (location $1 <> location $2) $
                      TCon (BuiltIn nameTyRev) [$2] }
+  -- TODO: to be removed 
   | "!"   SimpleTy { Loc (location $1 <> location $2) $
                      TCon (BuiltIn nameTyBang) [$2] }
   | SimpleTy { $1 }
@@ -154,8 +177,10 @@ CDecl :: { Loc CDeclP }
     { Loc (location $1 <> mconcat (map location $2)) $ CDecl (unLoc $1) $2 } 
   
 Assoc :: { Loc Assoc }
-  : "left"  { L <$ $1 }
-  | "right" { R <$ $1 }
+  : varid {% case unLoc $1 of
+                Tvarid (User "left")  -> return $ L <$ $1
+                Tvarid (User "right") -> return $ R <$ $1
+                _                     -> lexError $ "associativity must be `left' or `right'" }
   |         { noLoc N } 
 
 LocalDecls :: { DeclsP LDeclP }
@@ -196,7 +221,8 @@ SimpleExp :: { Loc ExpP }
   | "lift"         { Loc (location $1) $ Lift }
   | "unlift"       { Loc (location $1) $ Unlift }
   | "pin"          { Loc (location $1) $ RPin }
-  | Literal        { fmap Lit $1 } 
+  | Literal        { fmap Lit $1 }
+  -- TODO: to be removed 
   | "!" SimpleExp  { expandLoc $1 $ Loc (location $2) (Bang $2) }
   | TupleExp       { $1 }
 

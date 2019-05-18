@@ -450,6 +450,22 @@ renameTy level localnames lty = go level localnames lty (\lty' _ _ -> return lty
       let x'  = Alpha lv bn
       let nm' = M.insert bn x' nm
       go (lv+1) nm' t $ \t' lv'' nm'' -> k (TForall x' t') lv'' nm'' 
+
+    go' lv nm _loc (TMult m) k = k (TMult m) lv nm
+    go' lv nm _loc (TQual cs t) k =
+      goCs lv nm cs $ \cs' lv' nm' ->
+        go lv' nm' t $ \t' lv'' nm'' -> k (TQual cs' t') lv'' nm''
+
+    goCs lv nm [] k = k [] lv nm
+    goCs lv nm (c:cs) k =
+      goC lv nm c $ \c' lv' nm' ->
+        goCs lv' nm' cs $ \cs' lv'' nm'' -> k (c':cs') lv'' nm''
+
+    goC lv nm (MSub t1 t2) k =
+      gos lv nm [t1,t2] $ \[t1',t2'] lv' nm' -> k (MSub t1' t2') lv' nm'
+
+    goC lv nm (MEqMax t1 t2 t3) k =
+      gos lv nm [t1,t2,t3] $ \[t1',t2',t3'] lv' nm' -> k (MEqMax t1' t2' t3') lv' nm' 
         
 
 renamePats :: Int -> LocalNames -> BoundVars -> [LPat 'Parsing] 

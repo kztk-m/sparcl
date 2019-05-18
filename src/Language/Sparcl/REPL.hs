@@ -7,7 +7,7 @@ import Language.Sparcl.Eval
 import Language.Sparcl.Value
 import Language.Sparcl.Exception 
 import Language.Sparcl.Core.Syntax
-import Language.Sparcl.Typing.TC
+import Language.Sparcl.Typing.TCMonad
 import Language.Sparcl.Typing.Typing
 import Language.Sparcl.Typing.Type
 import Language.Sparcl.Renaming (renameExp, runRenaming, NameTable, OpTable) 
@@ -54,7 +54,7 @@ data Conf =
          confCurrentDir  :: FilePath, 
          confVerbosity   :: Int,
          confLastLoad    :: Maybe FilePath,
-         confTInfo       :: TInfo,
+         confTC          :: TypingContext,
          confNameTable   :: IORef NameTable,
          confOpTable     :: IORef OpTable,
          confTypeTable   :: IORef TypeTable, 
@@ -185,8 +185,8 @@ instance Modify KeyValue ValueTable REPL where
 instance Local KeyValue ValueTable REPL
 
 
-instance Has KeyTInfo TInfo REPL where
-  ask _ = Rd.asks confTInfo 
+instance Has KeyTC TypingContext REPL where
+  ask _ = Rd.asks confTC
   
 
 
@@ -196,7 +196,7 @@ type VerbosityLevel = Int
 
 initConf :: IO Conf
 initConf = do
-  tinfo <- initTInfo
+  tinfo <- initTypingContext
   refNt <- newIORef M.empty
   refOt <- newIORef M.empty
   refSt <- newIORef M.empty
@@ -208,7 +208,7 @@ initConf = do
                   confCurrentDir = ".", 
                   confVerbosity = 0,
                   confLastLoad = Nothing,
-                  confTInfo = tinfo,
+                  confTC         = tinfo,
                   confNameTable  = refNt,
                   confOpTable    = refOt,
                   confTypeTable  = refTt, 
@@ -454,7 +454,7 @@ readExp ::
   (Has KeyVerb Int m,
    Has KeyName NameTable m,
    Has KeyOp   OpTable m,
-   Has KeyTInfo TInfo m,
+   Has KeyTC   TypingContext m,
    Has KeyType  TypeTable m,
    Has KeySyn   SynTable m, 
    MonadIO m) => String -> m (Exp Name, Ty) 
@@ -470,7 +470,7 @@ readExp str = do
   debugPrint 1 $ text "Renaming Ok."
 
 
-  tinfo <- ask (key @KeyTInfo)
+  tinfo <- ask (key @KeyTC)
 
   typeTable <- ask (key @KeyType)
   synTable  <- ask (key @KeySyn) 
@@ -479,8 +479,8 @@ readExp str = do
   debugPrint 3 $ text "under:" <+> align (vcat [text "tyenv: " <+> align (pprMap typeTable),
                                                 text "synenv:" <+> align (pprMap synTable) ])
   
-  liftIO $ setEnvs tinfo typeTable synTable   
-  (typedExp, ty) <- liftIO $ runTC tinfo $ inferExp renamedExp 
+  -- liftIO $ setEnvs tinfo typeTable synTable   
+  (typedExp, ty) <- liftIO $ runTCWith tinfo typeTable synTable $ inferExp renamedExp 
   debugPrint 1 $ text "Type checking Ok."
 
   debugPrint 1 $ text "Desugaring expression..."
