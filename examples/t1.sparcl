@@ -40,9 +40,9 @@ We need some check of conformance C ||- D when
 we add type signatures, we know that this is decidable 
 and at least in NP. 
 -}
-sig comp : forall p q r s t u a b c. 
-           (p <= s, t ~ p * r, t <= u) => 
+sig comp : forall p q r u a b c. 
+           (u ~ p * r) => 
            (b # p -> c) # q -> 
-           (a # r -> b) # s -> 
+           (a # r -> b) # p -> 
            a # u -> c
 def comp f g x = f (g x)

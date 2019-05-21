@@ -413,8 +413,10 @@ constrainVars ((x,q):xqs) m = do
         TyMult One   -> 
           constrainVars xqs m
         TyMetaV pp -> do 
+          unify q (TyMetaV pp) 
           cs <- constrainVars xqs m
-          return $ msub (TyMetaV pp) q : cs
+          return cs 
+          -- return $ msub (TyMetaV pp) q : cs
         _ ->
           error "Kind mismatch"
     Nothing               -> do 
