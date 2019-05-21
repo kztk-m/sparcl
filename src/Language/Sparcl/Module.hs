@@ -254,12 +254,14 @@ baseModuleInfo = ModuleInfo {
           base "+" |-> intTy -@ (intTy -@ intTy),
           base "-" |-> intTy -@ (intTy -@ intTy),
           base "*" |-> intTy -@ (intTy -@ intTy),
-          eqInt  |-> bangTy intTy -@ bangTy intTy -@ boolTy,
-          leInt  |-> bangTy intTy -@ bangTy intTy -@ boolTy,
-          ltInt  |-> bangTy intTy -@ bangTy intTy -@ boolTy,
-          eqChar |-> bangTy charTy -@ bangTy charTy -@ boolTy,
-          leChar |-> bangTy charTy -@ bangTy charTy -@ boolTy,
-          ltChar |-> bangTy charTy -@ bangTy charTy -@ boolTy,
+
+          -- is it OK? 
+          eqInt  |-> intTy -@ intTy -@ boolTy,
+          leInt  |-> intTy -@ intTy -@ boolTy,
+          ltInt  |-> intTy -@ intTy -@ boolTy,
+          eqChar |-> charTy -@ charTy -@ boolTy,
+          leChar |-> charTy -@ charTy -@ boolTy,
+          ltChar |-> charTy -@ charTy -@ boolTy,
 
           nameTyInt  |-> typeKi,
           nameTyBool |-> typeKi,

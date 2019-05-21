@@ -1,0 +1,40 @@
+data Nat = Z | S Nat 
+
+sig add : Nat -o rev Nat -o rev Nat 
+def add Z     y = y 
+      | (S x) y = rev S (add x y)
+
+def qq = S Z 
+
+-- sig fwd : forall a b. !(rev a -o rev b) -o !a -o b 
+def fwd f = case unlift f of (!x, _) -> x end 
+def bwd f = case unlift f of (_, !x) -> x end 
+
+def q0 = fwd !(add (S Z)) !Z 
+
+def q1 = fwd !(add (S (S Z))) !(S Z) 
+
+def q2 = bwd !(add (S Z)) !(S (S Z))
+
+sig isZ : !Nat -o Bool
+def isZ !Z = True
+      | _  = False 
+
+sig mul : !Nat -o rev Nat -o rev Nat 
+def mul !z (rev Z)   = rev Z with !isZ 
+      | !z (rev S y) = 
+         add z (mul !z y) 
+
+def q3 = fwd  !(mul !(S (S Z))) !(S (S Z))
+def q4 = bwd  !(\x -> mul !(S (S Z)) x) !(S (S (S (S Z))))
+
+def invert f = case unlift f of (!x, !y) -> lift !y !x end 
+
+def comp = \x -> add (S Z) (mul !(S (S Z)) x)
+def q5 = fwd !comp
+def q6 = bwd !comp
+
+def qm = 1 + 2 * 3 + 4 * 5 
+
+def incL = lift !(\!x -> x + 1) !(\!x -> x - 1)
+

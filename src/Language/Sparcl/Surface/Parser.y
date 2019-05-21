@@ -42,6 +42,10 @@ import Language.Sparcl.Multiplicity
   "#"  { Loc _ Tsharp }
   "ω" { Loc _ Tomega } 
 
+  "~" { Loc _ Ttilde } 
+  "*" { Loc _ Tast }
+  uparrow  { Loc _ Tuparrow }
+
   "-o" { Loc _ Tlollipop }
 
   "!"  { Loc _ Tbang }
@@ -73,6 +77,10 @@ import Language.Sparcl.Multiplicity
 
   "where"  { Loc _ Twhere } 
 
+
+  "=>"     { Loc _ TRarrow }
+  "<="     { Loc _ TLarrow }
+  lteq     { Loc _ Tlteq }
 
   "module" { Loc _ Tmodule } 
   "import" { Loc _ Timport } 
@@ -122,13 +130,33 @@ ImportingNames :: { Maybe [Loc SurfaceName] }
 
 ModuleName :: { ModuleName }
   : ConQName {% toModuleName (location $1) (unLoc $1) }
-  
+
+{-
+The following causes the shift/reduce conflict as we cannot find the parens of "(a,b,c,...)" are for constraints or tuples. 
+-}
 Ty :: { Loc TyP }
-  : "forall" sequence(VarName) "." Ty { foldr (\n r -> Loc (location n <> location r) $ TForall (unLoc n) r) $4 $2 }
+  : "forall" sequence(VarName) "." Constraints Ty
+    { foldr (\n r -> Loc (location n <> location r) $ TForall (unLoc n) r) (Loc (location $4) $ TQual (unLoc $4) $5) $2 }
   | AppTy "->" Ty  { Loc (location $1 <> location $3) $ TCon (BuiltIn nameTyArr) [noLoc $ TMult Omega, $1, $3] }
   | AppTy "-o" Ty  { Loc (location $1 <> location $3) $ TCon (BuiltIn nameTyArr) [noLoc $ TMult One,   $1, $3] }
   | AppTy "#" Multiplicity "->" Ty { Loc (location $1 <> location $3) $ TCon (BuiltIn nameTyArr) [$3, $1, $5] } 
   | AppTy          { $1 }
+
+Constraints :: {Loc [TConstraint 'Parsing]}
+  :                                     { noLoc [] }
+  | "(" sepBy(Constraint, ",") ")" "=>" { Loc (location $1 <> location $3) $2 }
+
+Constraint :: { TConstraint 'Parsing }
+  : Multiplicity LTEQ Multiplicity                  { MSub $1 $3 }
+  | Multiplicity "~" Multiplicity MMAX Multiplicity { MEqMax $1 $3 $5 }
+
+LTEQ 
+  : lteq { }
+  | "<=" { } 
+
+MMAX 
+  : "*"     {}
+  | uparrow {}
 
 Multiplicity :: { Loc TyP }
   : VarName { fmap TVar $1 }
@@ -266,7 +294,7 @@ ConQName :: { Loc SurfaceName }
   | qconid { fmap qnameTk $1 }
 
 QOp :: { Loc SurfaceName }
-  : op  { fmap qnameTk $1 }
+  : Op  { $1 }
   | qop { fmap qnameTk $1 }
 
 QVarOrOp :: { Loc SurfaceName }
@@ -278,7 +306,8 @@ VarOrOp :: { Loc SurfaceName }
   | VarName    { $1 }
 
 Op :: { Loc SurfaceName }
-  : op { fmap qnameTk $1 }
+  : op  { fmap qnameTk $1 }
+  | "*" { Loc (location $1) (Bare $ User "*") }
 
 VarName :: { Loc SurfaceName }
   : varid { fmap qnameTk $1 }

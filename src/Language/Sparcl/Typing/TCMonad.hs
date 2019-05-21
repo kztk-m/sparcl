@@ -28,11 +28,18 @@ data AbortTyping = AbortTyping
 instance Exception AbortTyping 
 
 
-data TypeError = TypeError (Maybe SrcSpan) [S.LExp 'Renaming] ErrorDetail
+data WhenChecking = CheckingEquality    Ty Ty
+                  | CheckingConstraint  [TyConstraint]
+                  | CheckingMoreGeneral Ty Ty
+                  | OtherContext        Doc 
+                  | CheckingNone 
+  
+
+data TypeError = TypeError (Maybe SrcSpan) [S.LExp 'Renaming] WhenChecking ErrorDetail
 
 data ErrorDetail
   = UnMatchTy  Ty Ty 
-  | UnMatchTyD Ty Ty Ty Ty -- inferred and expected
+--  | UnMatchTyD Ty Ty Ty Ty -- inferred and expected
   | OccurrenceCheck MetaTyVar Ty
   | MultipleUse Name
   | NoUse       Name
@@ -41,21 +48,41 @@ data ErrorDetail
   
 
 instance Pretty TypeError where
-  ppr (TypeError l exprs doc) =
+  ppr (TypeError l exprs ctxt doc) =
      -- D.bold (D.text "[TYPE ERROR]") D.<+> D.nest 2
      (maybe (D.text "*unknown place*") ppr l 
-      D.<$> pprDetail doc D.<> pprContexts (drop (length exprs - 3) exprs))
+      D.<$> pprDetail doc <> pprWhenChecking ctxt 
+      D.<$> pprContexts (drop (length exprs - 3) exprs))     
     where
+      pprWhenChecking (CheckingEquality ty1 ty2) =
+        D.line <> D.text "when checking the following types are equivalent:"
+        D.<> D.nest 2 (line <> vsep [ hsep[text "Inferred:", ppr ty1],
+                                      hsep[text "Expected:", ppr ty2] ])
+
+      pprWhenChecking (CheckingMoreGeneral ty1 ty2) =
+        D.line <> D.text "when checking the inferred type is more general than the expected."
+        D.<> D.nest 2 (line <> vsep [ hsep[text "Inferred:", ppr ty1],
+                                      hsep[text "Expected:", ppr ty2] ])
+        
+      pprWhenChecking (CheckingConstraint cs) =
+        D.line <> D.text "when checking constraints:"
+        D.<$> D.parens (hsep $ punctuate comma $ map ppr cs)
+
+      pprWhenChecking (OtherContext d) =
+        D.line <> D.text "when checking" <+> d
+
+      pprWhenChecking CheckingNone = D.empty 
+      
       pprDetail (UnMatchTy ty1 ty2) = 
-        D.text "Types do not match"
+        D.text "Types do not match:"
         D.<+> D.align (ppr ty1) D.<+> D.text "/=" D.<+> D.align (ppr ty2)
 
-      pprDetail (UnMatchTyD ty1 ty2 ty1' ty2') =
-        D.text "Types do not match" D.<> D.nest 2 
-         ( D.line D.<> D.nest 2 (D.sep [D.text "Expected:", D.align (ppr ty1) ]) D.<> 
-           D.line D.<> D.nest 2 (D.sep [D.text "Inferred:", D.align (ppr ty2) ]) )
-        D.<$> D.text "More precisely, the following types do not match."
-        <> D.nest 2 (line <> D.align (ppr ty1') D.<+> D.text "/=" D.<+> D.align (ppr ty2'))
+      -- pprDetail (UnMatchTyD ty1 ty2 ty1' ty2') =
+      --   D.text "Types do not match" D.<> D.nest 2 
+      --    ( D.line D.<> D.nest 2 (D.sep [D.text "Expected:", D.align (ppr ty1) ]) D.<> 
+      --      D.line D.<> D.nest 2 (D.sep [D.text "Inferred:", D.align (ppr ty2) ]) )
+      --   D.<$> D.text "More precisely, the following types do not match."
+      --   <> D.nest 2 (line <> D.align (ppr ty1') D.<+> D.text "/=" D.<+> D.align (ppr ty2'))
 
       pprDetail (OccurrenceCheck mv ty) =
         D.text "Cannot construct an infinite type:"
@@ -100,10 +127,12 @@ mergeUseMap = M.unionWith (\_ _ -> MulConst Omega)
 data TypingContext =
   TypingContext { tcRefMvCount :: !(IORef Int),
                   tcRefSvCount :: !(IORef Int),
-                  tcTyEnv      :: TyEnv,    -- Current typing environment 
+                  tcTyEnv      :: TyEnv,    -- Current typing environment
+                  tcMultEnv    :: [Ty], 
                   tcSyn        :: SynTable, -- Current type synonym table
                   tcContexts   :: [S.LExp 'Renaming], -- parent expressions
-                  tcLoc        :: Maybe SrcSpan,  -- focused part 
+                  tcLoc        :: Maybe SrcSpan,  -- focused part
+                  tcChecking   :: WhenChecking, 
                   tcRefErrors  :: !(IORef (Seq TypeError))
                                -- Type errors are accumulated for better error messages 
                   }
@@ -118,6 +147,8 @@ initTypingContext = do
                            tcRefErrors  = r ,
                            tcLoc        = Nothing, 
                            tcContexts   = [],
+                           tcMultEnv    = [],
+                           tcChecking   = CheckingNone, 
                            tcTyEnv      = M.empty,
                            tcSyn        = M.empty }
 
@@ -127,8 +158,10 @@ refreshTC tc = do
   r <- newIORef Seq.empty 
   return $ tc { tcTyEnv     = M.empty,
                 tcSyn       = M.empty,
+                tcMultEnv   = [], 
                 tcLoc       = Nothing,
                 tcRefErrors = r,
+                tcChecking  = CheckingNone, 
                 tcContexts  = [] } 
   
 setEnvs :: TypingContext -> TypeTable -> SynTable -> TypingContext 
@@ -142,7 +175,8 @@ runTC tc m = do
   errs <- readIORef (tcRefErrors tc)  
   if not (Seq.null errs) -- if this is not empty, it must be the case that res is not undefined. 
     then do
-    staticError $ vcat (map ppr $ toList errs)    
+    errs' <- runReaderT (unTC $ mapM zonkTypeError $ toList errs) tc 
+    staticError $ vcat (map ppr errs')    
     else
     return res
 
@@ -165,6 +199,8 @@ instance MonadError AbortTyping TC where
 class MonadIO m => MonadTypeCheck m where
   -- Error reporting. The method does not abort the current computation. 
   reportError :: ErrorDetail -> m ()
+
+  whenChecking :: WhenChecking -> m r -> m r 
 
   abortTyping :: m a 
 
@@ -190,7 +226,9 @@ class MonadIO m => MonadTypeCheck m where
 
   -- type checking with a new entry in the synonym table.
   withSyn :: Name -> ([TyVar], Ty) -> m r -> m r
-  
+
+  -- for generalization 
+  withMultVar :: Ty -> m r -> m r 
 
 tupleConTy :: Int -> Ty
 tupleConTy n =
@@ -207,6 +245,7 @@ instance MonadTypeCheck m => MonadTypeCheck (ReaderT r m) where
   abortTyping = lift abortTyping
 
   reportError mes = lift (reportError mes)
+  whenChecking t m = ReaderT $ whenChecking t . runReaderT m 
 
   atLoc loc m = ReaderT $ \r -> atLoc loc (runReaderT m r)
   atExp ex m = ReaderT $ \r -> atExp ex (runReaderT m r)
@@ -222,8 +261,9 @@ instance MonadTypeCheck m => MonadTypeCheck (ReaderT r m) where
   withVar n t m = ReaderT $ \r -> withVar n t (runReaderT m r) 
   withSyn tv t m = ReaderT $ \r -> withSyn tv t (runReaderT m r)
 
-  getMetaTyVarsInEnv = lift getMetaTyVarsInEnv
+  withMultVar ty m = ReaderT $ withMultVar ty . runReaderT m 
 
+  getMetaTyVarsInEnv = lift getMetaTyVarsInEnv
   resolveSyn ty = lift (resolveSyn ty) 
 
 instance MonadTypeCheck TC where
@@ -231,8 +271,11 @@ instance MonadTypeCheck TC where
 
   reportError mes = do
     tc <- ask
-    let err = TypeError (tcLoc tc) (tcContexts tc) mes 
+    let err = TypeError (tcLoc tc) (tcContexts tc) (tcChecking tc) mes 
     liftIO $ modifyIORef (tcRefErrors tc) $ \s -> s Seq.:|> err
+
+  whenChecking t =
+    local (\tc -> tc { tcChecking = t })
 
   atLoc NoLoc m = m
   atLoc loc   m =
@@ -305,10 +348,14 @@ instance MonadTypeCheck TC where
   withSyn tv v m = 
     local (\tc -> tc { tcSyn = M.insert tv v (tcSyn tc) }) m 
 
+  withMultVar ty = local (\tc -> tc { tcMultEnv = ty : tcMultEnv tc }) 
+
   getMetaTyVarsInEnv = do
     tyEnv <- asks tcTyEnv
     let ts = M.elems tyEnv
-    return $ metaTyVars ts 
+    multEnv <- asks tcMultEnv 
+    return $ metaTyVars (ts ++ multEnv)
+
 
 newMetaTy :: MonadTypeCheck m => m Ty
 newMetaTy = fmap TyMetaV $ newMetaTyVar 
@@ -318,6 +365,9 @@ withVars ns m = foldr (uncurry withVar) m ns
 
 withSyns :: MonadTypeCheck m => [ (Name, ([TyVar], Ty)) ] -> m r -> m  r
 withSyns xs m = foldr (uncurry withSyn) m xs  
+
+withMultVars :: MonadTypeCheck m => [Ty] -> m r -> m r
+withMultVars xs m = foldr withMultVar m xs 
 
 zonkMetaTyVar :: MonadTypeCheck m => MetaTyVar -> m Ty
 zonkMetaTyVar mv = {- trace "zonk!" $ -} do 
@@ -346,7 +396,28 @@ zonkTypeQ (TyQual cs t) = TyQual <$> mapM zonkTypeC cs <*> zonkType t
 zonkTypeC :: MonadTypeCheck m => TyConstraint -> m TyConstraint
 zonkTypeC (MEqMax t1 t2 t3) = MEqMax <$> zonkType t1 <*> zonkType t2 <*> zonkType t3
 
+zonkTypeError :: MonadTypeCheck m => TypeError -> m TypeError
+zonkTypeError (TypeError loc es wc res) = do
+  wc'  <- zonkWhenChecking wc
+  res' <- zonkErrorDetail  res
+  return $ TypeError loc es wc' res' 
 
+zonkWhenChecking :: MonadTypeCheck m => WhenChecking -> m WhenChecking
+zonkWhenChecking (CheckingEquality t1 t2) = 
+  CheckingEquality <$> zonkType t1 <*> zonkType t2
+zonkWhenChecking (CheckingMoreGeneral t1 t2) =
+  CheckingMoreGeneral <$> zonkType t1 <*> zonkType t2 
+zonkWhenChecking (CheckingConstraint cs) =
+  CheckingConstraint <$> mapM zonkTypeC cs
+zonkWhenChecking (OtherContext d) = return (OtherContext d)   
+zonkWhenChecking CheckingNone = return CheckingNone
+
+zonkErrorDetail :: MonadTypeCheck m => ErrorDetail -> m ErrorDetail
+zonkErrorDetail (UnMatchTy t1 t2) = UnMatchTy <$> zonkType t1 <*> zonkType t2
+zonkErrorDetail (OccurrenceCheck tv ty) =
+  OccurrenceCheck tv <$> zonkType ty
+zonkErrorDetail res = pure res   
+  
 
 freeTyVars :: MonadTypeCheck m => [Ty] -> m [TyVar]
 freeTyVars types = do
@@ -391,7 +462,8 @@ unifyWork ty (TyMetaV mv) = unifyMetaTyVar mv ty
 unifyWork (TyCon c ts) (TyCon c' ts') | c == c' = do 
                                           when (length ts /= length ts') $
                                             reportError $ Other $ D.hsep [D.text "Type construtor", ppr c, D.text "has different number of arguments."]
-                                          zipWithM_ unifyWork ts ts' 
+                                          zipWithM_ unifyWork ts ts'
+unifyWork (TyMult m) (TyMult m') | m == m' = return ()                                           
 unifyWork ty1 ty2 = do
   ty1' <- zonkType ty1
   ty2' <- zonkType ty2

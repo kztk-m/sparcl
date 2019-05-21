@@ -80,6 +80,7 @@ instance Pretty Ty where
   pprPrec _ (TyMult p) = ppr p 
 
 instance Pretty QualTy where
+  pprPrec k (TyQual [] t) = pprPrec k t 
   pprPrec k (TyQual cs t) = parensIf (k > 0) $
     sep [d, text "=>" <+> pprPrec 0 t]
     where

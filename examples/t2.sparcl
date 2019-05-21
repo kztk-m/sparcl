@@ -7,9 +7,13 @@ def add Z     y = y
       | (S x) y = rev S (add x y)
 
 -- sig isZ : !Nat -o Bool
-def isZ !Z = True
+def isZ Z = True
       | _  = False 
 
--- sig mul : !Nat -o rev Nat -o rev Nat 
-def mul _ (rev Z)    = rev Z with !isZ 
-      | !z (rev S y) = add z (mul z y) 
+def eq (rev Z)     (rev Z)     = rev Z with isZ 
+     | (rev (S x)) (rev (S y)) = rev S (eq x y) 
+
+sig mul : Nat -> rev Nat -o rev Nat 
+def mul _ (rev Z)   = rev Z with isZ 
+      | z (rev S y) = add z (mul z (eq y y)) 
+

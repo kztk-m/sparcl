@@ -38,9 +38,12 @@ $symbol = [\= \+ \- \* \/ \^ \< \> \$ \| \& \? \: \# \@ \! \.]
 @omega = \969 -- ω
   
 @rarr = "->" | \8594 -- ->
-
+@lteq = \8804 -- ≦
+               
 @lolli = "-o" | \8888               
 
+@uparrow = \8593 -- ↑
+                
 @forall = "forall" | \8704               
                 
 @string = \" ( ($printable # [\"\\]) | "\" "\" | "\n" | "\t" | "\r" | "\" [\"] )
@@ -99,6 +102,10 @@ tokens :-
 
   ";"       { theTok Tsemi }
   ","       { theTok Tcomma } 
+
+  "~"       { theTok Ttilde } 
+  "*"       { theTok Tast }
+  @uparrow  { theTok Tuparrow } 
   
   
   "!" { theTok Tbang }
@@ -117,6 +124,10 @@ tokens :-
   
   @lam   { theTok Tlam }
   @rarr  { theTok Trarrow }
+  "=>"   { theTok TRarrow }
+  "<="   { theTok TLarrow }
+  @lteq  { theTok Tlteq } 
+  
   @lolli { theTok Tlollipop }
   @forall { theTok Tforall }
   @sharp  { theTok Tsharp }
@@ -190,9 +201,17 @@ data Token
   | Tlam   
   | Tequal
   | Tlollipop  
-  | Trarrow 
+  | Trarrow
+  | TRarrow
+  | Tlarrow 
+  | TLarrow
+  | Tlteq 
   | Tsharp
   | Tomega 
+
+  | Ttilde
+  | Tast
+  | Tuparrow 
 
   -- parens 
   | Tlparen
