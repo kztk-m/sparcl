@@ -7,6 +7,8 @@ import Control.Monad.Writer
 import qualified Data.Map as M 
 import qualified Data.Map.Merge.Lazy as M 
 
+import qualified Data.Graph as G
+
 import Language.Sparcl.Typing.TCMonad
 import Language.Sparcl.Typing.Type
 import Language.Sparcl.SrcLoc 
@@ -287,6 +289,96 @@ checkPatTyWork isUnderRev (Loc loc pat) pmult patTy = do
       --       return (PWild x', ubind, lbind) 
 
 
+simplifyConstraints :: MonadTypeCheck m => [TyConstraint] -> m [TyConstraint]
+simplifyConstraints xs | trace (show $ ppr xs) False = undefined 
+simplifyConstraints xs = do
+  ys <- propagateConstantsToFixedpoint xs
+--  liftIO $ putStrLn $ ("CP: " ++ show (hsep [ppr xs, text "-->>", ppr ys]))
+  isEffective <- loopToEquiv ys
+  if length ys < length xs || isEffective
+    then simplifyConstraints ys
+    else return ys 
+  
+
+-- | The function yield equality constraints by detecting loops in the dependency. 
+--   For example, from the constraint a = max b c and b = max a d, we can conclude
+--   a = b as we have b <= a, c <= a, a <= b, d <= b from the constraint.
+--
+--   The function returns true if it yields at least one equality constraint. 
+--   
+loopToEquiv :: forall m. MonadTypeCheck m => [TyConstraint] -> m Bool
+loopToEquiv constraints = do
+  sccs <- makeSCC constraints
+  isEffective <- foldM procSCCs False sccs
+  return isEffective
+  where
+    procSCCs :: Bool -> G.SCC Ty -> m Bool
+    procSCCs  isE (G.AcyclicSCC _)  = return isE
+    procSCCs  isE (G.CyclicSCC [_]) = return isE 
+    procSCCs _isE (G.CyclicSCC xs)  = 
+      equate xs >> return True
+
+    equate []       = error "Cannot happen." 
+    equate (ty:tys) = equate' tys
+      where
+        equate' []       = return ()
+        equate' (ty':ts) = unify ty ty' >> equate' ts 
+          
+                      
+    
+    makeSCC :: [TyConstraint] -> m [G.SCC Ty]
+    makeSCC xs = do
+      t <- makeLeMap xs
+      return $ G.stronglyConnComp $ map (\(k,vs) -> (k,k,vs)) $ M.toList t
+
+    makeLeMap :: [TyConstraint] -> m (M.Map Ty [Ty])
+    makeLeMap [] = return M.empty
+    makeLeMap (MEqMax t1 t2 t3:cs) = do
+      t <- makeLeMap cs
+      t1' <- zonkType t1
+      t2' <- zonkType t2
+      t3' <- zonkType t3
+      return $ M.insertWith (++) t2' [t1'] $ M.insertWith (++) t3' [t1'] t 
+        
+            
+    
+    
+propagateConstantsToFixedpoint :: MonadTypeCheck m => [TyConstraint] -> m [TyConstraint]
+propagateConstantsToFixedpoint xs = do 
+  ys <- propagateConstants xs
+  if length xs > length ys
+    then propagateConstantsToFixedpoint ys
+    else return ys
+    
+propagateConstants :: MonadTypeCheck m => [TyConstraint] -> m [TyConstraint]
+propagateConstants [] = return []
+propagateConstants (MEqMax t1 t2 t3:cs) = do
+  t1' <- zonkType t1 
+  t2' <- zonkType t2
+  t3' <- zonkType t3
+  case t1' of
+    TyMult One   -> do
+      unify t2' (TyMult One) -- 1 = max a b implies a = b = 1
+      unify t3' (TyMult One) --
+      propagateConstants cs
+    _ ->
+      case tryComputeMax t2' t3' of
+        Just t  -> 
+          unify t1' t >> propagateConstants cs
+        Nothing -> (MEqMax t1' t2' t3':) <$> propagateConstants cs 
+  where
+    tryComputeMax :: MultTy -> MultTy -> Maybe MultTy 
+    tryComputeMax (TyMult Omega) _ = Just $ TyMult Omega
+    tryComputeMax (TyMult One)   ty = Just ty
+    tryComputeMax _ty            (TyMult Omega) = Just $ TyMult Omega
+    tryComputeMax ty              (TyMult One)   = Just ty
+    tryComputeMax ty1            ty2 =
+      if ty1 == ty2 then Just ty1
+      else               Nothing 
+        
+
+
+
   
 
 constrainVars :: MonadTypeCheck m => [(Name, MultTy)] -> UseMap -> m [TyConstraint]
@@ -501,7 +593,8 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first3 $ Loc loc) $ atLoc loc $ a
 inferExp :: MonadTypeCheck m => LExp 'Renaming -> m (LExp 'TypeCheck, PolyTy)
 inferExp expr = do
   (expr', ty, _, cs) <- inferTy expr
-  ty' <- zonkTypeQ (TyQual cs ty)
+  cs' <- simplifyConstraints cs 
+  ty' <- zonkTypeQ (TyQual cs' ty)
   envMetaVars <- getMetaTyVarsInEnv
   let mvs = metaTyVarsQ [ty']
   polyTy <- quantify (mvs \\ envMetaVars) ty'
@@ -604,12 +697,16 @@ inferMutual decls = do
     ty  <- newMetaTy
     qs  <- mapM (const newMetaTy) [1..numPatterns pcs]
     (pcs', umap, cs) <- gatherUC <$> mapM (flip (checkTyPC loc qs) ty) pcs 
-    tyE <- askType loc n -- type of n in the environment 
+    tyE <- askType loc n -- type of n in the environment
+
+    -- TODO: We need to extract constraints regarding `f`'s arguments.
+    --       
+    cs' <- simplifyConstraints cs
     when (not $ M.member n sigMap) $
       -- Defer unification if a declaration comes with a signature because
       -- the signature can be a polytype while unification targets monotypes. 
       atLoc loc $ unify ty tyE
-    return ((n, loc, TyQual cs ty, pcs'), umap, cs)
+    return ((n, loc, TyQual cs' ty, pcs'), umap, cs')
 
   envMetaVars <- getMetaTyVarsInEnv
 

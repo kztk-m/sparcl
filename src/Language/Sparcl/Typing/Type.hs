@@ -16,13 +16,13 @@ data Ty = TyCon   Name [Ty]     -- ^ Type constructor
         | TyForAll [TyVar] QualTy -- ^ polymorphic types 
         | TySyn   Ty Ty          -- ^ type synonym (@TySym o u@ means @u@ but @o@ will be used for error messages)
         | TyMult  Multiplicity   -- ^ 1 or ω
-         deriving (Eq, Show)
+         deriving (Eq, Ord, Show)
 
 data QualTy = TyQual [TyConstraint] BodyTy
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
 
 data TyConstraint = MEqMax Ty Ty Ty 
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
 
 data TyVar = BoundTv Name
            | SkolemTv TyVar Int -- used only for checking of which type is more general. 
@@ -32,6 +32,13 @@ instance Eq TyVar where
   BoundTv n == BoundTv m = n == m
   SkolemTv _ i == SkolemTv _ j = i == j
   _ == _ = False
+
+instance Ord TyVar where 
+  BoundTv n <= BoundTv m = n <= m
+  BoundTv _ <= _         = True
+  SkolemTv _ _ <= BoundTv _  = False 
+  SkolemTv _ i <= SkolemTv _ j = i <= j 
+
 
 instance Pretty TyVar where
   ppr (BoundTv n) = ppr n
@@ -79,8 +86,13 @@ instance Pretty QualTy where
       d = parens $ hsep $ punctuate comma (map ppr cs)
 
 instance Pretty TyConstraint where
-  ppr (MEqMax ty1 ty2 ty3) =
-    ppr ty1 <+> text "~" <+> ppr ty2 <+> text "*" <+> ppr ty3
+  ppr (MEqMax ty1 ty2 ty3)
+    | ty1 == ty2 =
+      hsep [ ppr ty3 <+> text "<=" <+> ppr ty1 ]
+    | ty1 == ty3 =
+      hsep [ ppr ty2 <+> text "<=" <+> ppr ty1 ]       
+    | otherwise = 
+      ppr ty1 <+> text "~" <+> ppr ty2 <+> text "*" <+> ppr ty3
 
 data MetaTyVar = MetaTyVar !Int !TyRef 
  
@@ -95,6 +107,9 @@ instance Show MetaTyVar where
 instance Eq MetaTyVar where
   -- MetaTyVar i _ == MetaTyVar j _ = i == j
   MetaTyVar _ i == MetaTyVar _ j = i == j 
+
+instance Ord MetaTyVar where
+  MetaTyVar i _ <= MetaTyVar j _ = i <= j 
 
 type BodyTy = MonoTy  -- forall body. only consider rank 1
 type PolyTy = Ty      -- polymorphic types
