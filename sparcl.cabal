@@ -51,6 +51,7 @@ common deps
 library
   import: deps
   exposed-modules:
+      Language.Sparcl.Algorithm.SAT 
       Language.Sparcl.SrcLoc
       Language.Sparcl.Name
       Language.Sparcl.Pass
@@ -94,7 +95,8 @@ executable sparcl-exe
 
   hs-source-dirs:
       app
-  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  ghc-options:
+    -- -threaded -rtsopts -with-rtsopts=-N
   build-depends:
     sparcl,
     sparcl-runtime
@@ -107,7 +109,8 @@ test-suite sparcl-test
   other-modules:
   hs-source-dirs:
       test
-  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  ghc-options:
+    -- -threaded -rtsopts -with-rtsopts=-N
   build-depends:
     sparcl,
     sparcl-runtime

@@ -18,6 +18,8 @@ import Language.Sparcl.Literal
 import Language.Sparcl.Name
 import Language.Sparcl.Multiplicity
 
+import Language.Sparcl.Algorithm.SAT as SAT 
+
 import qualified Language.Sparcl.Core.Syntax as C (DDecl(..), TDecl(..)) 
 
 import qualified Language.Sparcl.Surface.Syntax as S
@@ -1165,7 +1167,7 @@ checkMoreGeneral2 loc polyTy1@(TyForAll _ _) ty2 = do
 checkMoreGeneral2 loc ty1 ty2 = checkMoreGeneral3 loc (TyQual [] ty1) ty2
 
 checkMoreGeneral3 :: MonadTypeCheck m => SrcSpan -> QualTy -> QualTy -> m ()
-checkMoreGeneral3 loc (TyQual cs1 ty1) (TyQual cs2 ty2) = do
+checkMoreGeneral3 loc (TyQual cs1 ty1) (TyQual cs2 ty2) = atLoc loc $ do
   -- TODO
   atLoc loc $ unify ty1 ty2 
   cs1' <- mapM zonkTypeC cs1
@@ -1176,11 +1178,39 @@ checkMoreGeneral3 loc (TyQual cs1 ty1) (TyQual cs2 ty2) = do
   case cs1'' of
     [] -> return ()   
     _  -> do
-      liftIO $ print $ hsep [ red (text "[TODO : Implement SAT-based check]"),
-                              parens $ hsep $ punctuate comma $ map ppr cs2', text  "||-" ,
-                              parens $ hsep $ punctuate comma $ map ppr cs1' ]
+      case SAT.sat $ toFormula cs2' .&&. SAT.neg (toFormula cs1'') of
+        Nothing -> return ()
+        Just bs -> 
+          reportError $ Other $ D.group $
+             vcat [ hsep [pprC cs2', text "does not imply", pprC cs1' ],
+                    text "a concrete counter example is:",
+                    vcat $ map (\(v, b) -> ppr v <+> text "->" <+> text (if b then "Omega" else "One")) bs ]
+                  
+  where
+    pprC = parens . hsep . punctuate comma . map ppr 
+      -- liftIO $ print $ hsep [ red (text "[TODO : Implement SAT-based check]"),
+      --                         parens $ hsep $ punctuate comma $ map ppr cs2', text  "||-" ,
+      --                         parens $ hsep $ punctuate comma $ map ppr cs1' ]
                                            
-                         
+data VV = MV MetaTyVar | SV TyVar
+  deriving (Eq, Ord)
+
+instance Pretty VV where
+  pprPrec k (MV v) = pprPrec k v
+  pprPrec k (SV v) = pprPrec k v 
+
+toFormula :: [TyConstraint] -> SAT.Formula VV
+toFormula [] = SAT.true
+toFormula (MEqMax q1 q2 q3:cs) =
+  (conv q1 .<=>. conv q2 .||. conv q3) .&&. toFormula cs
+  where
+    conv (TyMult Omega) = SAT.true
+    conv (TyMult One)   = SAT.false
+    conv (TyMetaV v)    = SAT.var (MV v)
+    conv (TyVar v)      = SAT.var (SV v) 
+    conv t              = error $ show $ hsep [ppr t, text " is not a multiplicity"]
+  
+        
 quantify :: MonadTypeCheck m => [MetaTyVar] -> QualTy -> m PolyTy
 quantify mvs ty = do
   forM_ (zip mvs newBinders) $
