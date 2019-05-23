@@ -23,6 +23,7 @@ common deps
       exceptions >= 0.10 && <0.11, 
       template-haskell, 
       mtl,
+      megaparsec, 
       containers, 
       directory, 
       filepath, 

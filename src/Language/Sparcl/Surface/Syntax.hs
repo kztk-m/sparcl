@@ -287,6 +287,10 @@ instance AllPretty p => Pretty (CDecl p) where
 data Decls p x = Decls  (XDecls p)  [x]
                | HDecls (XHDecls p) [[x]]
 
+instance (Pretty x, AllPretty p) => Pretty (Decls p x) where
+  ppr (Decls  _ ds)  = vcat (map ppr ds)
+  ppr (HDecls _ dss) = vcat (map (vcat . map ppr) dss)
+
 type family XDecls p where
   XDecls 'Parsing = ()
   XDecls _        = Void
@@ -369,5 +373,24 @@ instance AllPretty p => Pretty (Loc (Decl p)) where
 data Module p
   = Module ModuleName (Maybe [Export p]) [Import p] (Decls p (Loc (TopDecl p)))
 
+instance AllPretty p => Pretty (Module p) where
+  ppr (Module m es is ds) =
+    hsep [ text "module" , ppr m,
+           case es of
+             Nothing -> empty
+             Just vs -> parens (hsep $ D.punctuate comma $ map (ppr . unLoc) vs),
+           text "where" ]
+    <> line <> vcat (map ppr is)
+    <> line <> ppr ds
+
+
 type Export p = Loc (XId p)
 data Import p = Import { importModuleName :: ModuleName, importingNames :: Maybe [Loc (XId p)] }
+
+instance AllPretty p => Pretty (Import p) where
+  ppr (Import m is) =
+    text "import" <+> ppr m <+>
+    (case is of
+       Nothing -> D.empty
+       Just ns -> parens (hsep $ D.punctuate comma $ map (ppr . unLoc) ns))
+    

@@ -40,8 +40,8 @@ We need some check of conformance C ||- D when
 we add type signatures, we know that this is decidable 
 and at least in NP. 
 -}
-sig comp : forall p q r u a b c. () => 
---           (u ~ p * r) => 
+sig comp : forall p q r u a b c. 
+           (u ~ p * r) => 
            (b # p -> c) # q -> 
            (a # r -> b) # p -> 
            a # u -> c

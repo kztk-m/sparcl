@@ -134,21 +134,34 @@ ModuleName :: { ModuleName }
 {-
 The following causes the shift/reduce conflict as we cannot find the parens of "(a,b,c,...)" are for constraints or tuples. 
 -}
+
+TopTy :: { Loc TyP }
+  : "forall" sequence(VarName) "." QualTy 
+    { foldr (\n r -> Loc (location n <> location r) $ TForall (unLoc n) r) $4 $2 }
+  | QualTy { $1 } 
+
+QualTy :: { Loc TyP }
+  : Constraints "=>" QualTy { Loc (location $1 <> location $3) $ TQual (unLoc $1) $3 }
+  | Ty                   { $1 }
+
 Ty :: { Loc TyP }
-  : "forall" sequence(VarName) "." Constraints Ty
-    { foldr (\n r -> Loc (location n <> location r) $ TForall (unLoc n) r) (Loc (location $4) $ TQual (unLoc $4) $5) $2 }
-  | AppTy "->" Ty  { Loc (location $1 <> location $3) $ TCon (BuiltIn nameTyArr) [noLoc $ TMult Omega, $1, $3] }
+  : AppTy "->" Ty  { Loc (location $1 <> location $3) $ TCon (BuiltIn nameTyArr) [noLoc $ TMult Omega, $1, $3] }
   | AppTy "-o" Ty  { Loc (location $1 <> location $3) $ TCon (BuiltIn nameTyArr) [noLoc $ TMult One,   $1, $3] }
   | AppTy "#" Multiplicity "->" Ty { Loc (location $1 <> location $3) $ TCon (BuiltIn nameTyArr) [$3, $1, $5] } 
   | AppTy          { $1 }
 
-Constraints :: {Loc [TConstraint 'Parsing]}
-  :                                     { noLoc [] }
-  | "(" sepBy(Constraint, ",") ")" "=>" { Loc (location $1 <> location $3) $2 }
+-- Constraints :: {Loc [TConstraint 'Parsing]}
+--   :                                     { noLoc [] }
+--   | "(" sepBy(Constraint, ",") ")" "=>" { Loc (location $1 <> location $3) $2 }
 
-Constraint :: { TConstraint 'Parsing }
-  : Multiplicity LTEQ Multiplicity                  { MSub $1 $3 }
-  | Multiplicity "~" Multiplicity MMAX Multiplicity { MEqMax $1 $3 $5 }
+Constraints :: { Loc [TConstraint 'Parsing] }
+  : Constraint                       { fmap (:[]) $1 }
+  | "(" sepBy( Constraints, ",") ")"
+    { Loc (location $1 <> location $3) $ concatMap unLoc $2 }
+
+Constraint :: { Loc (TConstraint 'Parsing) }
+  : Multiplicity LTEQ Multiplicity                  { Loc (location $1 <> location $3) $ MSub $1 $3 }
+  | Multiplicity "~" Multiplicity MMAX Multiplicity { Loc (location $1 <> location $3) $ MEqMax $1 $3 $5 }
 
 LTEQ 
   : lteq { }
@@ -197,7 +210,7 @@ TopDecl :: { Loc TopDeclP }
     { fmap DDecl $1 }
   | "data" ConName sequence(VarName) "=" sepBy1(CDecl,"|")
     { Loc (location $1 <> mconcat (map location $5)) $ DData (unLoc $2) (map unLoc $3) $5 }
-  | "type" ConName sequence(VarName) "=" Ty
+  | "type" ConName sequence(VarName) "=" TopTy
     { Loc (location $1 <> location $5) $ DType (unLoc $2) (map unLoc $3) $5 } 
 
 CDecl :: { Loc CDeclP }
@@ -217,7 +230,7 @@ LocalDecls :: { DeclsP LDeclP }
 LocalDecl :: { LDeclP }
   : "def" VarOrOp sepBy1(Def, "|")
       { expandLoc $1 $ lddef (unLoc $2) $3 }
-  | "sig" VarOrOp ":" Ty
+  | "sig" VarOrOp ":" TopTy
       { expandLoc $1 $ Loc (location $4) $ DSig (unLoc $2) $4 }
   | "fixity" Op int Assoc
       { Loc (location $1 <> location $4) $ DFixity (unLoc $2) (Prec $ intTk $ unLoc $3) (unLoc $4) }
