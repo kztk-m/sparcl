@@ -61,10 +61,13 @@ library
       Language.Sparcl.Pretty
       Language.Sparcl.Typing.Type
       Language.Sparcl.Surface.Syntax
-      Language.Sparcl.Surface.Lexer 
-      Language.Sparcl.Surface.Parser
+      Language.Sparcl.Surface.Parser.Helper
+      Language.Sparcl.Surface.Parser.Id
+      Language.Sparcl.Surface.Parser.Exp
+      -- Language.Sparcl.Surface.Lexer 
+      -- Language.Sparcl.Surface.Parser
       Language.Sparcl.Surface.Parsing
-      Language.Sparcl.Surface.ParserAux
+      -- Language.Sparcl.Surface.ParserAux
       Language.Sparcl.Renaming
       Language.Sparcl.Typing.TCMonad
       Language.Sparcl.Typing.Typing

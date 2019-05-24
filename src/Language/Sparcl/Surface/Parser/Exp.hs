@@ -11,151 +11,41 @@ import qualified Text.Megaparsec.Char.Lexer as L
 import qualified Text.Megaparsec.Char as P
 import qualified Text.Megaparsec as P 
 
-import Text.Megaparsec (ParsecT, (<|>), (<?>))
+import Language.Sparcl.Surface.Parser.Helper
+import Language.Sparcl.Surface.Parser.Id
+
+import Text.Megaparsec ((<|>))
 
 import Control.Monad 
-import Data.Void
 import Data.Maybe (fromMaybe)
-import qualified Data.List.NonEmpty as NonEmpty 
 
-import Language.Sparcl.Pretty (ppr)
+-- import Language.Sparcl.Pretty (ppr)
 
 import Control.Arrow (left) 
 
-type P m = ParsecT Void String m 
+full :: P m a -> P m a
+full p = sp *> p <* P.eof 
 
 parseExp :: String -> Either String (LExp 'Parsing)
-parseExp = left show . P.runParser (sp *> expr <* P.eof) "<unknown source>" 
+parseExp = left P.parseErrorPretty . P.runParser (full expr) "<unknown source>" 
 
 parseExp' :: FilePath -> String -> Either String (LExp 'Parsing)
-parseExp' fp = left show . P.runParser (sp *> expr <* P.eof) fp
+parseExp' fp = left P.parseErrorPretty . P.runParser (full expr) fp
 
 parseModule :: FilePath -> String -> Either String (Module 'Parsing)
-parseModule fp = left show . P.runParser (sp *> modul <* P.eof) fp 
+parseModule fp = left P.parseErrorPretty . P.runParser (full modul) fp 
 
-goodArg = P.notFollowedBy (symbol "sig" <|> symbol "data" <|>
-                           symbol "def" <|> symbol "type" )
+parseDecl :: String -> Either String (Decls 'Parsing (Loc (TopDecl 'Parsing)))
+parseDecl = left P.parseErrorPretty . P.runParser (full topDecls) "<unknown source>"
 
--- -- ptest :: P IO a -> String -> IO (Either (P.ParseError Char Void) a)
--- ptest :: (Monad m, Show (P.Token s), Show e) => ParsecT e s m b -> s -> m b
-ptest p s = do
-  res <- P.runParserT p "<unknown source>" s
-  case res of
-    Left err -> error (P.parseErrorPretty err)
-    Right r  -> return r 
+-- -- -- ptest :: P IO a -> String -> IO (Either (P.ParseError Char Void) a)
+-- -- ptest :: (Monad m, Show (P.Token s), Show e) => ParsecT e s m b -> s -> m b
+-- ptest p s = do
+--   res <- P.runParserT p "<unknown source>" s
+--   case res of
+--     Left err -> error (P.parseErrorPretty err)
+--     Right r  -> return r 
 
-sp :: P m () 
-sp = L.space P.space1 (L.skipLineComment "--") (L.skipBlockCommentNested "{-" "-}")
-
-symbol :: String -> P m String
-symbol = L.symbol sp
-
-comma :: P m String
-comma = symbol ","
-
-parens :: P m a -> P m a
-parens = P.between (symbol "(") (symbol ")")
-
-getSrcLoc :: P m SrcSpan
-getSrcLoc =
-  fmap (\(P.SourcePos fp l c) -> SrcSpan (Just fp) (P.unPos l) (P.unPos c) (P.unPos l) (P.unPos c))
-       P.getPosition 
-
-withLoc :: Monad m => (SrcSpan -> P m a) -> P m a
-withLoc m = getSrcLoc >>= m 
-
-loc :: Monad m => P m a -> P m (Loc a) 
-loc m = do
-  (\s d e -> Loc (s <> e) d) <$> getSrcLoc <*> m <*> getSrcLoc
-
-modElem :: P m String
-modElem = (:) <$> P.upperChar <*> P.many P.alphaNumChar
-
-moduleName :: P m ModuleName
-moduleName =
-  (\a as -> ModuleName $ concat (a:as)) <$>
-  modElem <*> P.many (P.try (P.char '.' *> modElem))
-  <?> "module name"
-
-
-qop :: Monad m => P m SurfaceName 
-qop =
-  (do m <- moduleName
-      void $ P.char '.'
-      o <- opRaw 
-      return $ Qual m o)
-  <|> op 
-  <?> "qualified operator"
-  
-op :: Monad m => P m SurfaceName
-op = do o <- opRaw
-        return $ Bare o
-
-opRaw :: Monad m => P m NameBase
-opRaw =
-  (P.try $ do
-      x <- P.some (P.oneOf "=+*-/^<>$|&?:#@!.")
-      when (x `elem` specialOp) $
-        P.unexpected $ P.Label $ NonEmpty.fromList $ "reserved op " ++ show x
-      return $ User x)
-  <?> "operator"
-
-specialOp :: [String]
-specialOp = ["|", "->", "=>", "\\","--"] 
-
-varidRaw :: P m String
-varidRaw = (:) <$> P.lowerChar <*> P.many (P.alphaNumChar <|> P.char '\'')
-
-keyWords :: [String]
-keyWords = ["let", "in", "if", "then", "else", "where", "end",
-            "case", "of", "with", "rev", "module", "import", "sig", "def", "data", "type"]
-
-varName :: Monad m => P m SurfaceName
-varName = P.try (do x <- varidRaw
-                    when (x `elem` keyWords) $
-                      P.unexpected $ P.Label $ NonEmpty.fromList $ "keyword " ++ show x
-                    return $ Bare (User x))
-          <?> "variable name"
-
-varOpName :: Monad m => P m SurfaceName
-varOpName = varName <|> P.try (parens op) 
-
-qvarName :: Monad m => P m SurfaceName
-qvarName =
-  (do mm <- P.optional (moduleName <* P.char '.')
-      Bare (User x) <- varName 
-      case mm of
-        Just m  -> return $ Qual m (User x)
-        Nothing -> return $ Bare (User x))
-  <?> "qualified variable name" 
-
-qvarOpName :: Monad m => P m SurfaceName
-qvarOpName =
-  qvarName <|> P.try (parens qop)
-  
-
-conidRaw :: P m String
-conidRaw = (:) <$> P.upperChar <*> P.many P.alphaNumChar 
-           <?> "constructor name" 
-
-conName :: Monad m => P m SurfaceName
-conName = Bare . User <$> conidRaw 
-
--- We have the special treatment for the case.
-qconName :: Monad m => P m SurfaceName
-qconName =
-  (do ms <- (:) <$> modElem <*> P.many (P.char '.' *> modElem)
-      case ms of
-        [m] -> return $ Bare (User m)
-        _   -> return $ Qual (ModuleName $ concat $ init ms) (User $ last ms))
-  <?> "qualified constructor name" 
-  
-
-symbolLambda :: P m String
-symbolLambda = symbol "\\" <|> symbol "λ"
-
-symbolRarr :: P m String
-symbolRarr = symbol "->" 
 
 {-
 E ::= \ P1 ... Pn -> E
@@ -264,21 +154,23 @@ singleConstraint = do
 
 tyExpr :: Monad m => P m (LTy 'Parsing)
 tyExpr =
-  (\t fs -> foldl (\e f -> f e) t fs)
-  <$> appTy <*> P.many (arr <*> appTy)
+  -- (\t fs -> foldl (\e f -> f e) t fs)
+  -- <$> appTy <*> P.many (arr <*> appTy)
+  (\fs t -> foldr ($) t fs) 
+  <$> P.many (P.try $ (\x f -> f x) <$> appTy <*> arr) <*> appTy 
   where
     mkArr m e1 e2 = Loc (location e1 <> location e2) $ TCon (BuiltIn nameTyArr) [m, e1, e2] 
     arr = 
       (do void $ symbol "->"
-          pure $ \e2 e1 -> mkArr (noLoc $ TMult Omega) e1 e2)
+          pure $ \e1 e2 -> mkArr (noLoc $ TMult Omega) e1 e2)
       <|>
       (do void $ symbol "-o"
-          pure $ \e2 e1 -> mkArr (noLoc $ TMult One) e1 e2)
+          pure $ \e1 e2 -> mkArr (noLoc $ TMult One) e1 e2)
       <|>
       (do void $ symbol "#"
           m <- multiplicity
           void $ symbol "->"
-          pure $ \e2 e1 -> mkArr m e1 e2)
+          pure $ \e1 e2 -> mkArr m e1 e2)
 
 appTy :: Monad m => P m (LTy 'Parsing)
 appTy =
@@ -290,9 +182,10 @@ appTy =
       ts <- P.some simpleTy
       return $ Loc (l <> mconcat (map location ts)) $ TCon c ts
 
-    revTy = do
+    revTy = loc $ do      
       void $ symbol "rev"
-      simpleTy
+      ty <- simpleTy
+      return $ TCon (BuiltIn nameTyRev) [ty]
 
 simpleTy :: Monad m => P m (LTy 'Parsing)
 simpleTy = getSrcLoc >>= \start -> 
@@ -432,9 +325,9 @@ sigDecl = do
 fixityDecl :: Monad m => P m (LDecl 'Parsing)
 fixityDecl = do
   start <- getSrcLoc
-  o <- op
-  n <- L.decimal
-  sp
+  void $ symbol "fixity" 
+  o <- op <* sp 
+  n <- L.decimal <* sp 
   a <- fromMaybe N <$> P.optional assoc
   end <- getSrcLoc 
   return $ Loc (start <> end) $ DFixity o (Prec n) a
