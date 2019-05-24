@@ -3,8 +3,8 @@ A simple DPLL-based SAT solver.
 -}
 
 module Language.Sparcl.Algorithm.SAT (
-  Formula, var, neg, (.&&.), (.||.), (.=>.), (.<=>.),
-  true, false, sat, allsat, toImpl, andI, orI, assignNM, satI
+  Formula, var, neg, (.&&.), (.||.), (.=>.), (.<=>.), elim, 
+  true, false, sat, allsat
   ) where
 
 import qualified Data.Map as M 
@@ -13,41 +13,75 @@ import qualified Data.Map.Merge.Lazy as M
 import Control.Monad.Writer
 import Language.Sparcl.Pretty hiding ((<$>))
 
-data Formula v = Formula { pCNF :: CNF v,
-                           nDNF :: DNF v } 
+data Formula v
+  = FVar v
+  | FAnd (Formula v) (Formula v)
+  | FNot (Formula v)
+  | FTrue
+  | FFalse 
+
+(.&&.) :: Formula v -> Formula v -> Formula v
+(.&&.) = FAnd
+
+(.||.) :: Formula v -> Formula v -> Formula v
+(.||.) t1 t2  = FNot (FAnd (FNot t1) (FNot t2))
+
+neg :: Formula v -> Formula v
+neg = FNot
+
+var :: v -> Formula v 
+var = FVar
+
+elim :: Eq v => v -> Bool -> Formula v -> Formula v
+elim v b = go
+  where
+    go (FVar x) 
+      | v == x    = if b then FTrue else FFalse
+      | otherwise = FVar x
+    go (FAnd t1 t2) = FAnd (go t1) (go t2)
+    go (FNot t)     = FNot (go t)
+    go FTrue        = FTrue
+    go FFalse       = FFalse
+
+makeCNF :: Ord v => Formula v -> (CNF v, DNF v)
+makeCNF (FVar v) = ([M.singleton v True], [M.singleton v False])
+makeCNF (FAnd t1 t2) =
+  let r1 = makeCNF t1
+      r2 = makeCNF t2
+  in (fst r1 ++ fst r2,
+      [ c | Just c <- [ c1 `appC` c2 | c1 <- snd r1, c2 <- snd r2 ]])
+makeCNF (FNot t) = swap (makeCNF t)
+  where
+    swap (a, b) = (b, a) 
+makeCNF FTrue  = ([], [M.empty])
+makeCNF FFalse = ([M.empty], [])
+
+pCNF :: Ord v => Formula v -> CNF v                   
+pCNF = fst . makeCNF
+
+
+-- data Formula v = Formula { pCNF :: CNF v,
+--                            nDNF :: DNF v } 
 type DNF v = [Clause v]
 type CNF v = [Clause v]
 
-instance Pretty v => Pretty (Formula v) where
-  ppr = hsep . punctuate (text "&&") . map pprC . pCNF
+instance (Pretty v, Ord v) => Pretty (Formula v) where
+  ppr = withSep (text "&&") . map pprC . pCNF
     where
-      pprC = parens . hsep . punctuate (text "||") . map pprL . M.toList
+      withSep _ []  = empty
+      withSep _ [x] = x
+      withSep d (x:xs) = x <+> d <+> withSep d xs 
+      pprC = parens . withSep (text "||") . map pprL . M.toList
       pprL (x, True)  = ppr x
       pprL (x, False) = text "-" <> ppr x 
 
 type Clause v = M.Map v Bool 
-
-data Var v = Var Bool v 
-  deriving Show 
 
 appC :: Ord v => Clause v -> Clause v -> Maybe (Clause v)
 appC cs1 cs2 =
   M.mergeA (M.traverseMissing $ \_ x -> pure x)
            (M.traverseMissing $ \_ x -> pure x)
            (M.zipWithAMatched $ \_ x y -> if x == y then pure x else Nothing) cs1 cs2  
-
-var :: v -> Formula v 
-var v = Formula [M.singleton v True] [M.singleton v False]
-
-neg :: Formula v -> Formula v
-neg a = Formula (nDNF a) (pCNF a) 
-
-(.&&.) :: Ord v => Formula v -> Formula v -> Formula v
-(.&&.) a b = Formula (pCNF a ++ pCNF b)
-                     [ c | Just c <- [ c1 `appC` c2 | c1 <- nDNF a, c2 <- nDNF b ] ]
-
-(.||.) :: Ord v => Formula v -> Formula v -> Formula v
-(.||.) a b = neg (neg a .&&. neg b)
 
 (.=>.) :: Ord v => Formula v -> Formula v -> Formula v
 (.=>.) a b = neg a .||. b
@@ -56,10 +90,10 @@ neg a = Formula (nDNF a) (pCNF a)
 (.<=>.) a b = (neg a .||. b) .&&. (neg b .||. a) 
 
 true :: Formula v
-true = Formula [] [M.empty]
+true = FTrue
 
 false :: Formula v
-false = Formula [M.empty] []
+false = FFalse
 
 infixr 2 .||.
 infixr 3 .&&.
@@ -69,13 +103,6 @@ infixr 1 .<=>.
 -----------
 
 type Key = Int 
-
-andI :: CNFimpl v -> CNFimpl v -> CNFimpl v 
-andI = mergeQ
-
-orI :: Ord v => CNFimpl v -> CNFimpl v -> CNFimpl v
-orI p1 p2 =
-  fromClauses [c | Just c <- [ appC c1 c2 | c1 <- toListQ p1, c2 <- toListQ p2 ]]
 
 -- Paring Heap -- from Chris Okasaki's book
   -- We also referred the following URL
@@ -132,8 +159,8 @@ assign v b cs = do
         Nothing ->
           Just m -- the assignment does not affect the clause
 
-assignNM :: Ord v => v -> Bool -> CNFimpl v -> CNFimpl v
-assignNM v b cs = fst $ runWriter (assign v b cs)
+-- assignNM :: Ord v => v -> Bool -> CNFimpl v -> CNFimpl v
+-- assignNM v b cs = fst $ runWriter (assign v b cs)
 
 assignAll :: (MonadPlus m, Ord v) => [v] -> Bool -> CNFimpl v -> Solver v m (CNFimpl v)
 assignAll []     _ m = return m
@@ -193,7 +220,6 @@ sat :: Ord v => Formula v -> Maybe [(v, Bool)]
 sat = satI . toImpl 
 
 allsat :: Show v => Ord v => Formula v -> [[(v,Bool)]]
--- allsat cs | trace (show $ pCNF cs) False = undefined 
 allsat cs =
   case sat cs of
     Nothing -> []

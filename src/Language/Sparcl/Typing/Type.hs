@@ -58,9 +58,9 @@ instance Pretty Ty where
   pprPrec _ (TyCon c []) = ppr c
   pprPrec k (TyCon c [m,a,b]) | c == nameTyArr = parensIf (k > 0) $ 
     case m of
-      TyMult One   -> D.group (pprPrec 1 a D.<$> D.text "-o" D.<+> pprPrec 0 b)
-      TyMult Omega -> D.group (pprPrec 1 a D.<$> D.text "->" D.<+> pprPrec 0 b)
-      _            -> D.group (pprPrec 1 a <+> D.text "#" <+> pprPrec 0 m D.<$> text "->" <+> pprPrec 0 b)
+      TyMult One   -> D.group (D.align (pprPrec 1 a) D.<$> D.text "-o" D.<+> pprPrec 0 b)
+      TyMult Omega -> D.group (D.align (pprPrec 1 a) D.<$> D.text "->" D.<+> pprPrec 0 b)
+      _            -> D.group (D.align (pprPrec 1 a) <+> D.text "#" <+> pprPrec 0 m D.<$> text "->" <+> pprPrec 0 b)
 
   pprPrec k (TyCon c ts) = parensIf (k > 1) $
     ppr c D.<+> D.align (D.hsep (map (pprPrec 2) ts))

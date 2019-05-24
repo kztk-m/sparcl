@@ -32,7 +32,7 @@ import Language.Sparcl.Pretty as D hiding ((<$>))
 import Data.List (partition, (\\))
 
 -- import Control.Exception (evaluate)
-import Debug.Trace 
+-- import Debug.Trace 
 
 ty2ty :: S.LTy 'Renaming -> Ty
 ty2ty (Loc _ ty) = go ty
@@ -422,7 +422,7 @@ constrainVars ((x,q):xqs) m = do
           cs <- constrainVars xqs m 
           return $ msub (TyMetaV pp) q : cs
         _ ->
-          error "Kind mismatch"
+          error $ "Kind mismatch: expected multiplicity, but received: " ++ show (ppr t')
     Nothing               -> do 
       whenChecking (OtherContext dx) $ unify q (TyMult Omega)
       constrainVars xqs m 
@@ -472,13 +472,18 @@ raiseUse m = runWriterT . traverse f
       return (MulVar r)
       
 
+-- TODO: sig-expression is buggy.
+
 inferTy :: MonadTypeCheck m => LExp 'Renaming -> m (LExp 'TypeCheck, BodyTy, UseMap, [TyConstraint])
 inferTy (Loc loc expr) = go expr
   where
     go (Sig e tySyn) = do
-      let ty = ty2ty tySyn
-      (e', umap, cs) <- checkTy e ty
-      return (e', ty, umap, cs) 
+      let sigTy = ty2ty tySyn
+      (e', polyTy, umap, cs) <- inferPolyTy e  
+      tryCheckMoreGeneral loc polyTy sigTy
+      (cs', ty') <- instantiate sigTy
+      -- (e', umap, cs) <- checkTy e ty'
+      return (e', ty', umap, cs'++cs) 
     go e = do 
       ty <- newMetaTy
       (e', umap, cs) <- checkTy (Loc loc e) ty
@@ -543,11 +548,16 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first3 $ Loc loc) $ atLoc loc $ a
       return $ (Bang e', umap', cs' ++ cs)
 
     go (Sig e tySyn) = do
-      let ty = ty2ty tySyn       
-      (cs, ty') <- instantiate ty
-      tryUnify ty' expectedTy
-      (e', umap, cs') <- checkTy e ty'
-      return (unLoc e', umap, cs ++ cs')
+      (Loc _ e', ty', umap, cs) <- inferTy (Loc loc $ Sig e tySyn)
+--      (cs', ty') <- instantiate polyTy
+      tryUnify ty' expectedTy      
+      return (e', umap, cs) 
+      
+      -- let ty = ty2ty tySyn       
+      -- (cs, ty') <- instantiate ty
+      -- tryUnify ty' expectedTy
+      -- (e', umap, cs') <- checkTy e ty'
+      -- return (unLoc e', umap, cs ++ cs')
 
     go Lift = do
       tyA <- newMetaTy
@@ -615,15 +625,32 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first3 $ Loc loc) $ atLoc loc $ a
 
       return (Case e0' alts', mergeUseMap umap0 umapA, cs0 ++ csA) 
 
-inferExp :: MonadTypeCheck m => LExp 'Renaming -> m (LExp 'TypeCheck, PolyTy)
-inferExp expr = do
-  (expr', ty, _, cs) <- inferTy expr
-  cs' <- simplifyConstraints cs 
-  ty' <- zonkTypeQ (TyQual cs' ty)
+inferPolyTy :: MonadTypeCheck m => LExp 'Renaming -> m (LExp 'TypeCheck, PolyTy, UseMap, [TyConstraint])
+inferPolyTy expr = do
+  (expr', ty, umap, cs) <- inferTy expr 
+  cs' <- simplifyConstraints cs
+  (csI, csO) <- splitConstraints cs'
+
+  ty' <- zonkTypeQ (TyQual csI ty)
+  
   envMetaVars <- getMetaTyVarsInEnv
   let mvs = metaTyVarsQ [ty']
   polyTy <- quantify (mvs \\ envMetaVars) ty'
-  trace (prettyShow ty' ++ " --> " ++ prettyShow polyTy) $ return (expr', polyTy) 
+  
+  return (expr', polyTy, umap, csO) 
+
+inferExp :: MonadTypeCheck m => LExp 'Renaming -> m (LExp 'TypeCheck, PolyTy)
+inferExp expr = do
+  -- ty <- newMetaTy 
+  -- (expr', _, cs) <- checkTy expr ty 
+  -- cs' <- simplifyConstraints cs 
+  -- ty' <- zonkTypeQ (TyQual cs' ty)
+  -- envMetaVars <- getMetaTyVarsInEnv
+  -- let mvs = metaTyVarsQ [ty']
+  -- polyTy <- quantify (mvs \\ envMetaVars) ty'
+  -- trace (prettyShow ty' ++ " --> " ++ prettyShow polyTy) $ return (expr', polyTy) 
+  (expr', polyTy, _, _) <- inferPolyTy expr
+  return (expr', polyTy) 
   
 
 checkAltsTy ::
@@ -1140,6 +1167,11 @@ skolemize (TyForAll tvs ty) = do
   return (sks, substTyQ (zip tvs $ map TyVar sks) ty)
 skolemize ty = return ([], TyQual [] ty) 
 
+tryCheckMoreGeneral :: MonadTypeCheck m => SrcSpan -> Ty -> Ty -> m ()
+tryCheckMoreGeneral loc ty1 ty2 = do
+  liftIO $ print $ red $ group $ text "Checking" <+> align (ppr ty1 <+>  text "is more general than" <> line <> ppr ty2)
+  whenChecking (CheckingMoreGeneral ty1 ty2) $ checkMoreGeneral loc ty1 ty2
+
 checkMoreGeneral :: MonadTypeCheck m => SrcSpan -> PolyTy -> PolyTy -> m ()
 checkMoreGeneral loc polyTy1 polyTy2@(TyForAll _ _) = do
   -- liftIO $ print $ hsep [ text "Signature:", ppr polyTy2 ]
@@ -1185,9 +1217,9 @@ checkMoreGeneral3 loc (TyQual cs1 ty1) (TyQual cs2 ty2) = atLoc loc $ do
   --                  undetermined         
 
   let prop = foldr (\a cnf ->
-                      (assignNM (MV a) True  cnf) `andI`
-                      (assignNM (MV a) False cnf))
-                   (SAT.toImpl $ toFormula cs2' .&&. SAT.neg (toFormula cs1''))
+                      (SAT.elim (MV a) True  cnf) .&&.
+                      (SAT.elim (MV a) False cnf))
+                   (toFormula cs2' .&&. SAT.neg (toFormula cs1''))
                    undetermined 
                         
   liftIO $ print $ red $ text "CS1:" <+> ppr cs1''
@@ -1197,7 +1229,7 @@ checkMoreGeneral3 loc (TyQual cs1 ty1) (TyQual cs2 ty2) = atLoc loc $ do
   case cs1'' of
     [] -> return ()   
     _  -> do
-      case SAT.satI prop of
+      case SAT.sat prop of
         Nothing -> return () 
         Just bs ->
           reportError $ Other $ D.group $
@@ -1244,7 +1276,8 @@ toFormula (MEqMax q1 q2 q3:cs) =
     conv (TyVar v)      = SAT.var (SV v) 
     conv t              = error $ show $ hsep [ppr t, text " is not a multiplicity"]
   
-        
+
+                          
 quantify :: MonadTypeCheck m => [MetaTyVar] -> QualTy -> m PolyTy
 quantify mvs ty = do
   forM_ (zip mvs newBinders) $

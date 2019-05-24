@@ -353,8 +353,9 @@ instance MonadTypeCheck TC where
   getMetaTyVarsInEnv = do
     tyEnv <- asks tcTyEnv
     let ts = M.elems tyEnv
-    multEnv <- asks tcMultEnv 
-    return $ metaTyVars (ts ++ multEnv)
+    multEnv <- asks tcMultEnv
+    ts' <- mapM zonkType (ts ++ multEnv) 
+    return $ metaTyVars ts' -- (ts ++ multEnv)
 
 
 newMetaTy :: MonadTypeCheck m => m Ty
