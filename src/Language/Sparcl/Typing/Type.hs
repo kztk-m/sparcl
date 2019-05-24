@@ -139,8 +139,10 @@ substTyC tbl' (MEqMax t1 t2 t3)  = MEqMax (substTy tbl' t1) (substTy tbl' t2) (s
 
 metaTyVars :: [Ty] -> [MetaTyVar]
 metaTyVarsQ :: [QualTy] -> [MetaTyVar]
+metaTyVarsC :: [TyConstraint] -> [MetaTyVar]
 
-(metaTyVars, metaTyVarsQ) = (flip (apps goTy) [], flip (apps goQ) [])
+(metaTyVars, metaTyVarsQ, metaTyVarsC) =
+  (flip (apps goTy) [], flip (apps goQ) [], flip (apps goC) [])
   where
     apps _f [] = id
     apps f  (t:ts) = f t . apps f ts 

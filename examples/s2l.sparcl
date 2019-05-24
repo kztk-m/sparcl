@@ -12,7 +12,7 @@ def null Nil = True
 Transformations from sets of numbers (expressed as a sorted list) to lists of numbers. 
 -}
 
--- sig s2l : rev (List Int) -o rev (List Int)
+sig s2l : rev (List Int) -o rev (List Int)
 def s2l = go 0 
     where 
       def go n (rev Nil)       = rev Nil with null
@@ -28,10 +28,10 @@ def ($) f x = f x
 
 fixity $ 0 right 
 
--- sig dec : rev Int -o rev Int 
+sig dec : rev Int -o rev Int 
 def dec = (\x -> x) $ lift (\x -> x - 1) (\x -> x + 1)
 
--- sig flipsub : Int -> rev Int -o rev Int 
+sig flipsub : Int -> rev Int -o rev Int 
 def flipsub n r = 
    case eqInt n 0 of 
    | True  -> r 

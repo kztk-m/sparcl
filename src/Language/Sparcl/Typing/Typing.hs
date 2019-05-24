@@ -28,6 +28,7 @@ import qualified Language.Sparcl.Surface.Syntax as S
 
 import Language.Sparcl.Pretty as D hiding ((<$>))
 
+-- import Data.Maybe (isNothing)
 import Data.List (partition, (\\))
 
 -- import Control.Exception (evaluate)
@@ -415,10 +416,11 @@ constrainVars ((x,q):xqs) m = do
         TyMult One   -> 
           constrainVars xqs m
         TyMetaV pp -> do 
-          unify q (TyMetaV pp) 
-          cs <- constrainVars xqs m
-          return cs 
-          -- return $ msub (TyMetaV pp) q : cs
+          -- unify q (TyMetaV pp) 
+          -- cs <- constrainVars xqs m
+          -- return cs
+          cs <- constrainVars xqs m 
+          return $ msub (TyMetaV pp) q : cs
         _ ->
           error "Kind mismatch"
     Nothing               -> do 
@@ -1168,25 +1170,57 @@ checkMoreGeneral2 loc ty1 ty2 = checkMoreGeneral3 loc (TyQual [] ty1) ty2
 
 checkMoreGeneral3 :: MonadTypeCheck m => SrcSpan -> QualTy -> QualTy -> m ()
 checkMoreGeneral3 loc (TyQual cs1 ty1) (TyQual cs2 ty2) = atLoc loc $ do
-  -- TODO
-  atLoc loc $ unify ty1 ty2 
-  cs1' <- mapM zonkTypeC cs1
-  cs2' <- mapM zonkTypeC cs2
+  atLoc loc $ unify ty1 ty2
+
+  cs1' <- simplifyConstraints =<< mapM zonkTypeC cs1
+  cs2' <- simplifyConstraints =<< mapM zonkTypeC cs2
 
   let cs1'' = filter (not . (`elem` cs2')) cs1' 
+
+  let undetermined = metaTyVarsC $ cs1''++ cs2'
+  -- let props = foldr (\a rs ->
+  --                     [ ((a,True):xs, SAT.var (MV a) .&&. r) | (xs,r) <- rs ]
+  --                     ++ [ ((a, False):xs, neg (SAT.var (MV a)) .&&. r) | (xs,r) <- rs])
+  --                  [([], toFormula cs2' .&&. SAT.neg (toFormula cs1''))]
+  --                  undetermined         
+
+  let prop = foldr (\a cnf ->
+                      (assignNM (MV a) True  cnf) `andI`
+                      (assignNM (MV a) False cnf))
+                   (SAT.toImpl $ toFormula cs2' .&&. SAT.neg (toFormula cs1''))
+                   undetermined 
+                        
+  liftIO $ print $ red $ text "CS1:" <+> ppr cs1''
+  liftIO $ print $ red $ text "CS2:" <+> ppr cs2'
+  liftIO $ print $ red $ text "Undetermined vars." <+> ppr undetermined
 
   case cs1'' of
     [] -> return ()   
     _  -> do
-      case SAT.sat $ toFormula cs2' .&&. SAT.neg (toFormula cs1'') of
-        Nothing -> return ()
-        Just bs -> 
+      case SAT.satI prop of
+        Nothing -> return () 
+        Just bs ->
           reportError $ Other $ D.group $
-             vcat [ hsep [pprC cs2', text "does not imply", pprC cs1' ],
-                    text "a concrete counter example is:",
-                    vcat $ map (\(v, b) -> ppr v <+> text "->" <+> text (if b then "Omega" else "One")) bs ]
-                  
+          vcat [ hsep [pprC cs2', text "does not imply", pprC cs1'], 
+                 (if null undetermined then empty
+                  else line <> text "with any choice of" <+> ppr undetermined),
+                 text "a concrete counter example:",
+                 vcat (map pprS bs) ]
+      -- let results = map (\(xs,p) -> (xs, SAT.sat p)) props
+      -- if any (isNothing . snd) results
+      --   then return ()
+      --   else do
+      --   reportError $ Other $ D.group $
+      --        hsep [pprC cs2', text "does not imply", pprC cs1' ]
+      --        <> (if null undetermined then empty
+      --            else line <> text "with any choice of" <+> ppr undetermined)
+      --        <> vcat (map pprRes results)
   where
+    -- pprRes (xs, ~(Just bs)) =
+    --   vcat [ text "for" <+> align (hsep (map pprS xs)),
+    --          text "we have a counter example:", 
+    --          text "  " <> align (vcat (map pprS bs)) ]
+    pprS (x, b) = ppr x <+> text "=" <+> text (if b then "Omega" else "One")
     pprC = parens . hsep . punctuate comma . map ppr 
       -- liftIO $ print $ hsep [ red (text "[TODO : Implement SAT-based check]"),
       --                         parens $ hsep $ punctuate comma $ map ppr cs2', text  "||-" ,

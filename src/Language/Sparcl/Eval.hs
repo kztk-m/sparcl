@@ -41,7 +41,7 @@ evalU env expr = case expr of
         v2 <- evalU env e2
         f v2
       _ ->
-        rtError $ text "the first component of application must be a function."
+        rtError $ text $ "the first component of application must be a function." ++ show (ppr v1) 
   Abs n e ->
     return $ VFun (\v -> evalU (extendEnv n v env) e)
 
@@ -56,29 +56,37 @@ evalU env expr = case expr of
     evalCase env v0 pes
 
   Lift ef eb -> do
-    VBang (VFun vf) <- evalU env ef
-    VBang (VFun vb) <- evalU env eb
-    let vf' = vf . VBang
-    let vb' = vb . VBang 
-    return $ VBang $ VFun $ \(VRes f b) ->
-                              return $ VRes (f >=> vf') (vb' >=> b)
+    VFun vf <- evalU env ef
+    VFun vb <- evalU env eb
+    return $ VFun $ \(VRes f b) -> return $ VRes (f >=> vf) (vb >=> b) 
+    -- VBang (VFun vf) <- evalU env ef
+    -- VBang (VFun vb) <- evalU env eb
+    -- let vf' = vf . VBang
+    -- let vb' = vb . VBang 
+    -- return $ VBang $ VFun $ \(VRes f b) ->
+    --                           return $ VRes (f >=> vf') (vb' >=> b)
 
   Let ds e -> do
     env' <- evalUBind env ds 
     evalU env' e
 
   Unlift e -> do
-    VBang (VFun f) <- evalU env e
+    -- VBang (VFun f) <- evalU env e
+    VFun f <- evalU env e 
     newAddr $ \a -> do
       VRes f0 b0 <- f (VRes (\hp -> lookupHeap a hp)
                         (\v  -> return $ singletonHeap a v))
-      let f0' (VBang v) = f0 (singletonHeap a v)
-          f0' _         = error "expecting !"
-      let b0' (VBang v) = do hp <- b0 v
-                             lookupHeap a hp
-          b0' _         = error "expecting !"
+      let f0' v = f0 (singletonHeap a v)
+      let b0' v = do hp <- b0 v
+                     lookupHeap a hp 
+      -- let f0' (VBang v) = f0 (singletonHeap a v)
+      --     f0' _         = error "expecting !"
+      -- let b0' (VBang v) = do hp <- b0 v
+      --                        lookupHeap a hp
+      --     b0' _         = error "expecting !"
       let c = nameTuple 2
-      return $ VCon c [VBang (VFun f0'), VBang (VFun b0')] 
+      -- return $ VCon c [VBang (VFun f0'), VBang (VFun b0')]
+      return $ VCon c [VFun f0', VFun b0']
   
 
   RCon q es -> do 
@@ -97,7 +105,8 @@ evalU env expr = case expr of
   RCase e0 pes -> do
     VRes f0 b0 <- evalU env e0
     pes' <- mapM (\(p,e,e') -> do
-                     VBang (VFun ch) <- evalU env e'
+                     -- VBang (VFun ch) <- evalU env e'
+                     VFun ch <- evalU env e' 
                      let ch' v = do
                            res <- ch v
                            case res of
@@ -114,12 +123,12 @@ evalU env expr = case expr of
     let c = nameTuple 2 
     return $ VRes (\hp -> do
                       a <- f1 hp
-                      VRes f2 _ <- h (VBang a)
+                      VRes f2 _ <- h a -- (VBang a)
                       b <- f2 hp
                       return $ VCon c [a, b])
                   (\v -> case v of
                            VCon c' [a,b] | c' == c -> do 
-                                             VRes _ b2 <- h (VBang a)
+                                             VRes _ b2 <- h a -- (VBang a)
                                              hp2 <- b2 b
                                              hp1 <- b1 a
                                              return $ unionHeap hp1 hp2
@@ -164,8 +173,10 @@ evalCaseF env hp f0 alts = do
              checkAssert ch checker res
 
     checkAssert ch checker res = do
-      v  <- ch (VBang res)
-      vs <- mapM (\c -> c (VBang res)) checker
+      -- v  <- ch (VBang res)
+      -- vs <- mapM (\c -> c (VBang res)) checker
+      v <- ch res
+      vs <- mapM (\c -> c res) checker 
       when (v && not (or vs)) $
         rtError (text "Assertion failed (fwd)")
       return res
@@ -184,7 +195,8 @@ evalCaseB env vres b0 alts = do
     
     go _ [] = rtError $ text "pattern match failure (bwd)"
     go checker ((p,e,ch):pes) = do
-      flg <- ch (VBang vres) 
+      -- flg <- ch (VBang vres)
+      flg <- ch vres 
       case flg of
         False -> go (mkAssert p:checker) pes
         True -> do

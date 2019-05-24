@@ -44,7 +44,7 @@ opRaw =
   <?> "operator"
 
 specialOp :: [String]
-specialOp = ["|", "->", "=>", "\\","--", "@", "#"] 
+specialOp = ["|", "->", "=>", "\\","--", "@", "#", ":"] 
 
 varidRaw :: P m String
 varidRaw = (:) <$> P.lowerChar <*> P.many (P.alphaNumChar <|> P.char '\'')

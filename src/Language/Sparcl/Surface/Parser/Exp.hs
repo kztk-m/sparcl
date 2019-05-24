@@ -76,7 +76,11 @@ expr = getSrcLoc >>= \startLoc ->
       endLoc <- getSrcLoc 
       return $ Loc (startLoc <> endLoc) $ Case e0 alts)
   <|>
-  opExpr 
+  (do e <- opExpr
+      m <- P.optional (symbol ":" *> typeExpr)
+      case m of
+        Just ty -> pure $ Loc (location e <> location ty) $ Sig e ty
+        Nothing -> pure $ e)
 
 
 simplePat :: Monad m => P m (LPat 'Parsing)
@@ -128,7 +132,7 @@ typeExpr :: Monad m => P m (LTy 'Parsing)
 typeExpr = do
   ef    <- P.optional (symbol "forall" *> P.many (varName <* sp) <* symbol ".")
   mid   <- getSrcLoc 
-  ctxt  <- P.optional (constraint <* symbol "=>")
+  ctxt  <- P.optional $ P.try (constraint <* symbol "=>")
   ty    <- arrTy
   return $ maybe id foralls ef $ maybe id (\cs -> Loc (mid <> location ty) . (TQual cs)) ctxt ty
     where
@@ -206,7 +210,7 @@ simpleTy = getSrcLoc >>= \start ->
 tupleTy :: Monad m => P m (LTy 'Parsing)
 tupleTy =
   mkTupleTy <$> 
-  parens (arrTy `P.sepBy` comma) 
+  parens (typeExpr `P.sepBy` comma) 
 
 mkTupleTy :: [LTy 'Parsing] -> LTy 'Parsing 
 mkTupleTy [t] = t
@@ -361,7 +365,7 @@ simpleExpr startLoc =
   <|> pinExpr 
   <|> liftExpr 
   <|> unliftExpr
-  <|> rconExpr
+  <|> P.try rconExpr
   <|> conExpr
   <|> varExpr
   <|> tupleExpr 
@@ -405,8 +409,8 @@ tupleExpr = do
   p  <- P.optional (symbol "rev")
   es <- parens (expr `P.sepBy` comma)
   case p of
-    Just _  -> pure $ mkTupleExp  es
-    Nothing -> pure $ mkTupleExpR es
+    Just _  -> pure $ mkTupleExpR es
+    Nothing -> pure $ mkTupleExp  es
     
 
 

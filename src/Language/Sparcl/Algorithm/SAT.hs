@@ -4,18 +4,26 @@ A simple DPLL-based SAT solver.
 
 module Language.Sparcl.Algorithm.SAT (
   Formula, var, neg, (.&&.), (.||.), (.=>.), (.<=>.),
-  true, false, sat, allsat
+  true, false, sat, allsat, toImpl, andI, orI, assignNM, satI
   ) where
 
 import qualified Data.Map as M 
 import qualified Data.Map.Merge.Lazy as M 
 
 import Control.Monad.Writer
+import Language.Sparcl.Pretty hiding ((<$>))
 
 data Formula v = Formula { pCNF :: CNF v,
                            nDNF :: DNF v } 
 type DNF v = [Clause v]
 type CNF v = [Clause v]
+
+instance Pretty v => Pretty (Formula v) where
+  ppr = hsep . punctuate (text "&&") . map pprC . pCNF
+    where
+      pprC = parens . hsep . punctuate (text "||") . map pprL . M.toList
+      pprL (x, True)  = ppr x
+      pprL (x, False) = text "-" <> ppr x 
 
 type Clause v = M.Map v Bool 
 
@@ -62,6 +70,13 @@ infixr 1 .<=>.
 
 type Key = Int 
 
+andI :: CNFimpl v -> CNFimpl v -> CNFimpl v 
+andI = mergeQ
+
+orI :: Ord v => CNFimpl v -> CNFimpl v -> CNFimpl v
+orI p1 p2 =
+  fromClauses [c | Just c <- [ appC c1 c2 | c1 <- toListQ p1, c2 <- toListQ p2 ]]
+
 -- Paring Heap -- from Chris Okasaki's book
   -- We also referred the following URL
   -- https://www-ps.informatik.uni-kiel.de/~sebf/projects/sat-solver/Control/Monad/Constraint/Boolean.lhs.html
@@ -102,7 +117,7 @@ toImpl p = fromClauses $ pCNF p
 
 type Solver v m = WriterT [(v,Bool)] m 
 
-assign :: (Ord v, MonadPlus m) => v -> Bool -> CNFimpl v -> Solver v m (CNFimpl v) 
+assign :: (Monad m, Ord v) => v -> Bool -> CNFimpl v -> Solver v m (CNFimpl v) 
 assign v b cs = do
   tell [(v, b)]
   return $ fromClauses [ x | Just x <- map tryAssign $ toListQ cs ]
@@ -116,6 +131,9 @@ assign v b cs = do
             Just $ M.delete v m 
         Nothing ->
           Just m -- the assignment does not affect the clause
+
+assignNM :: Ord v => v -> Bool -> CNFimpl v -> CNFimpl v
+assignNM v b cs = fst $ runWriter (assign v b cs)
 
 assignAll :: (MonadPlus m, Ord v) => [v] -> Bool -> CNFimpl v -> Solver v m (CNFimpl v)
 assignAll []     _ m = return m
@@ -165,11 +183,14 @@ dpll cs | null cs     = return ()
               v:_ -> (dpll =<< assign v True  cs'') `mplus`
                      (dpll =<< assign v False cs'')
 
-sat :: Ord v => Formula v -> Maybe [(v, Bool)]
-sat cs =
-  case execWriterT (dpll $ toImpl cs) of
-    []   -> Nothing
+satI :: Ord v => CNFimpl v -> Maybe [(v, Bool)]
+satI cs =
+  case execWriterT (dpll cs) of
+    [] -> Nothing
     vs:_ -> Just vs 
+
+sat :: Ord v => Formula v -> Maybe [(v, Bool)]
+sat = satI . toImpl 
 
 allsat :: Show v => Ord v => Formula v -> [[(v,Bool)]]
 -- allsat cs | trace (show $ pCNF cs) False = undefined 

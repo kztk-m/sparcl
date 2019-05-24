@@ -240,9 +240,6 @@ baseModuleInfo = ModuleInfo {
     leChar = base "leChar"
     ltChar = base "ltChar"
 
-    unBang (VBang v) = v
-    unBang _         = rtError $ text "Not a bang"
-  
     unInt  (VLit (LitInt n)) = n
     unInt  _                 = rtError $ text "Not an integer"
     unChar (VLit (LitChar n)) = n
@@ -280,12 +277,12 @@ baseModuleInfo = ModuleInfo {
           base "+" |-> intOp (+),
           base "-" |-> intOp (-),
           base "*" |-> intOp (*),
-          eqInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool $ ((==) `on` (unInt . unBang)) n m),
-          leInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool $ ((<=) `on` (unInt . unBang)) n m),
-          ltInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool $ ((<)  `on` (unInt . unBang)) n m),
-          eqChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool $ ((==) `on` (unChar . unBang)) c d),
-          leChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool $ ((<=) `on` (unChar . unBang)) c d),
-          ltChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool $ ((<)  `on` (unChar . unBang)) c d)
+          eqInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool $ ((==) `on` unInt ) n m),
+          leInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool $ ((<=) `on` unInt ) n m),
+          ltInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool $ ((<)  `on` unInt ) n m),
+          eqChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool $ ((==) `on` unChar) c d),
+          leChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool $ ((<=) `on` unChar) c d),
+          ltChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool $ ((<)  `on` unChar) c d)
           ]
 
     names = M.keys typeTable
