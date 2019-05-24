@@ -129,7 +129,7 @@ typeExpr = do
   ef    <- P.optional (symbol "forall" *> P.many (varName <* sp) <* symbol ".")
   mid   <- getSrcLoc 
   ctxt  <- P.optional (constraint <* symbol "=>")
-  ty    <- tyExpr
+  ty    <- arrTy
   return $ maybe id foralls ef $ maybe id (\cs -> Loc (mid <> location ty) . (TQual cs)) ctxt ty
     where
       foralls [] r     = r
@@ -152,12 +152,12 @@ singleConstraint = do
       symbolTyEq = (symbol "~" <|> symbol "≡")
       symbolMult = (symbol "*" <|> symbol "↑")
 
-tyExpr :: Monad m => P m (LTy 'Parsing)
-tyExpr =
-  -- (\t fs -> foldl (\e f -> f e) t fs)
-  -- <$> appTy <*> P.many (arr <*> appTy)
-  (\fs t -> foldr ($) t fs) 
-  <$> P.many (P.try $ (\x f -> f x) <$> appTy <*> arr) <*> appTy 
+
+arrTy :: Monad m => P m (LTy 'Parsing)
+arrTy =
+  -- Essentially, this implements foldr by foldl. 
+  (\t fs -> foldl (\f g -> \c -> f (g c)) (\c -> c t) fs id)
+  <$> appTy <*> P.many ((\f x c z -> f z (c x)) <$> arr <*> appTy)
   where
     mkArr m e1 e2 = Loc (location e1 <> location e2) $ TCon (BuiltIn nameTyArr) [m, e1, e2] 
     arr = 
@@ -206,7 +206,7 @@ simpleTy = getSrcLoc >>= \start ->
 tupleTy :: Monad m => P m (LTy 'Parsing)
 tupleTy =
   mkTupleTy <$> 
-  parens (tyExpr `P.sepBy` comma) 
+  parens (arrTy `P.sepBy` comma) 
 
 mkTupleTy :: [LTy 'Parsing] -> LTy 'Parsing 
 mkTupleTy [t] = t
