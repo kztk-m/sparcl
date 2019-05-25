@@ -463,7 +463,7 @@ readExp str = do
   opTable   <- ask (key @KeyOp)
 
   debugPrint 1 $ text "Parsing expression..."
-  parsedExp       <- either (staticError . D.text) return $ parseExp' "*repl*" str
+  parsedExp       <- either (staticError . D.text) return $ parseExp' "<*repl*>" str
   debugPrint 1 $ text "Parsing Ok."
   debugPrint 1 $ text "Renaming expression..."
   (renamedExp, _) <- either nameError return $ runRenaming nameTable opTable (renameExp 0 M.empty parsedExp)

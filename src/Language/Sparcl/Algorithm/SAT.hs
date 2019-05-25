@@ -66,12 +66,12 @@ type DNF v = [Clause v]
 type CNF v = [Clause v]
 
 instance (Pretty v, Ord v) => Pretty (Formula v) where
-  ppr = withSep (text "&&") . map pprC . pCNF
+  ppr = withSep (text "&") . map pprC . pCNF
     where
       withSep _ []  = empty
       withSep _ [x] = x
       withSep d (x:xs) = x <+> d <+> withSep d xs 
-      pprC = parens . withSep (text "||") . map pprL . M.toList
+      pprC = parens . withSep (text "|") . map pprL . M.toList
       pprL (x, True)  = ppr x
       pprL (x, False) = text "-" <> ppr x 
 

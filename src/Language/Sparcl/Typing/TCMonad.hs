@@ -48,34 +48,45 @@ data ErrorDetail
   
 
 instance Pretty TypeError where
-  ppr (TypeError l exprs ctxt doc) =
+  ppr (TypeError l exprs ctxt doc) = nest 2 $ 
      -- D.bold (D.text "[TYPE ERROR]") D.<+> D.nest 2
-     (maybe (D.text "*unknown place*") ppr l 
-      D.<$> pprDetail doc <> pprWhenChecking ctxt 
-      D.<$> pprContexts (drop (length exprs - 3) exprs))     
+    D.bold (maybe (D.text "<*unknown place*>") ppr l <> text ":" <+> D.red (text "type error"))
+    <> line 
+    <> pprDetail doc
+    <> pprWhenChecking ctxt
+    <> (if null exprs then empty else item (group $ pprContexts (drop (length exprs - 3) exprs)))
     where
+      item d = text "-" <+> align d <> line 
+      
       pprWhenChecking (CheckingEquality ty1 ty2) =
-        D.line <> D.text "when checking the following types are equivalent:"
-        D.<> D.nest 2 (line <> vsep [ hsep[text "Inferred:", ppr ty1],
-                                      hsep[text "Expected:", ppr ty2] ])
+        D.line <> 
+        item (D.text "when checking the following types are equivalent:"
+              D.<> D.nest 2 (line <> vsep [ hsep[text "Inferred:", ppr ty1],
+                                            hsep[text "Expected:", ppr ty2] ]))
 
       pprWhenChecking (CheckingMoreGeneral ty1 ty2) =
-        D.line <> D.text "when checking the inferred type is more general than the expected."
-        D.<> D.nest 2 (line <> vsep [ hsep[text "Inferred:", ppr ty1],
-                                      hsep[text "Expected:", ppr ty2] ])
+        D.line <>
+        item (D.text "when checking the inferred type is more general than the expected."
+              D.<> D.nest 2 (line <> vsep [ hsep[text "Inferred:", ppr ty1],
+                                            hsep[text "Expected:", ppr ty2] ]))
         
       pprWhenChecking (CheckingConstraint cs) =
-        D.line <> D.text "when checking constraints:"
-        D.<$> D.parens (hsep $ punctuate comma $ map ppr cs)
+        D.line <>
+        item (D.text "when checking constraints:"
+              D.<$> D.parens (hsep $ punctuate comma $ map ppr cs))
 
       pprWhenChecking (OtherContext d) =
-        D.line <> D.text "when checking" <+> d
+        D.line <>
+        item (D.text "when checking" <+> d)
 
       pprWhenChecking CheckingNone = D.empty 
-      
-      pprDetail (UnMatchTy ty1 ty2) = 
-        D.text "Types do not match:"
-        D.<+> D.align (ppr ty1) D.<+> D.text "/=" D.<+> D.align (ppr ty2)
+
+
+      pprDetail = item . go
+        where 
+          go (UnMatchTy ty1 ty2) = 
+            D.text "Types do not match:"
+            D.<+> D.align (ppr ty1) D.<+> D.text "/=" D.<+> D.align (ppr ty2)
 
       -- pprDetail (UnMatchTyD ty1 ty2 ty1' ty2') =
       --   D.text "Types do not match" D.<> D.nest 2 
@@ -84,26 +95,28 @@ instance Pretty TypeError where
       --   D.<$> D.text "More precisely, the following types do not match."
       --   <> D.nest 2 (line <> D.align (ppr ty1') D.<+> D.text "/=" D.<+> D.align (ppr ty2'))
 
-      pprDetail (OccurrenceCheck mv ty) =
-        D.text "Cannot construct an infinite type:"
-        D.<$> D.hsep[ ppr mv, D.text "=", D.align (ppr ty) ]
+          go (OccurrenceCheck mv ty) = 
+            D.text "Cannot construct an infinite type:"
+            D.<$> D.hsep[ ppr mv, D.text "=", D.align (ppr ty) ]
 
-      pprDetail (MultipleUse v) =
-        D.hsep [ D.text "Variable", ppr v, D.text "must not be used more than once." ]
+          go (MultipleUse v) =
+            D.hsep [ D.text "Variable", ppr v, D.text "must not be used more than once." ]
 
-      pprDetail (NoUse v) =
-        D.hsep [ D.text "Variable", ppr v, D.text "must be used at once." ]
+          go (NoUse v) =
+            D.hsep [ D.text "Variable", ppr v, D.text "must be used at once." ]
 
-      pprDetail (Undefined v) =
-        D.hsep [ D.text "Unbound variable", ppr v ]
+          go (Undefined v) =
+            D.hsep [ D.text "Unbound variable", ppr v ]
         
-      pprDetail (Other d) = d         
+          go (Other d) = d         
         
-      pprContexts []  = D.empty
-      pprContexts (e:es) =
-        D.line D.<> D.text "when checking expression:" D.<+> ppr (location e) 
+      pprContexts []     = D.empty
+      pprContexts [e]    = pprContext e
+      pprContexts (e:es) = pprContext e D.<$> pprContexts es
+
+      pprContext e =
+        D.text "In:" D.<+> ppr (location e) 
         D.<> D.nest 2 (D.line D.<> ppr e)
-        D.<> pprContexts es 
 
  
 

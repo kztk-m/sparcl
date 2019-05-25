@@ -20,6 +20,8 @@ import qualified Language.Sparcl.Typing.Type as Typing
 import Data.Kind 
 import Data.Void
 
+import Data.Typeable 
+
 -- makeTupleExp :: [LExp p] -> LExp p
 -- makeTupleExp [e] = e
 -- makeTupleExp es  = noLoc $ Con (nameTuple $ length es) es
@@ -54,14 +56,38 @@ instance AllPretty p => Pretty (TConstraint p) where
   ppr (MSub p1 p2)      = ppr p1 <+> text "<=" <+> ppr p2
   ppr (MEqMax p1 p2 p3) = ppr p1 <+> text "~" <+> ppr p2 <+> text "*" <+> ppr p3 
 
+
+isTyArr :: forall p. Typeable p => Proxy p -> XTId p -> Bool
+isTyArr _ n =
+  case eqT @p @'Parsing of
+    Just Refl -> n == BuiltIn nameTyArr
+    Nothing ->
+      case eqT @p @'Renaming of
+        Just Refl -> n == nameTyArr
+        _         -> False 
+  
+
 instance AllPretty p => Pretty (Ty p) where
   pprPrec _ (TVar n) = ppr n
-  pprPrec k (TCon c ts) = parensIf (k > 0) $
-    ppr c D.<+> (D.hsep $ map (pprPrec 1) ts)
-  pprPrec k (TQual cs t) = parensIf (k > 0) $ 
-    parens (hsep $ D.punctuate comma $ map ppr cs) D.<+> D.text "=>" D.<+> pprPrec 0 t 
-  pprPrec k (TForall n t) = parensIf (k > 0) $
-    D.text "forall" D.<+> ppr n D.<+> pprPrec 0 t
+  pprPrec k (TCon c [m,t1,t2])
+    | isTyArr (Proxy :: Proxy p) c =
+        let arr = case unLoc m of
+                    TMult Omega -> line <> text "->"
+                    TMult One   -> line <> text "-o"
+                    _ -> text " " <> text "#" <+> ppr m D.<$> text "->"                        
+        in parensIf (k > 0) $ D.group $ pprPrec 1 t1 <> arr <+> pprPrec 0 t2                
+  pprPrec k (TCon c ts) = parensIf  (k > 1) $ ppr c D.<+> (D.hsep $ map (pprPrec 2) ts)          
+
+  pprPrec k (TQual cs t) = parensIf (k > 0) $ align $ 
+    parens (hsep $ D.punctuate comma $ map ppr cs) D.<$> D.text "=>" D.<+> pprPrec 0 t 
+  pprPrec k ty@(TForall _ _) =
+    let (ns, t) = gatherVars [] ty
+    in parensIf (k > 0) $ group $ align $ nest 2 $ 
+       D.text "forall" D.<+> hsep (map ppr ns) <> text "." D.<$> pprPrec 0 t
+    where
+      gatherVars ns (TQual [] t)  = gatherVars ns (unLoc t) 
+      gatherVars ns (TForall m t) = gatherVars (m:ns) (unLoc t)
+      gatherVars ns t             = (reverse ns, t)  
   pprPrec _ (TMult m) = ppr m
 
 instance AllPretty p => Pretty (Loc (Ty p)) where
@@ -78,8 +104,6 @@ type family XId (p :: Pass) = q | q -> p where
 class QueryName p where
   checkTuple :: XId p -> Maybe Int
   isRev      :: XId p -> Bool
-  isTyRev    :: XId p -> Bool
-  isTyBang   :: XId p -> Bool
 
 instance QueryName 'Parsing where
   checkTuple (BuiltIn n) = checkTuple n
@@ -88,10 +112,6 @@ instance QueryName 'Parsing where
   isRev (BuiltIn n) = isRev n
   isRev _           = False
 
-  isTyRev = isRev
-  
-  isTyBang (BuiltIn n) = isTyBang n
-  isTyBang _           = False
 
 instance QueryName 'Renaming where
   checkTuple (Original _ (System (NTuple n)) _) = Just n
@@ -100,23 +120,14 @@ instance QueryName 'Renaming where
   isRev (Original _ (System NRev) _) = True
   isRev _                            = False
 
-  isTyRev = isRev
-
-  isTyBang (Original _ (System _) _) = True
-  isTyBang _                         = False
-
 instance QueryName 'TypeCheck where
   checkTuple (n, _) = checkTuple n
 
   isRev (n, _) = isRev n
 
-  isTyRev = isRev
-
-  isTyBang (n,_) = isTyBang n 
-
 
 type ForallX (f :: Type -> Constraint) p = (f (XId p), f (XTId p))
-type AllPretty p = (ForallX Pretty p, QueryName p)
+type AllPretty p = (ForallX Pretty p, QueryName p, Typeable p)
 
 -- TODO: add "if" expression 
 data Exp p 

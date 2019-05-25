@@ -70,10 +70,10 @@ instance Pretty Ty where
   pprPrec _ (TyMetaV m) = ppr m
 
   pprPrec k (TyForAll [] t) = pprPrec k t 
-  pprPrec k (TyForAll ns t) = parensIf (k > 0) $ 
+  pprPrec k (TyForAll ns t) = D.group $ D.align $ parensIf (k > 0) $ 
     D.text "forall" D.<+>
       D.hsep (map ppr ns) D.<> D.text "."
-      D.<+> D.align (pprPrec 0 t)
+      D.<> nest 2 (line <> D.align (pprPrec 0 t))
 
   pprPrec k (TySyn t _) = pprPrec k t 
 
@@ -81,7 +81,7 @@ instance Pretty Ty where
 
 instance Pretty QualTy where
   pprPrec k (TyQual [] t) = pprPrec k t 
-  pprPrec k (TyQual cs t) = parensIf (k > 0) $
+  pprPrec k (TyQual cs t) = parensIf (k > 0) $ align $ 
     sep [d, text "=>" <+> pprPrec 0 t]
     where
       d = parens $ hsep $ punctuate comma (map ppr cs)

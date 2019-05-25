@@ -115,7 +115,7 @@ instantiate (TyForAll ts qt) = do
   ms <- mapM (const newMetaTy) ts
   let subs = zip ts ms 
   let TyQual cs' t' = substTyQ subs qt 
-  return $ (cs', t')
+  return (cs', t')
 instantiate t = return ([], t) 
 
 -- instPoly :: MonadTypeCheck m => SrcSpan -> PolyTy -> BodyTy -> m () 
@@ -477,13 +477,13 @@ raiseUse m = runWriterT . traverse f
 inferTy :: MonadTypeCheck m => LExp 'Renaming -> m (LExp 'TypeCheck, BodyTy, UseMap, [TyConstraint])
 inferTy (Loc loc expr) = go expr
   where
-    go (Sig e tySyn) = do
-      let sigTy = ty2ty tySyn
-      (e', polyTy, umap, cs) <- inferPolyTy e  
-      tryCheckMoreGeneral loc polyTy sigTy
-      (cs', ty') <- instantiate sigTy
-      -- (e', umap, cs) <- checkTy e ty'
-      return (e', ty', umap, cs'++cs) 
+    -- go (Sig e tySyn) = do
+    --   let sigTy = ty2ty tySyn
+    --   (e', polyTy, umap, cs) <- inferPolyTy e  
+    --   tryCheckMoreGeneral loc polyTy sigTy
+    --   (cs', ty') <- instantiate sigTy
+    --   -- (e', umap, cs) <- checkTy e ty'
+    --   return (e', ty', umap, cs'++cs) 
     go e = do 
       ty <- newMetaTy
       (e', umap, cs) <- checkTy (Loc loc e) ty
@@ -548,10 +548,16 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first3 $ Loc loc) $ atLoc loc $ a
       return $ (Bang e', umap', cs' ++ cs)
 
     go (Sig e tySyn) = do
-      (Loc _ e', ty', umap, cs) <- inferTy (Loc loc $ Sig e tySyn)
---      (cs', ty') <- instantiate polyTy
-      tryUnify ty' expectedTy      
-      return (e', umap, cs) 
+      let sigTy = ty2ty tySyn
+      (e', polyTy, umap, csO) <- inferPolyTy False e  
+      tryCheckMoreGeneral loc polyTy sigTy
+      (csI, monoTy) <- instantiate sigTy
+
+      -- liftIO $ print $ red $ text "CSI:" <+> ppr csI
+      -- liftIO $ print $ red $ text "CSO:" <+> ppr csO 
+
+      tryUnify monoTy expectedTy
+      return (unLoc e', umap, csI ++ csO) 
       
       -- let ty = ty2ty tySyn       
       -- (cs, ty') <- instantiate ty
@@ -625,19 +631,29 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first3 $ Loc loc) $ atLoc loc $ a
 
       return (Case e0' alts', mergeUseMap umap0 umapA, cs0 ++ csA) 
 
-inferPolyTy :: MonadTypeCheck m => LExp 'Renaming -> m (LExp 'TypeCheck, PolyTy, UseMap, [TyConstraint])
-inferPolyTy expr = do
-  (expr', ty, umap, cs) <- inferTy expr 
-  cs' <- simplifyConstraints cs
+inferPolyTy :: MonadTypeCheck m => Bool -> LExp 'Renaming -> m (LExp 'TypeCheck, PolyTy, UseMap, [TyConstraint])
+inferPolyTy isMultipleUse expr = do
+  (expr', ty, umap, cs) <- inferTy expr
+  
+  (umapM, csM) <- if isMultipleUse then raiseUse (TyMult Omega) umap
+                  else return (umap, [])
+  
+  cs' <- simplifyConstraints (cs ++ csM)
   (csI, csO) <- splitConstraints cs'
 
   ty' <- zonkTypeQ (TyQual csI ty)
   
   envMetaVars <- getMetaTyVarsInEnv
-  let mvs = metaTyVarsQ [ty']
-  polyTy <- quantify (mvs \\ envMetaVars) ty'
-  
-  return (expr', polyTy, umap, csO) 
+
+  -- We cannot generalize variables in umap 
+  umapVars <- metaTyVars <$> mapM zonkMetaTyVar [ x | MulVar x <-  M.elems umapM ]
+
+  let mvs = metaTyVarsQ [ty'] 
+  polyTy <- quantify (mvs \\ (envMetaVars ++ umapVars)) ty'
+
+  -- liftIO $ print $ red $ text "[inferPolyTy]" <+> ppr ty' <+> text "--->"  <+> ppr polyTy 
+
+  return (expr', polyTy, umapM, csO) 
 
 inferExp :: MonadTypeCheck m => LExp 'Renaming -> m (LExp 'TypeCheck, PolyTy)
 inferExp expr = do
@@ -649,7 +665,7 @@ inferExp expr = do
   -- let mvs = metaTyVarsQ [ty']
   -- polyTy <- quantify (mvs \\ envMetaVars) ty'
   -- trace (prettyShow ty' ++ " --> " ++ prettyShow polyTy) $ return (expr', polyTy) 
-  (expr', polyTy, _, _) <- inferPolyTy expr
+  (expr', polyTy, _, _) <- inferPolyTy True expr
   return (expr', polyTy) 
   
 
@@ -827,7 +843,7 @@ checkClauseTy :: MonadTypeCheck m => Clause 'Renaming -> Ty -> m (Clause 'TypeCh
 checkClauseTy (Clause e ws wi) expectedTy = do
   (ws', bind, umap, cs) <- inferDecls ws
   withVars bind $ do
-    (e', umapE, csE) <- checkTy e expectedTy
+    (e',  umapE, csE) <- checkTy e expectedTy
     (wi', umapWi, csWi) <- case wi of
              Just ewi -> do
                ty   <- atLoc (location e) $ ensureRevTy expectedTy
@@ -836,329 +852,6 @@ checkClauseTy (Clause e ws wi) expectedTy = do
              Nothing -> return (Nothing, M.empty, [])
     return (Clause e' ws' wi', umap `mergeUseMap` umapE `mergeUseMap` umapWi, cs ++ csE ++ csWi)
 
-      
--- checkTy :: MonadTypeCheck m => LExp 'Renaming -> BodyTy -> m (LExp 'TypeCheck) 
--- checkTy lexp@(Loc loc expr) expectedTy = fmap (Loc loc) $ atLoc loc $ atExp lexp $ go expr
---   where
---     go (Var x) = do
---       tyOfX <- askType loc x 
---       instPoly loc tyOfX expectedTy
---       return (Var (x, tyOfX))
-
---     go (Lit l) = do
---       case l of
---         LitInt _ ->
---           tryUnify loc (TyCon nameTyInt []) expectedTy
---         LitChar _ ->
---           tryUnify loc (TyCon nameTyChar []) expectedTy
---         LitDouble _ ->
---           tryUnify loc (TyCon nameTyDouble []) expectedTy
---       return (Lit l)
-
---     go (Abs pats e) = do
---       ts <- mapM (const newMetaTy) pats
---       (pats', ubind, lbind) <- checkPatsTy pats ts
---       retTy <- newMetaTy
---       e' <- withUVars ubind $ withLVars lbind $ checkTy e retTy  
---       tryUnify loc (foldr (-@) retTy ts) expectedTy
---       return $ Abs pats' e' 
-        
---     go (App e1 e2) = do
---       (e1', ty1) <- inferTy e1
---       (argTy, resTy) <- atExp e1 $ ensureFunTy (location $ e1) ty1 
---       e2' <- checkTy e2 argTy
---       tryUnify loc resTy expectedTy
---       return (App e1' e2')
-
---     go (Con c) = do 
---       tyOfC <- instantiate =<< askType loc c
---       tryUnify loc tyOfC expectedTy
---       return $ Con (c, tyOfC)
-
--- --     go (Con c es) = do
--- --       tyOfC <- instantiate =<< askType loc c
--- --       (es', retTy) <- foldM inferApp ([], tyOfC) es
--- -- --      trace (show $ ppr c D.<+> D.colon D.<+> D.align (ppr tyOfC)) $
--- --       tryUnify loc retTy expectedTy
--- --       return (Con (c, tyOfC) (reverse es'))
--- --         where
--- --           inferApp (es', ty) e = do 
--- --             (argTy, resTy) <- ensureFunTy (location e) ty
--- --             e' <- checkTy e argTy
--- --             return (e':es', resTy)
-
---     go (Bang e) = do
---       ty <- ensureBangTy loc expectedTy
---       e' <- withoutLinear $ checkTy e ty
---       return $ Bang e' 
-
---     go (Case e alts) = do
---       tyPat <- newMetaTy 
---       e' <- checkTy e tyPat 
---       alts' <- checkAltsTy alts tyPat expectedTy
---       return (Case e' alts')
-
---     -- e1 : !(!a -o b)
---     -- e2 : !(!b -o a)
---     -- --------------
---     -- lift e1 e2 : !(rev a -o rev b) 
-
---     -- lift : !(!a -o b) -o !(!b -o a) -o !(rev a -o rev b)
---     go Lift = do
---       tyA <- newMetaTy
---       tyB <- newMetaTy
-      
---       tryUnify loc (bangTy (bangTy tyA -@ tyB)
---                     -@ bangTy (bangTy tyB -@ tyA)
---                     -@ bangTy (revTy tyA -@ revTy tyB)) expectedTy
---       return Lift 
-      
---     -- go (Lift e1 e2) = do
---     --   ty <- ensureBangTy loc expectedTy
---     --   (argTy, resTy) <- ensureFunTy loc ty
---     --   tyA <- ensureRevTy loc argTy
---     --   tyB <- ensureRevTy loc resTy
---     --   let expectedTy1 = bangTy (bangTy tyA -@ tyB)
---     --   let expectedTy2 = bangTy (bangTy tyB -@ tyA)
---     --   e1' <- checkTy e1 expectedTy1
---     --   e2' <- checkTy e2 expectedTy2
---     --   return (Lift e1' e2')
-  
---     -- e : !(rev a -o rev b)
---     -- ---------------------
---     -- unlift e : (!(!a -o b) x !(!b -o a))
-
---     -- unlift : !(rev a -o rev b) -o (!(!a -o b) x !(!b -o a))
---     go Unlift = do
---       tyA <- newMetaTy
---       tyB <- newMetaTy
-
---       tryUnify loc (bangTy (revTy tyA -@ revTy tyB)
---                     -@ (tupleTy [bangTy (bangTy tyA -@ tyB),
---                                  bangTy (bangTy tyB -@ tyA)]))
---                    expectedTy
---       return Unlift 
-    
---     -- go (Unlift e) = do
---     --   (tyFst, tySnd) <- ensurePairTy loc expectedTy 
-      
---     --   tyFst' <- ensureBangTy loc tyFst -- !a -o b
---     --   tySnd' <- ensureBangTy loc tySnd -- !b -o a
-
---     --   (tyBangA,  tyB) <- ensureFunTy loc tyFst'
---     --   (tyBangB', tyA') <- ensureFunTy loc tySnd'
---     --   tyA  <- ensureBangTy loc tyBangA
---     --   tyB' <- ensureBangTy loc tyBangB'
-
---     --   tryUnify loc tyA' tyA
---     --   tryUnify loc tyB' tyB 
-      
---     --   e' <- checkTy e (bangTy $ revTy tyA -@ revTy tyB)
---     --   return (Unlift e')
-        
---     go (Sig e tySyn) = do
---       let ty = ty2ty tySyn       
---       ty' <- instantiate ty
---       tryUnify loc ty' ty
---       e' <- checkTy e ty'
---       return $ unLoc e'
-
---     go (Parens e) = do
---       e' <- checkTy e expectedTy
---       return (Parens e')
-
---     go (Op op e1 e2) = do
---       tyOfOp <- instantiate =<< askType loc op
---       ty1    <- newMetaTy
---       ty2    <- newMetaTy
---       e1' <- checkTy e1 ty1
---       e2' <- checkTy e2 ty2
---       tryUnify loc (ty1 -@ ty2 -@ expectedTy) tyOfOp 
---       return $ Op (op, tyOfOp) e1' e2' 
-
-
---     go (RCon c) = do
---       tyOfC <- fmap addRev . instantiate =<< askType loc c
---       tryUnify loc tyOfC expectedTy
---       return $ RCon (c, tyOfC)
---         where
---           addRev (TyCon t [t1,t2]) | t == nameTyLArr = TyCon t [revTy t1, addRev t2]
---           addRev t                                   = revTy t 
-      
-
---     -- go (RCon c es) = do
---     --   tyOfC <- fmap addRev . instantiate =<< askType loc c
---     --   (es',retTy) <- foldM inferApp ([], tyOfC) es
---     --   tryUnify loc retTy expectedTy
---     --   return $ RCon (c, tyOfC) (reverse es')
---     --     where
---     --       inferApp (es',ty) e = do 
---     --         (argTy, resTy) <- ensureFunTy (location e) ty
---     --         e' <- checkTy e argTy
---     --         return (e':es', resTy)
-
---     --       addRev (TyCon t [t1,t2]) | t == nameTyLArr = TyCon t [revTy t1, addRev t2]
---     --       addRev t                                   = revTy t 
-                                                       
---     -- go (RCase e ralts) = do
---     --   tyPat <- newMetaTy 
---     --   checkTy e (revTy tyPat)
---     --   ty <- ensureRevTy loc expectedTy 
---     --   checkRAltsTy ralts tyPat ty 
-      
---     -- e1 : rev a   
---     -- e2 : !a -> rev b
---     -- ----------------
---     -- pin e1 e2 : rev (a, b)
-
---     -- pin : rev a -o (!a -o rev b) -> rev (a x b)
---     go RPin = do
---       tyA <- newMetaTy
---       tyB <- newMetaTy
-
---       tryUnify loc
---         (revTy tyA
---          -@ (bangTy tyA -@ revTy tyB)
---          -@ revTy (tupleTy [tyA, tyB]))
---         expectedTy
-
---       return RPin
-
---     -- go (RPin e1 e2) = do
---     --   tyAB <- ensureRevTy loc expectedTy
---     --   (tyA, tyB) <- ensurePairTy loc tyAB 
-
---     --   e1' <- checkTy e1 (revTy tyA)
---     --   e2' <- checkTy e2 (bangTy tyA -@ revTy tyB)
-
---     --   return (RPin e1' e2')
-
---     go (Let decls e) = do
---       (decls', bind) <- inferDecls decls 
---       e' <- withUVars bind $ checkTy e expectedTy
---       return $ Let decls' e' 
-
--- inferMutual :: MonadTypeCheck m => [LDecl 'Renaming] -> m ([LDecl 'TypeCheck], [(Name, PolyTy)])
--- inferMutual decls = do
--- --  let nes = [ (n,e) | Loc _ (DDef n _) <- decls ]
---   let ns  = [ n | Loc _ (DDef n _) <- decls ]
---   let defs = [ (loc, n, pcs) | Loc loc (DDef n pcs) <- decls ]
---   let sigMap = M.fromList [ (n, ty2ty t) | Loc _ (DSig n t) <- decls ]
-
---   tys <- mapM (\n -> case M.lookup n sigMap of
---                        Just t  -> return t
---                        Nothing -> newMetaTy) ns
-
---   nts0 <- withUVars (zip ns tys) $ forM defs $ \(loc, n, pcs) -> do
---     ty  <- newMetaTy
---     pcs' <- parallel $ map (flip (checkTyPC loc) ty) pcs 
---     tyE <- askType loc n -- type of n in the environment 
---     when (not $ M.member n sigMap) $
---       -- Defer unification if a declaration comes with a signature because
---       -- the signature can be a polytype while unification targets monotypes. 
---       tryUnify loc ty tyE
---     return (n, loc, ty, pcs') 
-
---   envMetaVars <- getMetaTyVarsInEnv
-
---   nts1 <- forM nts0 $ \(n, loc, t, pcs') -> do 
---     tt <- zonkType t 
---     let mvs = metaTyVars [tt]
---     polyTy <- quantify (mvs \\ envMetaVars) tt 
-    
---     case M.lookup n sigMap of
---       Nothing    -> return (n, loc, polyTy, pcs')
---       Just sigTy -> do 
---         checkMoreGeneral loc polyTy sigTy
---         return (n, loc, sigTy, pcs')
-
---   let decls' = [ Loc loc (DDef (n, ty) pcs') | (n, loc, ty, pcs') <- nts1 ]
---   let binds' = [ (n, ty) | (n, _, ty, _) <- nts1 ]
-
---   return (decls', binds') 
---     where
---       checkTyPC loc (ps, c) expectedTy = do
---         tys <- mapM (const newMetaTy) ps 
---         (ps', ubind, lbind) <- checkPatsTy ps tys
---         retTy <- newMetaTy 
---         c' <- withUVars ubind $ withLVars lbind $ checkClauseTy c retTy
---         tryUnify loc (foldr (-@) retTy tys) expectedTy
---         return (ps', c')
-        
--- inferDecls :: MonadTypeCheck m => Decls 'Renaming (LDecl 'Renaming) ->
---               m (Decls 'TypeCheck (LDecl 'TypeCheck), [(Name, PolyTy)])
--- inferDecls (Decls v _) = absurd v
--- inferDecls (HDecls _ dss) = do
---   (dss', bind) <- go [] dss
---   return (HDecls () dss', bind)
---   where 
---     go bs [] = return ([], bs)
---     go bs (ds:rest) = do
---       (ds', bind) <- inferMutual ds
---       (rest', bs') <- withUVars bind $ go (bind ++ bs) rest
---       return (ds':rest', bs')
-
-
--- inferTopDecls ::
---   MonadTypeCheck m =>
---   Decls 'Renaming (LDecl 'Renaming) ->
---   [Loc (Name, [Name], [Loc (CDecl 'Renaming)])] -> 
---   [Loc (Name, [Name], LTy 'Renaming)] ->
---   m (Decls 'TypeCheck (LDecl 'TypeCheck), [(Name, PolyTy)],
---      [C.DDecl Name],
---      [C.TDecl Name], 
---      TypeTable, SynTable)
--- inferTopDecls decls dataDecls typeDecls = do
---   let dataDecls' = [ C.DDecl n (map BoundTv ns) [ (cn, map ty2ty tys) | Loc _ (CDecl cn tys) <- cdecls ] 
---                    | Loc _ (n,ns,cdecls) <- dataDecls ]
-
---   let typeDecls' = [ C.TDecl n (map BoundTv ns) (ty2ty lty) | Loc _ (n, ns, lty) <- typeDecls ]
-  
---   let synTable = M.fromList $ 
---         flip map typeDecls $ \(Loc _ (n, ns, lty)) ->
---                                let ty = ty2ty lty
---                                in (n, (map BoundTv ns, ty))
-
-        
---   let typeTable = M.fromList $
---         [ (n, foldr (-@) typeKi (map (const typeKi) ns)) | Loc _ (n, ns, _) <- dataDecls ]
---         ++
---         [ (cn, TyForAll tvs (foldr (-@) (TyCon n $ map TyVar tvs) $ map ty2ty tys)) |
---           Loc _ (n, ns, cdecls) <- dataDecls,
---           let tvs = map BoundTv ns, 
---           Loc _ (CDecl cn tys) <- cdecls ]
-
---   withUVars (M.toList typeTable) $
---    withSyns (M.toList synTable) $ do
---      (decls', nts) <- inferDecls decls
---      return (decls', nts, dataDecls', typeDecls', typeTable, synTable)
-
--- checkClauseTy :: MonadTypeCheck m => Clause 'Renaming -> Ty -> m (Clause 'TypeCheck)
--- checkClauseTy (Clause e ws wi) expectedTy = do
---   (ws', bind) <- inferDecls ws
---   withUVars bind $ do
---     e'  <- checkTy e expectedTy
---     wi' <- case wi of
---              Just ewi -> do
---                ty   <- ensureRevTy (location e) expectedTy
---                ewi' <- checkTy ewi (bangTy (bangTy ty -@ boolTy))
---                return (Just ewi')
---              Nothing -> return Nothing
---     return (Clause e' ws' wi')
-  
-        
--- -- inferDecls :: MonadTypeCheck m => [LDecl] -> m [(Name, PolyTy)]
--- -- inferDecls decls = do
--- --   let declss = map unSCC (G.stronglyConnComp graph)
--- --   foldr (\ds m -> do 
--- --             bind <- inferMutual ds
--- --             withUVars bind $ fmap (bind ++) m ) (return []) declss    
--- --   where
--- --     unSCC (G.AcyclicSCC x) = [x]
--- --     unSCC (G.CyclicSCC xs) = xs
-
--- --     graph = [ (decl, n, freeVars e) | decl@(Loc _ (DDef n _ e)) <- decls ]
-    
   
 
 skolemize :: MonadTypeCheck m => PolyTy -> m ([TyVar], QualTy)
@@ -1169,7 +862,7 @@ skolemize ty = return ([], TyQual [] ty)
 
 tryCheckMoreGeneral :: MonadTypeCheck m => SrcSpan -> Ty -> Ty -> m ()
 tryCheckMoreGeneral loc ty1 ty2 = do
-  liftIO $ print $ red $ group $ text "Checking" <+> align (ppr ty1 <+>  text "is more general than" <> line <> ppr ty2)
+  -- liftIO $ print $ red $ group $ text "Checking" <+> align (ppr ty1 <+>  text "is more general than" <> line <> ppr ty2)
   whenChecking (CheckingMoreGeneral ty1 ty2) $ checkMoreGeneral loc ty1 ty2
 
 checkMoreGeneral :: MonadTypeCheck m => SrcSpan -> PolyTy -> PolyTy -> m ()
@@ -1179,37 +872,45 @@ checkMoreGeneral loc polyTy1 polyTy2@(TyForAll _ _) = do
   (skolemTyVars, ty2) <- skolemize polyTy2
 
   -- liftIO $ print $ hsep [ text "Skolemized sig:", ppr ty2 ]
-  
+
   checkMoreGeneral2 loc polyTy1 ty2
   escapedTyVars <- freeTyVars [polyTy1]
   
   let badTyVars = filter (`elem` escapedTyVars) skolemTyVars
   unless (null badTyVars) $
     reportError $ Other $ D.group $
-    D.cat [ D.text "The inferred type",
-            D.nest 2 (D.line D.<> D.dquotes (ppr polyTy1)),
-            D.text "is not polymorphic enough for:",
-            D.nest 2 (D.line D.<> D.dquotes (ppr polyTy2)) ]
+    D.hcat [ D.text "The inferred type",
+             D.nest 2 (D.line D.<> D.dquotes (D.align $ ppr polyTy1)),
+             D.line <> D.text "is not polymorphic enough for:",
+             D.nest 2 (D.line D.<> D.dquotes (D.align $ ppr polyTy2)) ]
 
 checkMoreGeneral loc polyTy1 ty = checkMoreGeneral2 loc polyTy1 (TyQual [] ty)
     
 checkMoreGeneral2 :: MonadTypeCheck m => SrcSpan -> Ty -> QualTy -> m ()
 checkMoreGeneral2 loc polyTy1@(TyForAll _ _) ty2 = do
+
+  -- it could be possible that the function is called
+  -- polyTy that can contain meta type variables. 
+  let origVars = metaTyVars [polyTy1] 
+  
   (cs, ty1) <- instantiate polyTy1
-  checkMoreGeneral3 loc (TyQual cs ty1) ty2
+  checkMoreGeneral3 loc origVars (TyQual cs ty1) ty2
 
-checkMoreGeneral2 loc ty1 ty2 = checkMoreGeneral3 loc (TyQual [] ty1) ty2
+checkMoreGeneral2 loc ty1 ty2 = checkMoreGeneral3 loc (metaTyVars [ty1]) (TyQual [] ty1) ty2
 
-checkMoreGeneral3 :: MonadTypeCheck m => SrcSpan -> QualTy -> QualTy -> m ()
-checkMoreGeneral3 loc (TyQual cs1 ty1) (TyQual cs2 ty2) = atLoc loc $ do
+checkMoreGeneral3 :: MonadTypeCheck m => SrcSpan -> [MetaTyVar] -> QualTy -> QualTy -> m ()
+checkMoreGeneral3 loc origVars (TyQual cs1 ty1) (TyQual cs2 ty2) = atLoc loc $ do
   atLoc loc $ unify ty1 ty2
+
+  -- liftIO $ print $ red $ group $ text "Checking mono type" <+> align (ppr (TyQual cs1 ty1) <+>  text "is more general than" <> line <> ppr (TyQual cs2 ty2))
+
 
   cs1' <- simplifyConstraints =<< mapM zonkTypeC cs1
   cs2' <- simplifyConstraints =<< mapM zonkTypeC cs2
 
   let cs1'' = filter (not . (`elem` cs2')) cs1' 
 
-  let undetermined = metaTyVarsC $ cs1''++ cs2'
+  let undetermined = metaTyVarsC (cs1'' ++ cs2') \\ origVars 
   -- let props = foldr (\a rs ->
   --                     [ ((a,True):xs, SAT.var (MV a) .&&. r) | (xs,r) <- rs ]
   --                     ++ [ ((a, False):xs, neg (SAT.var (MV a)) .&&. r) | (xs,r) <- rs])
@@ -1222,22 +923,24 @@ checkMoreGeneral3 loc (TyQual cs1 ty1) (TyQual cs2 ty2) = atLoc loc $ do
                    (toFormula cs2' .&&. SAT.neg (toFormula cs1''))
                    undetermined 
                         
-  liftIO $ print $ red $ text "CS1:" <+> ppr cs1''
-  liftIO $ print $ red $ text "CS2:" <+> ppr cs2'
-  liftIO $ print $ red $ text "Undetermined vars." <+> ppr undetermined
-
+  -- liftIO $ print $ red $ text "CS1:" <+> ppr cs1''
+  -- liftIO $ print $ red $ text "CS2:" <+> ppr cs2'
+  -- liftIO $ print $ red $ text "Undetermined vars." <+> ppr undetermined
+  -- liftIO $ print $ red $ text "Prop:" <+> ppr prop 
+  
   case cs1'' of
     [] -> return ()   
     _  -> do
       case SAT.sat prop of
         Nothing -> return () 
-        Just bs ->
+        Just bs -> do 
+--          liftIO $ print $ red $ text "SAT." 
           reportError $ Other $ D.group $
-          vcat [ hsep [pprC cs2', text "does not imply", pprC cs1'], 
-                 (if null undetermined then empty
-                  else line <> text "with any choice of" <+> ppr undetermined),
-                 text "a concrete counter example:",
-                 vcat (map pprS bs) ]
+            vcat [ hsep [pprC cs2', text "does not imply", pprC cs1']
+                   <> (if null undetermined then empty
+                       else line <> text "with any choice of" <+> ppr undetermined),
+                   nest 2 (vcat [ text "a concrete counter example:",
+                                  vcat (map pprS bs) ]) ]
       -- let results = map (\(xs,p) -> (xs, SAT.sat p)) props
       -- if any (isNothing . snd) results
       --   then return ()

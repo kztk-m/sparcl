@@ -23,10 +23,10 @@ data SrcSpan = SrcSpan (Maybe FilePath) Int Int Int Int
              deriving (Eq, Ord, Show) 
 
 instance Pretty SrcSpan where
-  ppr NoLoc = D.angles $ D.text "*unknown loc*"
+  ppr NoLoc = D.angles $ D.text "<*unknown place*>"
   ppr (SrcSpan fp r1 c1 r2 c2) =
-    D.angles $ D.hcat [pprMaybeFilePath fp,
-                       D.colon, pprPos ]
+    D.hcat [pprMaybeFilePath fp,
+             D.colon, pprPos ]
     where
       pprPos
         | r1 == r2 && c1 == c2 = D.hcat [ D.int r1, D.colon, D.int c1]

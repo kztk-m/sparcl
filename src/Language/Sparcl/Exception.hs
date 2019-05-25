@@ -18,7 +18,8 @@ data StaticException = StaticException Doc
 
 instance Show StaticException where
   show (StaticException d) =
-    show (D.red (D.text "[ERROR]") D.<> D.nest 2 (D.line D.<> d))
+    show (D.red (D.text "ERROR!")
+          D.<> D.line D.<> d)
 
 instance Exception StaticException
 
