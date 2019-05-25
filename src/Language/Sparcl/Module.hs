@@ -252,6 +252,11 @@ baseModuleInfo = ModuleInfo {
           base "-" |-> intTy -@ (intTy -@ intTy),
           base "*" |-> intTy -@ (intTy -@ intTy),
 
+          base "U" |->
+            let a = BoundTv (Local $ User "a")
+            in TyForAll [a] (TyQual [] $ (TyVar a) *-> TyCon (base "Un") [TyVar a]), 
+                                           
+          
           -- is it OK? 
           eqInt  |-> intTy -@ intTy -@ boolTy,
           leInt  |-> intTy -@ intTy -@ boolTy,
@@ -262,7 +267,8 @@ baseModuleInfo = ModuleInfo {
 
           nameTyInt  |-> typeKi,
           nameTyBool |-> typeKi,
-          nameTyChar |-> typeKi          
+          nameTyChar |-> typeKi,
+          base "Un" |-> typeKi `arrKi` typeKi
           ]
 
     synTable = M.empty

@@ -2,6 +2,8 @@ module Language.Sparcl.Base where
 
 import Language.Sparcl.Runtime
 
+newtype Un a = U a
+
 liftFunc :: (a -> b) -> a -> R b
 liftFunc f a = return (f a) 
 

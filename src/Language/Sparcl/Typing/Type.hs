@@ -184,6 +184,9 @@ tupleTy ts = TyCon (nameTyTuple $ length ts) ts
 typeKi :: Ty
 typeKi = TyCon nameKindType []
 
+arrKi :: Ty -> Ty -> Ty
+arrKi k1 k2 = TyCon nameKiArr [k1, k2]
+
 infixr 4 -@
 infixr 4 :-@
 
