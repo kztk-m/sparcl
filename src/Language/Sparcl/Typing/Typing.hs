@@ -330,6 +330,9 @@ simplifyConstraints constrs = whenChecking (CheckingConstraint constrs) $ go con
 loopToEquiv :: forall m. MonadTypeCheck m => [TyConstraint] -> m Bool
 loopToEquiv constraints = do
   sccs <- makeSCC constraints
+  -- liftIO $ print $ red $ text "CS:" <+> ppr constraints
+  -- liftIO $ print $ red $ text "SCC" <+> (align $ vcat $ map (\case G.AcyclicSCC x -> text "Acyc" <+> ppr x
+  --                                                                  G.CyclicSCC x  -> text "Cyc " <+> ppr x) sccs)
   isEffective <- foldM procSCCs False sccs
   return isEffective
   where
@@ -782,12 +785,6 @@ inferMutual decls = do
     (pcs', umap, cs) <- gatherAltUC =<< mapM (flip (checkTyPC loc qs) ty) pcs 
     tyE <- askType loc n -- type of n in the environment
 
-    -- TODO: We need to extract constraints regarding `f`'s arguments.
-    --       
-    cs' <- simplifyConstraints cs
-
-    (csI, csO) <- splitConstraints cs'
-    
     when (not $ M.member n sigMap) $ do 
       -- Defer unification if a declaration comes with a signature because
       -- the signature can be a polytype while unification targets monotypes.
@@ -797,6 +794,10 @@ inferMutual decls = do
       -- liftIO $ putStrLn $ show $ hsep [ text "Inf.:", ppr ty']
       -- liftIO $ putStrLn $ show $ hsep [ text "Exp.:", ppr tyE']
       atLoc loc $ tryUnify ty tyE
+
+    cs' <- simplifyConstraints cs
+    (csI, csO) <- splitConstraints cs'
+    
     return ((n, loc, TyQual csI ty, pcs'), umap, csO)
 
   envMetaVars <- getMetaTyVarsInEnv
