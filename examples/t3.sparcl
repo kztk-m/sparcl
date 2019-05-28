@@ -1,0 +1,65 @@
+-- Checking some functions form Haskell's Prelude. 
+
+data Maybe a = Nothing | Just a
+
+def maybe e f Nothing  = e 
+        | e f (Just a) = f a 
+
+data Either a b = Left a | Right b
+
+def either left right (Left a)  = left a 
+         | left right (Right b) = right b
+
+def fst (a,_) = a
+def snd (_,b) = b 
+
+def curry f x y = f (x,y)
+def uncurry f (x,y) = f x y 
+
+def ($) f x = f x 
+def (.) f g = \x -> f (g x)
+
+fixity $ 0 right
+fixity . 90 right
+
+data List a = Nil | Cons a (List a) 
+
+def map f Nil        = Nil  
+      | f (Cons a x) = Cons (f a) (map f x) 
+
+def foldr f e Nil        = e
+        | f e (Cons a x) = f a (foldr f e x) 
+
+def foldl f e Nil        = e
+        | f e (Cons a x) = foldl f (f a e) x 
+
+def reverse xs = rv xs Nil
+  where
+    def rv Nil         ys = ys 
+         | (Cons x xs) ys = rv xs (Cons x ys) 
+  end
+
+def tail (Cons a x) = x 
+
+def const a _ = a 
+
+def dupList dupElem lst = case lst of 
+    | Nil -> (Nil, Nil)
+    | Cons a x -> 
+      case dupElem a of
+      | (a1, a2) -> 
+            case dupList dupElem x of
+            | (x1, x2) -> 
+              (Cons a1 x1, Cons a2 x2)
+            end
+      end
+    end
+            
+def until p f x = case p x of
+    | True  -> x 
+    | False -> 
+      until p f (f x)
+    end 
+
+def append Nil y = y 
+         | (Cons a x) y = Cons a (append x y)
