@@ -1042,10 +1042,10 @@ by
 
 -}
 removeUnvisibleConstraint :: [MetaTyVar] -> QualTy -> ([MetaTyVar], QualTy)
-removeUnvisibleConstraint mvs (TyQual cs t) =
-  let (mvs', TyQual cs' t') = curry step mvs (TyQual cs t)
-  in if length cs' < length cs then
-       removeUnvisibleConstraint mvs' (TyQual cs' t')
+removeUnvisibleConstraint mvs tq@(TyQual cs t) =
+  let (mvs', tq'@(TyQual cs' t')) = curry step mvs (TyQual cs t)
+  in if length cs' < length cs || length (metaTyVarsQ [tq]) < length (metaTyVarsQ [tq']) then
+       removeUnvisibleConstraint mvs' tq'
      else
        (mvs', TyQual (nub cs') t')
   where
