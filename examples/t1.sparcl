@@ -46,3 +46,30 @@ sig comp : forall p q r u a b c.
            (a # r -> b) # p -> 
            a # u -> c
 def comp f g x = f (g x)
+
+-- More general type for comp
+sig comp1 : 
+    forall a b c d e f g h i.
+      (c <= d, a <= g, a ~ c * e)
+        => (f # c -> i) # b
+        -> (h # e -> f) # d
+        -> h # g -> i
+def comp1 f g x = f (g x) 
+
+-- equivalent type 
+sig comp2 : 
+    forall b c d e f g h i.
+      (c <= d, c <= g, e <= g)
+        => (f # c -> i) # b
+        -> (h # e -> f) # d
+        -> h # g -> i
+def comp2 = comp1
+
+sig comp3 : 
+    forall a b c d e f g h i.
+      (c <= d, a <= g, a ~ c * e)
+        => (f # c -> i) # b
+        -> (h # e -> f) # d
+        -> h # g -> i
+def comp3 = comp2 
+

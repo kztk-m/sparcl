@@ -127,7 +127,31 @@ appPat =
       return $ PCon c ps)
   <|>
   simplePat 
+
+introForAll :: LTy 'Parsing -> LTy 'Parsing
+introForAll ty =
+  let freeVars = goL [] ty []
+  in foldr (\x -> Loc (location ty) . TForall x) ty freeVars
+  where
+    list _ [] = id
+    list f (x:xs) = f x . list f xs
+
+    goL xs = go xs . unLoc 
+
+    goC xs (MEqMax t1 t2 t3) = goL xs t1 . goL xs t2 . goL xs t3
+    goC xs (MSub   t1 t2)    = goL xs t1 . goL xs t2 
+
+    go xs (TVar x) | x `elem` xs = id
+                   | otherwise   = (x:)
+    go xs (TForall x t) = goL (x:xs) t
+    go xs (TQual cs t)  = list (goC xs) cs . goL xs t
+
+    go xs (TCon _ ts) = list (goL xs) ts
+    go _  (TMult _)   = id
+
     
+
+  
 typeExpr :: Monad m => P m (LTy 'Parsing)
 typeExpr = do
   ef    <- P.optional (symbol "forall" *> P.many (varName <* sp) <* symbol ".")
@@ -146,13 +170,22 @@ constraint =
 
 singleConstraint :: Monad m => P m [TConstraint 'Parsing]
 singleConstraint = do
-  m1 <- multiplicity
-  void $ symbolTyEq
-  m2 <- multiplicity
-  void $ symbolMult
-  m3 <- multiplicity
-  return $ [MEqMax m1 m2 m3]
+  m1 <- multiplicity 
+  maxConstraint m1 <|> subConstraint m1 
     where
+      maxConstraint m1 = do
+        void $ symbolTyEq
+        m2 <- multiplicity
+        void $ symbolMult
+        m3 <- multiplicity
+        return $ [MEqMax m1 m2 m3]
+
+      subConstraint m1 = do
+        void $ symbolTyLE
+        m2 <- multiplicity
+        return $ [MSub m1 m2] 
+
+      symbolTyLE = symbol "<=" <|> symbol "≦"
       symbolTyEq = (symbol "~" <|> symbol "≡")
       symbolMult = (symbol "*" <|> symbol "↑")
 
@@ -323,7 +356,7 @@ sigDecl = do
   x <- varOpName
   sp
   void $ symbol ":" 
-  t <- typeExpr
+  t <- introForAll <$> typeExpr
   return (Loc (start <> location t) $ DSig x t)
 
 fixityDecl :: Monad m => P m (LDecl 'Parsing)

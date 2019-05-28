@@ -354,7 +354,7 @@ setModule m = do
   --   else Hint.loadModules [miHsFile m]
 
   debugPrint 1 $ text "Module:" <+> ppr (miModuleName m) <+> text "has been loaded."
-  debugPrint 1 $ vcat $ map (\(n, t) -> fillBreak 8 (ppr n <+> text ":") <+> ppr t) (M.toList $ miTypeTable m)
+  debugPrint 1 $ vcat $ map (\(n, t) -> fillBreak 8 (ppr n <+> text ":") <+> align (ppr t)) (M.toList $ miTypeTable m)
   debugPrint 3 $ text "  " <>
     align (vcat [
               fillBreak 8 (text "names:")    <+> align (pprMap $ M.map S.toList $ miNameTable m),

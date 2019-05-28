@@ -29,11 +29,13 @@ import qualified Language.Sparcl.Surface.Syntax as S
 import Language.Sparcl.Pretty as D hiding ((<$>))
 
 -- import Data.Maybe (isNothing)
-import Data.List (partition, (\\))
+import Data.List (nub, partition, (\\))
 
 -- import Control.Exception (evaluate)
 -- import Debug.Trace 
 
+
+-- TODO: Implement kind checking
 ty2ty :: S.LTy 'Renaming -> Ty
 ty2ty (Loc _ ty) = go ty
   where
@@ -759,6 +761,7 @@ splitConstraints :: MonadTypeCheck m =>
                     [TyConstraint] -> m ([TyConstraint], [TyConstraint])
 splitConstraints cs = do
   env <- getMetaTyVarsInEnv
+--  liftIO $ print $ blue $ text "MEnv:" <+> ppr env
   cs' <- mapM zonkTypeC cs 
   let (csO, csI) = partition (allIn env) cs'
   return (csI, csO)
@@ -779,7 +782,7 @@ inferMutual decls = do
                        Just t  -> return t
                        Nothing -> newMetaTy) ns
 
-  (nts0, umap, cs) <- fmap gatherUC $ withVars (zip ns tys) $ forM defs $ \(loc, n, pcs) -> do
+  (nts0, umap) <- fmap gatherU $ withVars (zip ns tys) $ forM defs $ \(loc, n, pcs) -> do
     ty  <- newMetaTy
     qs  <- mapM (const newMetaTy) [1..numPatterns pcs]
     (pcs', umap, cs) <- gatherAltUC =<< mapM (flip (checkTyPC loc qs) ty) pcs 
@@ -795,37 +798,58 @@ inferMutual decls = do
       -- liftIO $ putStrLn $ show $ hsep [ text "Exp.:", ppr tyE']
       atLoc loc $ tryUnify ty tyE
 
-    cs' <- simplifyConstraints cs
-    (csI, csO) <- splitConstraints cs'
+    (umapM, csM) <- raiseUse (TyMult Omega) umap 
+
+    -- do ty' <- zonkType ty
+    --    liftIO $ print $ blue $ text "CS:" <+> ppr cs'
+    --    liftIO $ print $ blue $ text "CSO:" <+> ppr csO
+    --    liftIO $ print $ blue $ ppr n <+> text ":" <+> ppr (TyQual csI ty')
     
-    return ((n, loc, TyQual csI ty, pcs'), umap, csO)
+    return ((n, loc, ty, csM++cs, pcs'), umapM)
 
   envMetaVars <- getMetaTyVarsInEnv
 
-  nts1 <- forM nts0 $ \(n, loc, qt, pcs') -> do 
+  (nts1, csOuter) <- fmap gatherC $ forM nts0 $ \(n, loc, ty, cs, pcs') -> do
+    cs' <- simplifyConstraints cs
+
+    -- NB: splitConstraints must be done outside of this mutual definition..
+    (csI, csO) <- splitConstraints cs'
+
+    let qt = TyQual csI ty 
+    
     tt <- zonkTypeQ qt 
     let mvs = metaTyVarsQ [tt]    
     polyTy <- quantify (mvs \\ envMetaVars) tt 
     
     case M.lookup n sigMap of
-      Nothing    -> return (n, loc, polyTy, pcs')
+      Nothing    -> return ((n, loc, polyTy, pcs'), csO)
       Just sigTy -> do 
         whenChecking (CheckingMoreGeneral polyTy sigTy) $ checkMoreGeneral loc polyTy sigTy
-        return (n, loc, sigTy, pcs')
+        return ((n, loc, sigTy, pcs'), csO)
 
   let decls' = [ Loc loc (DDef (n, ty) pcs') | (n, loc, ty, pcs') <- nts1 ]
   let binds' = [ (n, ty) | (n, _, ty, _) <- nts1 ]
 
-  return (decls', binds', umap, cs) 
+  return (decls', binds', umap, csOuter) 
     where
       numPatterns ((ps,_):_) = length ps 
       numPatterns _          = error "Cannot happen."
 
-      gatherUC :: [(a,UseMap,[b])] -> ([a], UseMap, [b])
-      gatherUC [] = ([], M.empty, [])
-      gatherUC ((x,u,c):ts) =
-        let (xs, u',c') = gatherUC ts
-        in  (x:xs, mergeUseMap u u', c ++ c')
+      gatherU [] = ([], M.empty)
+      gatherU ((x,u):ts) =
+        let (xs,u') = gatherU ts
+        in (x:xs, mergeUseMap u u')
+
+      gatherC [] = ([],[])
+      gatherC ((x,c):ts) =
+        let (xs, c') = gatherC ts
+        in (x:xs, c++c')
+
+      -- gatherUC :: [(a,UseMap,[b])] -> ([a], UseMap, [b])
+      -- gatherUC [] = ([], M.empty, [])
+      -- gatherUC ((x,u,c):ts) =
+      --   let (xs, u',c') = gatherUC ts
+      --   in  (x:xs, mergeUseMap u u', c ++ c')
       
       checkTyPC loc qs (ps, c) expectedTy = atLoc loc $ do
         tys <- mapM (const newMetaTy) ps 
@@ -961,7 +985,9 @@ checkMoreGeneral3 loc origVars (TyQual cs1 ty1) (TyQual cs2 ty2) = atLoc loc $ d
       -- liftIO $ print $ hsep [ red (text "[TODO : Implement SAT-based check]"),
       --                         parens $ hsep $ punctuate comma $ map ppr cs2', text  "||-" ,
       --                         parens $ hsep $ punctuate comma $ map ppr cs1' ]
-                                           
+
+
+           
 data VV = MV MetaTyVar | SV TyVar
   deriving (Eq, Ord)
 
@@ -981,14 +1007,148 @@ toFormula (MEqMax q1 q2 q3:cs) =
     conv t              = error $ show $ hsep [ppr t, text " is not a multiplicity"]
   
 
-                          
+{-
+Removes constraints on unvisible variables by some heuristics. We adopt
+two heuristics:
+
+  (1) Remove a cosntraint if substitution for the variables that appear on in the constraint
+      does not change the satisfiability of the whole constraints.
+  (2) Remove an visible variable by replacing constraints. 
+
+As a simplest example, the constraint (a => b) can be removed.
+
+   forall a b. (a <= b) => Int -o Int
+
+More concrete example, let us consider the following type; here the
+unvisible variable is only a.
+   
+   forall a b c d e f g h i.
+      (c <= d, a <= g, a ~ c * e)
+      => (f # c -> i) # b
+      -> (h # e -> f) # d
+      -> h # g -> i
+
+Here, Step 1 cannot remove any constraint, as for g = One and c = e =
+Omega, no choise of a make the constraint satisfied.
+
+But, we still have a room to apply Step 2. We can remove "a" by replacing
+
+    (a <= g, a ~ c * e)
+
+by
+
+    (c <= g, a <= g).
+
+
+-}
+removeUnvisibleConstraint :: [MetaTyVar] -> QualTy -> ([MetaTyVar], QualTy)
+removeUnvisibleConstraint mvs (TyQual cs t) =
+  let (mvs', TyQual cs' t') = curry step mvs (TyQual cs t)
+  in if length cs' < length cs then
+       removeUnvisibleConstraint mvs' (TyQual cs' t')
+     else
+       (mvs', TyQual (nub cs') t')
+  where
+    step = uncurry removeUnvisibleHueristicStep . uncurry removeUnvisibleByConformanceStep
+
+
+{-# INLINABLE removeUnvisibleByConformanceStep #-}
+removeUnvisibleByConformanceStep :: [MetaTyVar] -> QualTy -> ([MetaTyVar], QualTy)
+removeUnvisibleByConformanceStep mvs (TyQual cs0 t) =
+  -- A constraint is removable if it can be eliminated by fixing non
+  -- visible appropriately. That is, if there is some valuation of
+  -- visible parts for which any valuation of non visible part can
+  -- make cs => (c & cs) false, we can `c` is necessary and otherwise
+  -- c is redundant.
+  --
+  -- Here, we just consider removing constraints one by one. 
+  
+  let (cs', xs) = checkRemovable [] [] cs0
+  in (mvs \\ xs, TyQual cs' t)
+
+  where
+    generalizable = (`elem` mvs)
+    visibleVars = metaTyVars [t] 
+    checkRemovable xs cs' []     = (reverse cs', xs)
+    checkRemovable xs cs' (c:cs) =
+      let 
+      in case cVars of
+        [] -> checkRemovable xs (c:cs') cs
+        _  ->          
+          case SAT.sat prop of
+            Nothing -> -- removing c does not change the satisfiability
+              checkRemovable (cVars ++ xs) cs' cs
+            Just _ ->
+              checkRemovable xs (c:cs') cs 
+      where
+        cVars = (filter generalizable $ metaTyVarsC [c]) \\ (metaTyVarsC (cs'++cs) ++ visibleVars)
+        cf  = toFormula cs .&&. toFormula cs'
+        cf' = toFormula [c] .&&. cf 
+        prop =
+            foldr (\x p -> SAT.elim (MV x) True p
+                           .&&.
+                           SAT.elim (MV x) False p)
+                  (cf .&&. SAT.neg cf') -- neg (cf .=>. cf')
+                  cVars
+
+{-
+repeat
+  u <= a, u ~ b * c --> (b <= a, a <= c)
+if u does not appear other part until fix point. 
+-}
+{-# INLINABLE removeUnvisibleHueristicStep #-}
+removeUnvisibleHueristicStep :: [MetaTyVar] -> QualTy -> ([MetaTyVar], QualTy)
+removeUnvisibleHueristicStep mvs0 (TyQual cs0 t) =
+  let (mvs', cs') = step mvs0 cs0
+  in (mvs', TyQual cs' t)
+  where
+    pick []     = mzero
+    pick (a:as) = return (a, as) `mplus`
+                  (do (b,bs) <- pick as
+                      return (b, a:bs))
+
+    pick2 cs = do
+      (a, as) <- pick cs
+      (b, bs) <- pick as
+      return (a, b, bs) 
+
+    checkMSub (MEqMax m1 m2 m3)
+      | m1 == m3  = return (m2, m1)
+      | m1 == m2  = return (m3, m1)
+      | otherwise = mzero 
+
+    addMSub x m1 m2 = if m1 == TyMetaV x then id
+                      else                    (msub m1 m2:)
+
+    step mvs cs = 
+      case work mvs cs of
+        []         -> (mvs, cs)
+        (a',cs'):_ -> (mvs \\ [a'], cs') 
+    
+    work mvs cs = do 
+      let maybeEliminatable = mvs \\ metaTyVars [t]
+      (c, MEqMax (TyMetaV v') m2 m3, rest) <- pick2 cs
+      (TyMetaV v, m2') <- checkMSub c 
+      let eliminatable = maybeEliminatable \\ metaTyVarsC rest
+      guard (v == v') 
+      guard (v `elem` eliminatable)
+      -- found v <= m2' and v ~ m2 * m3 
+      
+      return $ (v, addMSub v m2 m2' $ addMSub v m3 m2' $ rest)
+      
+
 quantify :: MonadTypeCheck m => [MetaTyVar] -> QualTy -> m PolyTy
-quantify mvs ty = do
+quantify mvs0 ty0 = do
+  -- liftIO $ print $ red $ text "Simplification:" <+> align (group (ppr ty0) <> line <> text "is simplified to" <> line <> group (ppr ty))
+  
   forM_ (zip mvs newBinders) $
     \(mv, tyv) -> writeTyVar mv (TyVar tyv) 
   ty' <- zonkTypeQ ty
   return $ TyForAll newBinders ty'   
   where
+    (mvs, ty) = removeUnvisibleConstraint mvs0 ty0
+    -- (mvs, ty) = (mvs0, ty0)
+    
     binders (TyForAll bs t) = bs ++ bindersQ t
     binders (TyCon _ ts) = concatMap binders ts
     binders (TyVar _)    = []
@@ -1008,137 +1168,3 @@ allFancyBinders = map (BoundTv . Local . User) $
   [ [x] | x <- ['a'..'z'] ] ++
   [ x : show i | i <- [1::Integer ..], x <- ['a'..'z'] ] 
 
-
--- checkAltsTy ::
---   MonadTypeCheck m => [ (LPat 'Renaming, Clause 'Renaming) ] ->
---   MonoTy -> BodyTy -> m [ (LPat 'TypeCheck, Clause 'TypeCheck) ]
--- checkAltsTy alts patTy bodyTy = parallel $ map checkAltTy alts
---   where
---     checkAltTy (p, c) = do
---       (p', ubind, lbind) <- checkPatTy p patTy
---       c' <- withUVars ubind $ withLVars lbind $ checkClauseTy c bodyTy
---       return (p', c') 
-        
-
--- -- checkAltsTy :: MonadTypeCheck m => [ (Loc Pat, LExp) ] -> MonoTy -> BodyTy -> m ()
--- -- checkAltsTy [] _ _ = return ()
--- -- checkAltsTy ((p,e):alts) pty bty = do
--- --   (ubinds, lbinds) <- checkPatTy p pty
--- --   withLVars lbinds $
--- --    withUVars ubinds $ do
--- --     -- mp   <- M.fromList <$> traverseTy pty
--- --     -- mps  <- foldr M.union M.empty <$> mapM (fmap M.fromList . traverseTy . snd) lbinds
--- --     -- mps2 <- foldr M.union M.empty <$> mapM (fmap M.fromList . traverseTy . snd) ubinds 
--- --     -- pty' <- zonkType pty 
--- --     -- trace (show $ D.vsep [ D.text "pat:" D.<+> D.align (ppr p),
--- --     --                        D.text "pty:" D.<+> D.align (ppr pty'), 
--- --     --                        D.text "ubind:" D.<+> D.align (pprMap (M.fromList ubinds)),
--- --     --                        D.text "lbind:" D.<+> D.align (pprMap (M.fromList lbinds)),
--- --     --                        D.text "ss:" D.<+> D.align (pprMap (M.unions [mp, mps,mps2])),
--- --     --                        D.empty ])
--- --     checkTy e bty
--- --   checkAltsTy alts pty bty 
-
--- -- checkRAltsTy :: MonadTypeCheck m => [ (Loc Pat, OLExp, OLExp) ] -> MonoTy -> BodyTy -> m ()
--- -- checkRAltsTy [] _ _ = return ()
--- -- checkRAltsTy ((p,e,e'):ralts) pty bty = do
--- --   -- the top level "rev" are already removed in pty and bty
--- --   (ubinds, lbinds) <- checkPatTy p pty
--- --   case ubinds of
--- --     (_:_) ->
--- --       typeError $ Other $ D.hsep [ ppr (location p), D.text "Patterns in reversible computation cannot bind unrestricted variable." ]
--- --     _ -> do 
--- --       withLVars [ (x, revTy t) | (x, t) <- lbinds ] $
--- --         checkTy e (revTy bty) 
--- --       checkTy e' (bangTy (bangTy bty -@ boolTy))
--- --       checkRAltsTy ralts pty bty 
-
--- checkPatsTy :: MonadTypeCheck m => [LPat 'Renaming] -> [MonoTy] -> m ([LPat 'TypeCheck], [(Name, MonoTy)], [(Name, MonoTy)])
--- checkPatsTy [] [] = return ([], [], [])
--- checkPatsTy (p:ps) (t:ts) = do
---   (p', ubind, lbind) <- checkPatTy p t
---   (ps', ubind', lbind') <- checkPatsTy ps ts
---   return (p':ps', ubind++ubind', lbind++lbind')    
--- checkPatsTy _ _ = error "checkPatsTy: Cannot happen."
-
--- checkPatTy :: MonadTypeCheck m => LPat 'Renaming -> MonoTy -> m (LPat 'TypeCheck, [(Name, MonoTy)], [(Name,MonoTy)] )
--- checkPatTy = checkPatTyWork False False
-
--- checkPatTyWork ::
---   MonadTypeCheck m =>
---   Bool -> Bool -> LPat 'Renaming -> MonoTy -> m (LPat 'TypeCheck, [(Name, MonoTy)], [(Name, MonoTy)])
--- checkPatTyWork isUnderRev isUnderBang (Loc loc pat) expectedTy = do
---   (pat', ubind, lbind) <- go pat
---   return (Loc loc pat', ubind, lbind)
---     where
---       go (PVar x) =
---         return (PVar (x,expectedTy), [], [(x,expectedTy)])
-        
---       go (PBang p) = do
---         ty <- ensureBangTy loc expectedTy
---         (p', ubind, lbind) <- checkPatTyWork isUnderRev True p ty
---         return (PBang p', ubind ++ lbind, [])
-        
---       go (PCon c ps) = do
---        tyOfC <- instantiate =<< askType loc c
---        (ps', retTy, ubind, lbind) <- foldM inferApp ([], tyOfC, [], []) ps
---        tryUnify loc retTy expectedTy
---        retTy' <- zonkType retTy
---        case retTy' of
---          TyCon n [_,_] | n == nameTyLArr ->
---            atLoc loc $ typeError $ Other $ text "Constructor" <+> ppr n <+> text "must be fully applied."
---          _ -> 
---        -- mp <- traverseTys [tyOfC, retTy, expectedTy]
---        -- trace (show $ D.text "ty: " D.<+> D.align (ppr retTy) D.<+> D.align (ppr expectedTy)
---        --               D.<$> D.text "ss (for c):" D.<+> D.align (pprMap $ M.fromList mp)) $         
---            return (PCon (c, tyOfC) (reverse ps'), ubind, lbind) 
---        where
---          inferApp (ps', ty, ubind, lbind) p = do 
---            (argTy, resTy) <- ensureFunTy (location p) ty
---            (p', ubind', lbind') <- checkPatTyWork isUnderRev isUnderBang p argTy 
---            return (p':ps', resTy, ubind'++ubind, lbind' ++ lbind)
-
---       go (PREV p)
---         | isUnderRev = atLoc loc $ typeError $ Other $ text "rev patterns cannot be nested."
---         | otherwise = do
---             ty <- ensureRevTy loc expectedTy
---             (p', ubind, lbind) <- checkPatTyWork True isUnderBang p ty
---             when (not $ null ubind) $
---               atLoc loc $ typeError $ Other $ text "rev patterns cannot contain !."
---             let ubind' = map (\(x, t) -> (x, revTy t)) ubind
---             let lbind' = map (\(x, t) -> (x, revTy t)) lbind
---             return (PREV p', ubind', lbind')
-
---       go (PWild x)
---         | isUnderBang = do
---             (PVar x', ubind, lbind) <- go (PVar x)
---             return (PWild x', ubind, lbind)
---         | otherwise = do 
---             (PBang (Loc _ (PVar x')), ubind, lbind) <- go (PBang (noLoc $ PVar x))
---             return (PWild x', ubind, lbind) 
-        
--- --   where
--- --      go (PVar x) expectedTy = return ([], [(BName x,expectedTy)])
--- --      go (PBang p) expectedTy = do
--- --        ty <- ensureBangTy loc expectedTy  
--- --        (ubind, lbind) <- checkPatTy p ty
--- --        -- mp <- traverseTy expectedTy
--- --        -- trace (show $ D.text "ty: " D.<+> D.align (ppr ty)
--- --        --               D.<$> D.text "ss (for !pat):" D.<+> D.align (pprMap $ M.fromList mp)) $ 
--- --        return $ (ubind ++ lbind, [])
--- --      go (PCon c ps) expectedTy = do
--- --        tyOfC <- instantiate =<< askType loc c
--- --        (retTy, ubind, lbind) <- foldM inferApp (tyOfC, [], []) ps
--- --        tryUnify loc retTy expectedTy
--- --        -- mp <- traverseTys [tyOfC, retTy, expectedTy]
--- --        -- trace (show $ D.text "ty: " D.<+> D.align (ppr retTy) D.<+> D.align (ppr expectedTy)
--- --        --               D.<$> D.text "ss (for c):" D.<+> D.align (pprMap $ M.fromList mp)) $         
--- --        return (ubind, lbind) 
--- --        where
--- --          inferApp (ty, ubind, lbind) p = do 
--- --            (argTy, resTy) <- ensureFunTy (location p) ty
--- --            (ubind', lbind') <- checkPatTy p argTy 
--- --            return (resTy, ubind'++ubind, lbind' ++ lbind)
-
-  
-  
