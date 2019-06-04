@@ -1,8 +1,8 @@
 -- Example of a parameterised datatype.
 data List a = Nil | Cons a (List a) 
 
--- def fwd f = case unlift f of (!x, _) -> x end 
--- def bwd f = case unlift f of (_, !x) -> x end 
+def fwd f = case unlift f of (x, _) -> x end 
+def bwd f = case unlift f of (_, x) -> x end 
             
 
 def null Nil = True
@@ -21,6 +21,16 @@ def s2l = go 0
                   rev (x', r) -> rev Cons (flipsub n x') r
                end 
     end
+
+sig s2l' : rev (List Int) -o rev (List Int)
+def s2l' = go 0 
+  where
+    def go n (rev Nil) = rev Nil with null
+         | n (rev Cons x xs) = 
+             revdo x' <- x;
+                   r  <- go x' xs; 
+                   before rev Cons (flipsub n x') r 
+  end
 
 -- sig ($) : forall a b. (a -o b) -o a -o b 
 def ($) f x = f x 

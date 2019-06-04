@@ -179,6 +179,25 @@ renameExp level localnames (Loc loc expr) = first (Loc loc) <$> go expr
     go RPin = return (RPin, S.empty)
       
 
+    go (RDO as er) = do
+      (as', er', fvs) <- goAs level localnames as er
+      return (RDO as' er', fvs)
+
+    goAs :: Int -> LocalNames -> [(LPat 'Parsing, LExp 'Parsing)] -> LExp 'Parsing
+            -> Renaming ([(LPat 'Renaming, LExp 'Renaming)] , LExp 'Renaming, FreeVars)
+    goAs lv lns [] er = do
+      (er', fvs) <- renameExp lv lns er
+      return ([], er', fvs) 
+    goAs lv lns ((p,e):as) er = do            
+      (e', fvs1) <- renameExp lv lns e
+      renamePat lv lns S.empty p $ \p' lv' lns' bvs' -> do 
+        (as', er', fvs2) <- goAs lv' lns' as er
+        return ((p',e'):as', er', S.union fvs1 (fvs2 `S.difference` bvs'))
+      
+      
+      
+      
+
 {-
 Currently, the operators are parsed as if they were left-associative
 and has the same precedence. Thus,

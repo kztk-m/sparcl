@@ -145,6 +145,8 @@ data Exp p
   | Parens   (LExp p) -- for operators
   | Op  (XId p) (LExp p) (LExp p)
 
+  | RDO [(LPat p, LExp p)] (LExp p) 
+
   | Unlift 
 
   | RCon (XId p)
@@ -196,6 +198,12 @@ instance AllPretty p => Pretty (Exp p) where
 
   pprPrec _ (RCon c) = ppr c
 
+
+  pprPrec k (RDO as r) = parensIf (k > 0) $
+    D.text "revdo" <+>
+    (D.align $ D.vcat (map (\(x, e) -> ppr x <+> text "<-" <+> ppr e) as)
+               <> D.line <> text "before" <+> ppr r)
+    
 
   pprPrec _ RPin = text "pin"
   -- pprPrec k (RPin e1 e2) = parensIf (k > 9) $

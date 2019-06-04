@@ -88,9 +88,62 @@ let R (x1, (x2, ..., (x{n-1},xn)) ...) =
 in e 
 ```
 
-The idea is the values of `x1`,.., `x{n-1}` are exposed in the `let`-body (`e2`,..,`en`).
+But, this incompatible with the current syntax. 
+
+```
+let def f x = ... g ...
+    def g y = ... f ...
+in e 
+```
 
 
+### Tentative Syntax 
+
+Since the role of deferred binding is similar to "<-" in `do` in Haskell, we will borrow the syntax to write
+
+```
+revdo p1 <- e1; 
+      p2 <- e2; 
+      ...
+      pn <- en;
+      before e 
+```
+
+which will be desugarred into 
+
+```
+let rev (p1, (p2, ..., (p{n-1},pn)) ...) =
+   pin e1 (\p1 -> 
+    pin e2 (\p2 -> 
+     ... 
+     pin e{n-1} (\p{n-1} -> en
+    ))
+in e 
+```
+
+
+
+## Undetermined Syntax
+
+Should we use `;` instead of `|` for `case`? 
+
+```
+case e of 
+ p1 -> e1 ;
+ p2 -> e2 ; 
+ ... ;
+ pn -> en 
+end
+```
+
+Also, should we use `;` instead of `|` for function definitions. 
+
+```
+def f p11 p12 ... p1n = e1 ;
+      p21 p22 ... p2n = e2 ; 
+      ... ; 
+      pm1 rm2 ... pmn = em 
+```
 
 
 

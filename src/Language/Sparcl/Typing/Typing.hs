@@ -636,6 +636,32 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first3 $ Loc loc) $ atLoc loc $ a
 
       return (Case e0' alts', mergeUseMap umap0 umapA, cs0 ++ csA) 
 
+    go (RDO as0 er) = do
+      (as0', binds, umap, csAs) <- goAs as0
+      let binds' = map (\(x,t) -> (x, revTy t)) binds
+      let xs = map fst binds
+      let xqs = [ (x, TyMult One) | x <- xs ]
+      (er', umapr, csr) <- withVars binds' $ checkTy er expectedTy
+      csVars <- constrainVars xqs umapr
+
+      return (RDO as0' er', mergeUseMap umap (foldr M.delete umapr xs), csVars ++ csr ++ csAs)
+      where
+        goAs [] = return ([], [], M.empty, [])
+        goAs ((p,e):as) = do
+          tyE <- newMetaTy
+          (e', umapE, csE) <- checkTy e (revTy tyE)
+          (p', bind, xqs, csP) <- checkPatTy p (TyMult Omega) tyE
+
+          (as', bindAs, umapAs, csAs) <- withVars bind $ goAs as
+
+          csV <- constrainVars xqs umapAs
+
+          return ((p',e'):as', bindAs ++ bind, mergeUseMap (foldr M.delete umapAs $ map fst xqs) umapE, csV ++ csE ++ csP ++ csAs) 
+          
+          
+
+    
+
 inferPolyTy :: MonadTypeCheck m => Bool -> LExp 'Renaming -> m (LExp 'TypeCheck, PolyTy, UseMap, [TyConstraint])
 inferPolyTy isMultipleUse expr = do
   (expr', ty, umap, cs) <- inferTy expr

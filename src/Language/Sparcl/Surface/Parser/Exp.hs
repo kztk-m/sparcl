@@ -56,9 +56,9 @@ E ::= \ P1 ... Pn -> E
 -}
 expr :: Monad m => P m (LExp 'Parsing)
 expr = getSrcLoc >>= \startLoc -> 
-  (do void symbolLambda
+  (do void lambda
       ps <- P.some simplePat 
-      void symbolRarr
+      void rightArrow
       e <- expr
       return $ Loc (startLoc <> location e) $ Abs ps e )
   <|>
@@ -76,12 +76,25 @@ expr = getSrcLoc >>= \startLoc ->
       endLoc <- getSrcLoc 
       return $ Loc (startLoc <> endLoc) $ Case e0 alts)
   <|>
+  (do void $ symbol "revdo"
+      as <- assignment `P.sepEndBy` semicolon 
+      void $ symbol "before"
+      e <- expr
+      return $ Loc (startLoc <> location e) $ RDO as e)
+  <|> 
   (do e <- opExpr
       m <- P.optional (symbol ":" *> typeExpr)
       case m of
         Just ty -> pure $ Loc (location e <> location ty) $ Sig e ty
         Nothing -> pure $ e)
 
+
+assignment :: Monad m => P m (LPat 'Parsing, LExp 'Parsing)
+assignment = do
+  p <- pat
+  void leftArrow
+  e <- expr
+  return (p, e)
 
 simplePat :: Monad m => P m (LPat 'Parsing)
 simplePat = loc $ 
@@ -154,9 +167,9 @@ introForAll ty =
   
 typeExpr :: Monad m => P m (LTy 'Parsing)
 typeExpr = do
-  ef    <- P.optional (symbol "forall" *> P.many (varName <* sp) <* symbol ".")
+  ef    <- P.optional (symForAll *> P.many (varName <* sp) <* symbol ".")
   mid   <- getSrcLoc 
-  ctxt  <- P.optional $ P.try (constraint <* symbol "=>")
+  ctxt  <- P.optional $ P.try (constraint <* dRightArrow)
   ty    <- arrTy
   return $ maybe id foralls ef $ maybe id (\cs -> Loc (mid <> location ty) . (TQual cs)) ctxt ty
     where
@@ -198,15 +211,15 @@ arrTy =
   where
     mkArr m e1 e2 = Loc (location e1 <> location e2) $ TCon (BuiltIn nameTyArr) [m, e1, e2] 
     arr = 
-      (do void $ symbol "->"
+      (do void $ rightArrow
           pure $ \e1 e2 -> mkArr (noLoc $ TMult Omega) e1 e2)
       <|>
-      (do void $ symbol "-o"
+      (do void $ lollipop 
           pure $ \e1 e2 -> mkArr (noLoc $ TMult One) e1 e2)
       <|>
       (do void $ symbol "#"
           m <- multiplicity
-          void $ symbol "->"
+          void $ rightArrow
           pure $ \e1 e2 -> mkArr m e1 e2)
 
 appTy :: Monad m => P m (LTy 'Parsing)
@@ -489,7 +502,7 @@ alternatives = do
 alt :: Monad m => P m (LPat 'Parsing, Clause 'Parsing)    
 alt = do
   p <- pat
-  void $ symbol "->"
+  void $ rightArrow 
   c <- clause
   return (p, c)
 

@@ -55,6 +55,7 @@ desugarExp :: forall m. MonadDesugar m => S.LExp 'TypeCheck -> m (C.Exp Name)
 desugarExp (Loc _ expr) = go expr
   where
     go :: S.Exp 'TypeCheck -> m (C.Exp Name) 
+
     go (S.Var (x, _)) = return $ C.Var x
     go (S.Lit l)      = return $ C.Lit l
     go (S.App e1 e2)  = do
@@ -120,6 +121,27 @@ desugarExp (Loc _ expr) = go expr
       withNewNames n $ \xs -> do 
         let b = C.RCon c [ C.Var x | x <- xs ]
         return $ foldr C.Abs b xs 
+
+    go (S.RDO as er) = go (unLoc $ desugarRDO as er)
+
+
+
+desugarRDO :: [(S.LPat 'TypeCheck, Loc (S.Exp 'TypeCheck))] -> Loc (S.Exp 'TypeCheck) -> Loc (S.Exp 'TypeCheck)
+desugarRDO = go [] id 
+  where
+    app e1 e2 = noLoc (S.App e1 e2)
+    go _  _    [] er = er -- this branch is used only for the expressions of the form "revdo before e0"
+    go ps kpin [(p,e)] er =
+      let pinExp = kpin e
+          pat    = noLoc $ S.PREV $ foldr1 (\p1 p2 -> makeTuplePatS [p1, p2]) $ reverse (p:ps)
+      in noLoc $ S.Case pinExp [ (pat, S.Clause er (S.HDecls () []) Nothing)]
+      
+    go ps kpin ((p,e):as) er =
+      let k hole = kpin $ (noLoc S.RPin) `app`
+                          e `app`
+                          (noLoc $ S.Abs [p] hole)
+      in go (p:ps) k as er 
+      
       
 makeTupleExpC :: [C.Exp Name] -> C.Exp Name
 makeTupleExpC [e] = e
