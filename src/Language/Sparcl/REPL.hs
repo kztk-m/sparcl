@@ -389,12 +389,12 @@ procLoad fp = do
   -- tinfo <- getTInfo
   currentDir <- Rd.asks confCurrentDir 
   let fp' = currentDir FP.</> trimSpace fp
-  res <- checkError (fmap Just $ runM $ readModule fp' (\env bind -> M.toList $ runEval (evalUBind env bind)))
-                    (return Nothing) 
-  case res of
-    Nothing  -> waitCommand
-    Just m -> do
-      localLastLoad fp $ do 
+  localLastLoad fp $ do 
+    res <- checkError (fmap Just $ runM $ readModule fp' (\env bind -> M.toList $ runEval (evalUBind env bind)))
+                      (return Nothing) 
+    case res of
+      Nothing  -> waitCommand
+      Just m -> do
         resetModule
         setModule m 
         waitCommand
