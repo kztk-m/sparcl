@@ -77,7 +77,7 @@ expr = getSrcLoc >>= \startLoc ->
       return $ Loc (startLoc <> endLoc) $ Case e0 alts)
   <|>
   (do void $ symbol "revdo"
-      as <- assignment `P.sepEndBy` semicolon 
+      as <- assignment `P.endBy` semicolon 
       void $ symbol "before"
       e <- expr
       return $ Loc (startLoc <> location e) $ RDO as e)
