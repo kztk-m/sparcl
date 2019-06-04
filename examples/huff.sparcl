@@ -43,6 +43,14 @@ def huffCompress s = case pin s (\s' -> const eqHuff (makeHuff s')) of
          | rev (s, h) -> pin h (\h' -> encode h' s)
          end
 
+sig huffCompressDo : rev (List Symbol) -o rev (Huff, List Bit) 
+def huffCompressDo s = 
+   revdo s  <- s ;
+         h  <- const eqHuff (makeHuff s) ;
+         before revdo h <- h ; 
+                      r <- encode h s; 
+                      before rev (h, r)
+
 sig encode : Huff -> rev (List Symbol) -o rev (List Bit)
 def encode h (rev Nil)       = rev Nil with null
          | h (rev Cons s ss) = encR h s (encode h ss) 
@@ -73,3 +81,7 @@ def bwd h = case unlift h of
 def t0 = fwd huffCompress (Cons 'a' (Cons 'a' (Cons 'b' (Cons 'a' (Cons 'c' (Cons 'a' (Cons 'b' (Cons 'd' (Cons 'a' (Cons 'a' Nil))))))))))
 
 def t1 = bwd huffCompress t0 
+
+def t0' = fwd huffCompressDo (Cons 'a' (Cons 'a' (Cons 'b' (Cons 'a' (Cons 'c' (Cons 'a' (Cons 'b' (Cons 'd' (Cons 'a' (Cons 'a' Nil))))))))))
+
+def t1' = bwd huffCompressDo t0 
