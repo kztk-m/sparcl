@@ -123,7 +123,10 @@ instance Pretty TypeError where
 -- A typing environment just holds type information.  This reflects
 -- our principle; multiplicites are synthesized instead of checked.
 
-type TyEnv = Map Name Ty
+type TyEnv = Map Name (Ty, MultTy) 
+
+dummyName :: Name 
+dummyName = Original (ModuleName "") (User "") (Bare (User ""))
 
 -- A usage environment gathers how many times a variable is used.
 --
@@ -141,7 +144,6 @@ data TypingContext =
   TypingContext { tcRefMvCount :: !(IORef Int),
                   tcRefSvCount :: !(IORef Int),
                   tcTyEnv      :: TyEnv,    -- Current typing environment
-                  tcMultEnv    :: [Ty], 
                   tcSyn        :: SynTable, -- Current type synonym table
                   tcContexts   :: [S.LExp 'Renaming], -- parent expressions
                   tcLoc        :: Maybe SrcSpan,  -- focused part
@@ -160,7 +162,6 @@ initTypingContext = do
                            tcRefErrors  = r ,
                            tcLoc        = Nothing, 
                            tcContexts   = [],
-                           tcMultEnv    = [],
                            tcChecking   = CheckingNone, 
                            tcTyEnv      = M.empty,
                            tcSyn        = M.empty }
@@ -171,7 +172,6 @@ refreshTC tc = do
   r <- newIORef Seq.empty 
   return $ tc { tcTyEnv     = M.empty,
                 tcSyn       = M.empty,
-                tcMultEnv   = [], 
                 tcLoc       = Nothing,
                 tcRefErrors = r,
                 tcChecking  = CheckingNone, 
@@ -179,7 +179,7 @@ refreshTC tc = do
   
 setEnvs :: TypingContext -> TypeTable -> SynTable -> TypingContext 
 setEnvs tc tenv syn =
-  tc { tcTyEnv = tenv,
+  tc { tcTyEnv = fmap (\t -> (t, TyMult Omega)) tenv,
        tcSyn   = syn }
 
 runTC :: TypingContext -> TC a -> IO a
@@ -235,13 +235,11 @@ class MonadIO m => MonadTypeCheck m where
   newSkolemTyVar :: TyVar -> m TyVar 
 
   -- type checking with a new entry in the type environment. 
-  withVar :: Name -> Ty -> m r -> m r
+  withVar :: Name -> Ty -> MultTy -> m r -> m r
 
   -- type checking with a new entry in the synonym table.
   withSyn :: Name -> ([TyVar], Ty) -> m r -> m r
 
-  -- for generalization 
-  withMultVar :: Ty -> m r -> m r 
 
 tupleConTy :: Int -> Ty
 tupleConTy n =
@@ -271,10 +269,9 @@ instance MonadTypeCheck m => MonadTypeCheck (ReaderT r m) where
   readTyVar tv = lift (readTyVar tv)
   writeTyVar tv t = lift (writeTyVar tv t)
 
-  withVar n t m = ReaderT $ \r -> withVar n t (runReaderT m r) 
+  withVar n t mult m = ReaderT $ \r -> withVar n t mult (runReaderT m r) 
   withSyn tv t m = ReaderT $ \r -> withSyn tv t (runReaderT m r)
 
-  withMultVar ty m = ReaderT $ withMultVar ty . runReaderT m 
 
   getMetaTyVarsInEnv = lift getMetaTyVarsInEnv
   resolveSyn ty = lift (resolveSyn ty) 
@@ -303,7 +300,7 @@ instance MonadTypeCheck TC where
     | otherwise = do        
         tyEnv <- asks tcTyEnv
         case M.lookup n tyEnv of
-          Just ty -> return ty
+          Just (ty,_) -> return ty
           Nothing -> do 
             atLoc l (reportError $ Undefined n)
             arbitraryTy
@@ -355,33 +352,36 @@ instance MonadTypeCheck TC where
             abortTyping
       go _ (TyMult m) = return $ TyMult m 
 
-  withVar x ty m = 
-    local (\tc -> tc { tcTyEnv = M.insert x ty (tcTyEnv tc) }) m 
+  withVar x ty mult m = 
+    local (\tc -> tc { tcTyEnv = M.insert x (ty, mult) (tcTyEnv tc) }) m 
 
   withSyn tv v m = 
     local (\tc -> tc { tcSyn = M.insert tv v (tcSyn tc) }) m 
 
-  withMultVar ty = local (\tc -> tc { tcMultEnv = ty : tcMultEnv tc }) 
-
   getMetaTyVarsInEnv = do
     tyEnv <- asks tcTyEnv
-    let ts = M.elems tyEnv
-    multEnv <- asks tcMultEnv
-    ts' <- mapM zonkType (ts ++ multEnv) 
+    let ts = concatMap (\(t,m) -> [t,m]) $ M.elems tyEnv
+    ts' <- mapM zonkType ts
     return $ metaTyVars ts' -- (ts ++ multEnv)
 
 
 newMetaTy :: MonadTypeCheck m => m Ty
 newMetaTy = fmap TyMetaV $ newMetaTyVar 
 
-withVars :: MonadTypeCheck m => [ (Name, Ty) ] -> m r -> m r
-withVars ns m = foldr (uncurry withVar) m ns
+withVars :: MonadTypeCheck m => [ (Name, Ty, MultTy) ] -> m r -> m r
+withVars ns m = foldr (\(n,t,mult) -> withVar n t mult) m ns
+
+withMultVar :: MonadTypeCheck m => MultTy -> m r -> m r
+withMultVar mult = withVar dummyName mult mult 
+
+withMultVars :: MonadTypeCheck m => [MultTy] -> m r -> m r
+withMultVars ms m = foldr withMultVar m ms 
+
+withUnrestrictedVars :: MonadTypeCheck m => [ (Name, Ty) ] -> m r -> m r
+withUnrestrictedVars = withVars . map (\(n,t) -> (n, t, TyMult Omega))
 
 withSyns :: MonadTypeCheck m => [ (Name, ([TyVar], Ty)) ] -> m r -> m  r
 withSyns xs m = foldr (uncurry withSyn) m xs  
-
-withMultVars :: MonadTypeCheck m => [Ty] -> m r -> m r
-withMultVars xs m = foldr withMultVar m xs 
 
 zonkMetaTyVar :: MonadTypeCheck m => MetaTyVar -> m Ty
 zonkMetaTyVar mv = {- trace "zonk!" $ -} do 

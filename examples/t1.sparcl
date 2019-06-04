@@ -21,6 +21,9 @@ sig mul : Nat # Omega -> rev Nat # 1 -> rev Nat
 def mul z (rev Z)   = rev Z with isZ
       | z (rev S y) = add z (mul z y)  
 
+def mul' z (rev Z) = rev Z with isZ
+      |  z (rev S y) = add z (mul' z y)
+
 def q3 = fwd (mul (S (S Z))) (S (S Z))
 def q4 = fwd (\x -> mul (S (S Z)) x) (S (S (S (S Z))))
 

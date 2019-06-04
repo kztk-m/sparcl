@@ -190,40 +190,40 @@ litTy (LitRational _) = return $ TyCon nameTyRational []
 
 checkPatsTy :: MonadTypeCheck m =>
   [LPat 'Renaming] -> [MultTy] -> [MonoTy] ->
-  m ([LPat 'TypeCheck], [(Name,MonoTy)], [(Name, MultTy)], [TyConstraint])
-checkPatsTy [] [] [] = return ([], [], [], [])
+  m ([LPat 'TypeCheck], [(Name,MonoTy,MultTy)], [TyConstraint])
+checkPatsTy [] [] [] = return ([], [], [])
 checkPatsTy (p:ps) (m:ms) (t:ts) = do
-  (ps', bind, xqs, cs) <- checkPatsTy ps ms ts
-  (p',  pbind, pxqs, pcs) <- checkPatTy p m t
-  return (p':ps', pbind ++ bind, pxqs ++ xqs, pcs ++ cs) 
+  (ps', bind,  cs)  <- checkPatsTy ps ms ts
+  (p',  pbind, pcs) <- checkPatTy p m t
+  return (p':ps', pbind ++ bind, pcs ++ cs) 
 checkPatsTy _ _ _ = error "Cannot happen."  
 
 checkPatTy :: MonadTypeCheck m =>
               LPat 'Renaming -> MultTy -> MonoTy ->
-              m (LPat 'TypeCheck, [(Name, MonoTy)], [(Name, MultTy)], [TyConstraint])
+              m (LPat 'TypeCheck, [(Name, MonoTy, MultTy)], [TyConstraint])
 checkPatTy = checkPatTyWork False 
 
 checkPatTyWork ::
   MonadTypeCheck m =>
   Bool -> 
   LPat 'Renaming -> MultTy -> MonoTy ->
-  m (LPat 'TypeCheck, [(Name, MonoTy)], [(Name, MultTy)], [TyConstraint])
+  m (LPat 'TypeCheck, [(Name, MonoTy, MultTy)], [TyConstraint])
 checkPatTyWork isUnderRev (Loc loc pat) pmult patTy = do
-  (pat', bind, xqs, cs) <- atLoc loc $ go pat
-  return (Loc loc pat', bind, xqs, cs) 
+  (pat', bind, cs) <- atLoc loc $ go pat
+  return (Loc loc pat', bind, cs) 
   where
     go (PVar x) =
-      return (PVar (x, patTy), [(x,patTy)], [(x,pmult)], [])
+      return (PVar (x, patTy), [(x,patTy, pmult)],  [])
 
     -- TODO: to be removed 
     go (PBang p) = do
       unify pmult (TyMult Omega)
-      (p', bind, xqs, cs) <- checkPatTyWork isUnderRev p (TyMult Omega) patTy
-      return (PBang p', bind, xqs, cs) 
+      (p', bind, cs) <- checkPatTyWork isUnderRev p (TyMult Omega) patTy
+      return (PBang p', bind, cs) 
 
     go (PCon c ps) = do
       (cs, tyOfC) <- instantiate =<< askType loc c
-      (ps', retTy, bind, xqs, csR) <- foldM inferApp ([], tyOfC, [], [], cs) ps
+      (ps', retTy, bind, csR) <- foldM inferApp ([], tyOfC, [], cs) ps
       tryUnify retTy patTy
       retTy' <- zonkType retTy
       case retTy' of
@@ -231,13 +231,13 @@ checkPatTyWork isUnderRev (Loc loc pat) pmult patTy = do
           reportError $ Other $ text "Constructor" <+> ppr n <+> text "must be fully applied."
         _ ->
           return ()
-      return (PCon (c, tyOfC) (reverse ps'), bind, xqs, csR)
+      return (PCon (c, tyOfC) (reverse ps'), bind, csR)
         where
-          inferApp (ps', ty, bind, xqs, cs) p = do
+          inferApp (ps', ty, bind, cs) p = do
             (argTy, m, resTy) <- atLoc (location p) $ ensureFunTy ty
             (mm, cm) <- maxMult m pmult 
-            (p', bind', xqs', cs') <- checkPatTyWork isUnderRev p mm argTy
-            return (p':ps', resTy, bind'++bind, xqs'++xqs, cm ++ cs'++cs)
+            (p', bind', cs') <- checkPatTyWork isUnderRev p mm argTy
+            return (p':ps', resTy, bind'++bind, cm ++ cs'++cs)
 
           maxMult m1 m2 = do
             mm <- newMetaTy
@@ -250,19 +250,19 @@ checkPatTyWork isUnderRev (Loc loc pat) pmult patTy = do
       when isUnderRev $ (atLoc $ location p) $ reportError $ Other $ text "rev patterns cannot be nested."
           
       ty <- ensureRevTy patTy
-      (p', bind, xqs, cs) <- checkPatTyWork True p (TyMult One) ty
-      let bind' = map (\(x,t) -> (x, revTy t)) bind 
+      (p', bind, cs) <- checkPatTyWork True p pmult ty
+      let bind' = map (\(x,t,m) -> (x, revTy t,m)) bind 
 
-      forM_ xqs $ \(_, q) ->
-        -- TODO: Add good error messages.
-        unify q (TyMult One) 
+      -- forM_ xqs $ \(_, q) ->
+      --   -- TODO: Add good error messages.
+      --   unify q (TyMult One) 
       
-      return (PREV p', bind', xqs, cs)
+      return (PREV p', bind', cs)
 
     go (PWild x) = do -- this is only possible when multp is omega
       tryUnify pmult (TyMult Omega) 
-      (Loc _ (PVar x'), _bind, _xqs, cs) <- checkPatTyWork isUnderRev (noLoc $ PVar x) (TyMult Omega) patTy
-      return (PWild x', [], [], cs)
+      (Loc _ (PVar x'), _bind, cs) <- checkPatTyWork isUnderRev (noLoc $ PVar x) (TyMult Omega) patTy
+      return (PWild x', [], cs)
        
       -- go (PVar x) =
       --   return (PVar (x,expectedTy), [], [(x,expectedTy)])
@@ -522,9 +522,11 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first3 $ Loc loc) $ atLoc loc $ a
       qs <- mapM (const newMetaTy) pats
       ts <- mapM (const newMetaTy) pats
 
-      (pats', bind, xqs, csPat) <- checkPatsTy pats qs ts
+      (pats', bind, csPat) <- checkPatsTy pats qs ts
       retTy <- newMetaTy
       (e', umap, cs) <- withMultVars qs $ withVars bind $ checkTy e retTy
+
+      let xqs = map (\(x,_,q) -> (x,q)) bind 
 
       tryUnify (foldr (uncurry tyarr) retTy $ zip qs ts) expectedTy
       csVars <- constrainVars xqs umap 
@@ -625,7 +627,7 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first3 $ Loc loc) $ atLoc loc $ a
 
     go (Let decls e) = do
       (decls', bind, umapLet, csLet) <- inferDecls decls 
-      (e', umap, cs)                 <- withVars bind $ checkTy e expectedTy
+      (e', umap, cs)                 <- withUnrestrictedVars bind $ checkTy e expectedTy
       return (Let decls' e', mergeUseMap umap umapLet, cs ++ csLet) 
 
     go (Case e0 alts) = do
@@ -637,11 +639,12 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first3 $ Loc loc) $ atLoc loc $ a
       return (Case e0' alts', mergeUseMap umap0 umapA, cs0 ++ csA) 
 
     go (RDO as0 er) = do
-      (as0', binds, umap, csAs) <- goAs as0
-      let binds' = map (\(x,t) -> (x, revTy t)) binds
-      let xs = map fst binds
-      let xqs = [ (x, TyMult One) | x <- xs ]
-      (er', umapr, csr) <- withVars binds' $ checkTy er expectedTy
+      (as0', bind, umap, csAs) <- goAs as0
+      let bind' = map (\(x,t,_) -> (x, revTy t, TyMult One)) bind
+      let xs = map (\(x,_,_) -> x) bind'
+      let xqs = [ (x, TyMult One) | x <- xs ]      
+
+      (er', umapr, csr) <- withVars bind' $ checkTy er expectedTy
       csVars <- constrainVars xqs umapr
 
       return (RDO as0' er', mergeUseMap umap (foldr M.delete umapr xs), csVars ++ csr ++ csAs)
@@ -650,7 +653,9 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first3 $ Loc loc) $ atLoc loc $ a
         goAs ((p,e):as) = do
           tyE <- newMetaTy
           (e', umapE, csE) <- checkTy e (revTy tyE)
-          (p', bind, xqs, csP) <- checkPatTy p (TyMult Omega) tyE
+          (p', bind, csP) <- checkPatTy p (TyMult Omega) tyE
+
+          let xqs = map (\(x,_,q) -> (x,q)) bind 
 
           (as', bindAs, umapAs, csAs) <- withVars bind $ goAs as
 
@@ -658,7 +663,7 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first3 $ Loc loc) $ atLoc loc $ a
 
           return ((p',e'):as', bindAs ++ bind, mergeUseMap (foldr M.delete umapAs $ map fst xqs) umapE, csV ++ csE ++ csP ++ csAs) 
           
-          
+
 
     
 
@@ -708,10 +713,12 @@ checkAltsTy alts patTy q bodyTy =
   gatherAltUC =<< mapM checkAltTy alts 
   where
     checkAltTy (pat, c) = do
-      (pat', bind, xqs, csP) <- checkPatTy pat (TyMetaV q) patTy
+      (pat', bind, csP) <- checkPatTy pat (TyMetaV q) patTy
       (c', umap, cs) <- withVars bind $ checkClauseTy c bodyTy
+
+      let xqs = map (\(x,_,qq) -> (x,qq)) bind 
       csVars <- constrainVars xqs umap 
-      return ((pat', c'), foldr M.delete umap (map fst bind), csVars ++ cs ++ csP)  
+      return ((pat', c'), foldr M.delete umap (map fst xqs), csVars ++ cs ++ csP)  
     -- checkAltTy (p, c) = do
     --   (p', ubind, lbind) <- checkPatTy p patTy
     --   c' <- withUVars ubind $ withLVars lbind $ checkClauseTy c bodyTy
@@ -743,7 +750,7 @@ inferDecls (HDecls _ dss) = do
     go bs [] = return ([], bs, M.empty, [])
     go bs (ds:rest) = do
       (ds', bind,  umap,  csLet)  <- inferMutual ds
-      (rest', bs', umap', csLet') <- withVars bind $ go (bind ++ bs) rest
+      (rest', bs', umap', csLet') <- withUnrestrictedVars bind $ go (bind ++ bs) rest
       return (ds':rest', bs', mergeUseMap umap umap', csLet ++ csLet')
     
 
@@ -776,7 +783,7 @@ inferTopDecls decls dataDecls typeDecls = do
           let tvs = map BoundTv ns, 
           Loc _ (CDecl cn tys) <- cdecls ]
 
-  withVars (M.toList typeTable) $
+  withUnrestrictedVars (M.toList typeTable) $
    withSyns (M.toList synTable) $ do
      (decls', nts, _, _) <- inferDecls decls
      -- liftIO $ putStrLn $ show cs 
@@ -808,7 +815,7 @@ inferMutual decls = do
                        Just t  -> return t
                        Nothing -> newMetaTy) ns
 
-  (nts0, umap) <- fmap gatherU $ withVars (zip ns tys) $ forM defs $ \(loc, n, pcs) -> do
+  (nts0, umap) <- fmap gatherU $ withUnrestrictedVars (zip ns tys) $ forM defs $ \(loc, n, pcs) -> do
     ty  <- newMetaTy
     qs  <- mapM (const newMetaTy) [1..numPatterns pcs]
     (pcs', umap, cs) <- gatherAltUC =<< mapM (flip (checkTyPC loc qs) ty) pcs 
@@ -879,12 +886,14 @@ inferMutual decls = do
       
       checkTyPC loc qs (ps, c) expectedTy = atLoc loc $ do
         tys <- mapM (const newMetaTy) ps 
-        (ps', bind, xqs, csPat) <- checkPatsTy ps qs tys 
+        (ps', bind, csPat) <- checkPatsTy ps qs tys 
         retTy <- newMetaTy 
         (c', umap, cs) <- withVars bind $ checkClauseTy c retTy
         tryUnify (foldr (uncurry tyarr) retTy $ zip qs tys) expectedTy
 
         (umap', csR) <- raiseUse (TyMult Omega) umap
+
+        let xqs = map (\(x,_,q) -> (x,q)) bind 
 
         csVars <- constrainVars xqs umap 
         return ((ps', c'), foldr M.delete umap' (map fst xqs), csR ++ csVars ++ cs ++ csPat)
@@ -893,7 +902,7 @@ inferMutual decls = do
 checkClauseTy :: MonadTypeCheck m => Clause 'Renaming -> Ty -> m (Clause 'TypeCheck, UseMap, [TyConstraint])
 checkClauseTy (Clause e ws wi) expectedTy = do
   (ws', bind, umap, cs) <- inferDecls ws
-  withVars bind $ do
+  withUnrestrictedVars bind $ do
     (e',  umapE, csE) <- checkTy e expectedTy
     (wi', umapWi, csWi) <- case wi of
              Just ewi -> do
