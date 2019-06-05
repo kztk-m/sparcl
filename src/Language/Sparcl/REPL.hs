@@ -1,4 +1,5 @@
 {-# OPTIONS_GHC -fprint-potential-instances #-}
+{-# LANGUAGE TypeApplications #-}
 
 module Language.Sparcl.REPL where
 
@@ -31,12 +32,14 @@ import Control.DeepSeq
 import qualified Data.Map as M
 import qualified Data.Set as S 
 
-import Language.Sparcl.Pretty
+import Language.Sparcl.Pretty hiding ((<$>))
 import qualified Text.PrettyPrint.ANSI.Leijen as D
 
 import Data.List (isPrefixOf)
 
 import Data.Char (isSpace)
+
+import Data.Maybe (fromMaybe)
 
 import Control.Exception (IOException, SomeException, evaluate)
 import Control.Monad.Catch
@@ -75,25 +78,24 @@ instance HL.MonadException m => MonadCatch (MyInputT m) where
 -- FIXME: I am not sure the following implementation is OK or not.
 instance (HL.MonadException m) => MonadMask (MyInputT m) where
   mask k = HL.controlIO $ \(HL.RunIO run) -> liftIO $ mask' $ \restore ->
-    run $ k (\y -> join $ liftIO $ restore $ run y)  
+    run $ k (join . liftIO . restore . run)  
     where
       mask' = mask @IO
 
   uninterruptibleMask k = HL.controlIO $ \(HL.RunIO run) -> liftIO $ uninterruptibleMask' $ \restore ->
-    run $ k (\y -> join $ liftIO $ restore $ run y)  
+    run $ k (join . liftIO . restore . run)  
     where
       uninterruptibleMask' = uninterruptibleMask @IO
 
   generalBracket before after comp =
-    HL.controlIO $ \(HL.RunIO run) -> fmap (uncurry $ liftM2 (,)) $ 
+    HL.controlIO $ \(HL.RunIO run) -> uncurry (liftM2 (,)) <$> 
                      generalBracket' (run before)
                              (\ma me -> run (do { a <- ma; e <- c2c me; after a e}))
                              (\ma -> run (ma >>= comp))
     where
       c2c :: forall mm b. Monad mm => ExitCase (mm b) -> mm (ExitCase b)
-      c2c (ExitCaseSuccess mb)  = do
-        b <- mb
-        return (ExitCaseSuccess b) 
+      c2c (ExitCaseSuccess mb)  = 
+        ExitCaseSuccess <$> mb
       c2c (ExitCaseException e) = return (ExitCaseException e)
       c2c ExitCaseAbort         = return ExitCaseAbort
       
@@ -217,8 +219,8 @@ initConf = do
                 }
   
 localLastLoad :: FilePath -> REPL r -> REPL r 
-localLastLoad fp m = do
-  Rd.local (\conf -> conf { confLastLoad = Just fp }) m 
+localLastLoad fp = 
+  Rd.local (\conf -> conf { confLastLoad = Just fp }) 
   --liftIO $ modifyIORef ref $ \conf -> conf { confLastLoad = Just fp }
   
 
@@ -243,7 +245,7 @@ replCompletion cref (curr0, rest0) =
       where
         f :: String -> IO [HL.Completion]
         f str = do
-          names <- fmap M.keys $ readIORef cref
+          names <- M.keys <$> readIORef cref
           return $ map HL.simpleCompletion $ filter (str `isPrefixOf`) $ commands curr ++ makeNameStrings names
 
         makeNameStrings :: [SurfaceName] -> [String]
@@ -271,8 +273,8 @@ replCompletion cref (curr0, rest0) =
     checkLoadMode = check . parse . reverse
       where
         -- split "foo  bar baz" to "foo", "  ", "bar baz"
-        parse s = let (w1, rest) = span (not . isSpace) s
-                      (sp, w2)   = span isSpace rest
+        parse s = let (w1, rest) = break isSpace s
+                      (sp, w2)   = span  isSpace rest
                   in (w1, sp, w2)
 
         check (w1, sp, w2)
@@ -288,9 +290,7 @@ startREPL :: VerbosityLevel -> Maybe [FilePath] -> Maybe FilePath -> IO ()
 startREPL vl searchPath inputFile = do
   conf <- initConf
   currentDir <- getCurrentDirectory
-  let sp = case searchPath of
-             Nothing  -> [currentDir]
-             Just fps -> fps 
+  let sp = fromMaybe [currentDir] searchPath 
   let conf' = conf { confVerbosity = vl, confSearchPath = sp, confCurrentDir = currentDir }
   homedir <- getHomeDirectory
   let historyFilePath = homedir FP.</> ".sparcl_history"
@@ -299,10 +299,8 @@ startREPL vl searchPath inputFile = do
   let comp = case inputFile of
         Just fp -> procLoad fp
         Nothing -> waitCommand
-  runREPL setting conf' $ do
-    -- hsSp <- Hint.get Hint.searchPath 
-    -- Hint.set [ Hint.searchPath Hint.:= hsSp ]
-    comp 
+  runREPL setting conf' comp 
+
 
 commandSpec :: [CommandSpec (REPL ())]
 commandSpec = [
@@ -322,17 +320,17 @@ procHelp = do
 checkError :: (MonadCatch m, MonadIO m) => m a -> m a -> m a
 checkError m f =
   m `catch` (\(e :: RunTimeException) -> do
-                   liftIO $ putStrLn (show e)
+                   liftIO $ print e
                    f )
     `catch` (\(e :: StaticException) -> do
-                   liftIO $ putStrLn (show e)
+                   liftIO $ print e
                    f )
     `catch` (\(e :: IOException) -> do
-                  liftIO $ putStrLn (show e)
+                  liftIO $ print e
                   f)
     `catch` (\(e :: SomeException) -> do
                    liftIO $ putStrLn "Unexpected exception is thrown." 
-                   liftIO $ putStrLn (show e)
+                   liftIO $ print e
                    f) 
 
 tryExec :: (MonadCatch m, MonadIO m) => m a -> m (Maybe a)
@@ -366,11 +364,11 @@ setModule m = do
 
 resetModule :: REPL ()
 resetModule = do
-  set (key @KeyName)  $ M.empty
-  set (key @KeyOp)    $ M.empty
-  set (key @KeyType)  $ M.empty
-  set (key @KeySyn)   $ M.empty
-  set (key @KeyValue) $ M.empty 
+  set (key @KeyName)  M.empty
+  set (key @KeyOp)    M.empty
+  set (key @KeyType)  M.empty
+  set (key @KeySyn)   M.empty
+  set (key @KeyValue) M.empty 
 
 --  Hint.reset
   
@@ -544,7 +542,7 @@ waitCommand :: REPL ()
 waitCommand = do  
   maybeLine <- REPL $ lift $ lift $ MyInputT $ HL.getInputLine "Sparcl> "
   case maybeLine of
-    Nothing -> do
+    Nothing -> 
       liftIO $ putStrLn "Quitting..."
     Just s -> parseCommand commandSpec procExp s
 

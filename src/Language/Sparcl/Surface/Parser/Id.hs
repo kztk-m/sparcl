@@ -25,22 +25,19 @@ qop :: Monad m => P m SurfaceName
 qop =
   (do m <- moduleName
       void $ P.char '.'
-      o <- opRaw
-      return $ Qual m o)
+      Qual m <$> opRaw)
   <|> op
   <?> "qualified operator"
 
 op :: Monad m => P m SurfaceName
-op = do o <- opRaw
-        return $ Bare o
+op = Bare <$> opRaw
 
 opRaw :: Monad m => P m NameBase
 opRaw =
-  (P.try $ do
-      x <- P.some (P.oneOf "=+*-/^<>$|&?:#@!.")
-      when (x `elem` specialOp) $
-        P.unexpected $ P.Label $ NonEmpty.fromList $ "reserved op " ++ show x
-      return $ User x)
+  P.try (do x <- P.some (P.oneOf "=+*-/^<>$|&?:#@!.")
+            when (x `elem` specialOp) $
+              P.unexpected $ P.Label $ NonEmpty.fromList $ "reserved op " ++ show x
+            return $ User x)
   <?> "operator"
 
 specialOp :: [String]

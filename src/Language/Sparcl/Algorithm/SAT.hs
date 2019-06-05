@@ -13,6 +13,8 @@ import qualified Data.Map.Merge.Lazy as M
 import Control.Monad.Writer
 import Language.Sparcl.Pretty hiding ((<$>))
 
+import Data.Maybe (mapMaybe, catMaybes)
+
 data Formula v
   = FVar v
   | FAnd (Formula v) (Formula v)
@@ -49,7 +51,7 @@ makeCNF (FAnd t1 t2) =
   let r1 = makeCNF t1
       r2 = makeCNF t2
   in (fst r1 ++ fst r2,
-      [ c | Just c <- [ c1 `appC` c2 | c1 <- snd r1, c2 <- snd r2 ]])
+      catMaybes [ c1 `appC` c2 | c1 <- snd r1, c2 <- snd r2 ])
 makeCNF (FNot t) = swap (makeCNF t)
   where
     swap (a, b) = (b, a) 
@@ -78,10 +80,10 @@ instance (Pretty v, Ord v) => Pretty (Formula v) where
 type Clause v = M.Map v Bool 
 
 appC :: Ord v => Clause v -> Clause v -> Maybe (Clause v)
-appC cs1 cs2 =
+appC =
   M.mergeA (M.traverseMissing $ \_ x -> pure x)
            (M.traverseMissing $ \_ x -> pure x)
-           (M.zipWithAMatched $ \_ x y -> if x == y then pure x else Nothing) cs1 cs2  
+           (M.zipWithAMatched $ \_ x y -> if x == y then pure x else Nothing) 
 
 (.=>.) :: Ord v => Formula v -> Formula v -> Formula v
 (.=>.) a b = neg a .||. b
@@ -147,7 +149,7 @@ type Solver v m = WriterT [(v,Bool)] m
 assign :: (Monad m, Ord v) => v -> Bool -> CNFimpl v -> Solver v m (CNFimpl v) 
 assign v b cs = do
   tell [(v, b)]
-  return $ fromClauses [ x | Just x <- map tryAssign $ toListQ cs ]
+  return $ fromClauses $ mapMaybe tryAssign $ toListQ cs 
   where
     tryAssign m =
       case M.lookup v m of
@@ -183,7 +185,7 @@ data Pure = Pure Bool
   
 findPureLits :: Ord v => CNFimpl v -> ([v], [v], [v])
 findPureLits cs = 
-  let res = foldr (\m r -> M.foldrWithKey (\x v -> ins x (Pure v)) r m) M.empty cs
+  let res = foldr (flip (M.foldrWithKey (\x v -> ins x (Pure v)))) M.empty cs
       ps  = M.keys $ M.filter (\case Pure v -> v
                                      Impure -> False) res
       ns  = M.keys $ M.filter (\case Pure v -> not v

@@ -1,4 +1,5 @@
 {-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE TypeApplications #-} 
 module Language.Sparcl.Module where
 
 import qualified Data.Map as M
@@ -223,7 +224,7 @@ runM m = St.evalStateT m M.empty
 baseModuleInfo :: ModuleInfo Value 
 baseModuleInfo = ModuleInfo {
   miModuleName = baseModule,
-  miNameTable  = M.fromListWith (S.union) $
+  miNameTable  = M.fromListWith S.union $
                  [ (Bare n, S.fromList [(mn ,n)]) | Original mn n _ <- names ]
                  ++ [ (Qual mn n, S.fromList [(mn, n)]) | Original mn n _ <- names ], 
   miOpTable    = opTable,
@@ -254,7 +255,7 @@ baseModuleInfo = ModuleInfo {
 
           base "U" |->
             let a = BoundTv (Local $ User "a")
-            in TyForAll [a] (TyQual [] $ (TyVar a) *-> TyCon (base "Un") [TyVar a]), 
+            in TyForAll [a] (TyQual [] $ TyVar a *-> TyCon (base "Un") [TyVar a]), 
                                            
           
           -- is it OK? 
@@ -352,11 +353,11 @@ debugPrint n s = do
 -- withImport :: HasTables m => ModuleInfo -> m r -> m r
 withImport :: MonadModule v m => ModuleInfo v -> m r -> m r 
 withImport mo m =
-  local (key @KeyName) (M.unionWith (S.union) $ miNameTable mo) $
+  local (key @KeyName) (M.unionWith S.union $ miNameTable mo) $
    local (key @KeyOp) (M.union $ miOpTable mo) $ 
     local (key @KeyType) (M.union $ miTypeTable mo) $
      local (key @KeySyn) (M.union $ miSynTable mo) $
-      local (key @KeyValue) (M.union $ miValueTable mo) $ m 
+      local (key @KeyValue) (M.union $ miValueTable mo) m 
   -- let t = miTables mod 
   -- withOpTable (tOpTable t) $
   --   withTypeTable (tTypeTable t) $
@@ -371,11 +372,11 @@ withImports ms comp =
 
 withNoTables :: MonadModule v m => m r -> m r
 withNoTables m =
-  local (key @KeyName) (const $ M.empty) $
-   local (key @KeyOp) (const $ M.empty) $
-    local (key @KeyType) (const $ M.empty) $
-     local (key @KeySyn) (const $ M.empty) $
-      local (key @KeyValue) (const $ M.empty) m 
+  local (key @KeyName) (const M.empty) $
+   local (key @KeyOp) (const M.empty) $
+    local (key @KeyType) (const M.empty) $
+     local (key @KeySyn) (const M.empty) $
+      local (key @KeyValue) (const M.empty) m 
 
 ext :: String
 ext = "sparcl"
@@ -404,7 +405,7 @@ restrictNames ns mi =
        miValueTable = restrict (miValueTable mi)
         }
   where
-    ns' = S.fromList $ ns
+    ns' = S.fromList ns
     
     restrict :: M.Map Name a -> M.Map Name a 
     restrict x = M.restrictKeys x ns'      
@@ -431,7 +432,7 @@ searchModule mo = do
 
 importNames :: MonadModule v m => ModuleName -> [Loc SurfaceName] -> ModuleInfo v -> m (ModuleInfo v)
 importNames mn ns m = do
-  onames <- forM ns $ \(Loc loc n) -> do
+  onames <- forM ns $ \(Loc loc n) -> 
     case n of
       Bare bn -> return (Original mn bn (Bare bn))
       _      -> staticError $ nest 2 $
@@ -451,7 +452,7 @@ exportNames ns m = do
   synTbl  <- M.union (miSynTable m)   <$> ask (key @KeySyn)
   valTbl  <- M.union (miValueTable m) <$> ask (key @KeyValue)
 
-  onames <- forM ns $ \(Loc loc n) -> do
+  onames <- forM ns $ \(Loc loc n) -> 
     case S.toList <$> M.lookup n nameTbl of
       Just [(mn, bn)] -> return (Original mn bn n)
       Just qs  -> staticError $ nest 2 $ 

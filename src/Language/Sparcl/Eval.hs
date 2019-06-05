@@ -1,4 +1,3 @@
-{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE RecursiveDo #-}
 
 module Language.Sparcl.Eval where
@@ -7,7 +6,8 @@ import Language.Sparcl.Core.Syntax
 import Language.Sparcl.Value
 import Language.Sparcl.Exception
 
-import Control.Monad.Except 
+import Control.Monad.Except
+import Data.Maybe (fromMaybe)
 -- import Control.Monad.State
 
 -- import qualified Control.Monad.Fail as Fail
@@ -45,10 +45,10 @@ evalU env expr = case expr of
   Abs n e ->
     return $ VFun (\v -> evalU (extendEnv n v env) e)
 
-  Con q es -> do 
+  Con q es -> 
     VCon q <$> mapM (evalU env) es
 
-  Bang e -> do 
+  Bang e -> 
     VBang <$> evalU env e
 
   Case e0 pes -> do
@@ -74,8 +74,8 @@ evalU env expr = case expr of
     -- VBang (VFun f) <- evalU env e
     VFun f <- evalU env e 
     newAddr $ \a -> do
-      VRes f0 b0 <- f (VRes (\hp -> lookupHeap a hp)
-                        (\v  -> return $ singletonHeap a v))
+      VRes f0 b0 <- f (VRes (lookupHeap a)
+                            (return . singletonHeap a))
       let f0' v = f0 (singletonHeap a v)
       let b0' v = do hp <- b0 v
                      lookupHeap a hp 
@@ -97,7 +97,7 @@ evalU env expr = case expr of
                   (\v' ->
                      case v' of
                        VCon q' us' | q == q' && length us' == length es -> do 
-                                       envs <- zipWithM (\v u -> runBwd v u) vs us'
+                                       envs <- zipWithM runBwd vs us'
                                        return $ foldr unionHeap emptyHeap envs
                        _ ->
                          rtError $ text "out of the range:" <+> ppr v' <+> text "for" <+> ppr expr)
@@ -126,13 +126,13 @@ evalU env expr = case expr of
                       VRes f2 _ <- h a -- (VBang a)
                       b <- f2 hp
                       return $ VCon c [a, b])
-                  (\v -> case v of
-                           VCon c' [a,b] | c' == c -> do 
-                                             VRes _ b2 <- h a -- (VBang a)
-                                             hp2 <- b2 b
-                                             hp1 <- b1 a
-                                             return $ unionHeap hp1 hp2
-                           _ -> rtError $ text "Expected a pair" 
+                  (\case 
+                      VCon c' [a,b] | c' == c -> do 
+                                        VRes _ b2 <- h a -- (VBang a)
+                                        hp2 <- b2 b
+                                        hp1 <- b1 a
+                                        return $ unionHeap hp1 hp2
+                      _ -> rtError $ text "Expected a pair" 
                   )
                            
 
@@ -161,7 +161,7 @@ evalCaseF env hp f0 alts = do
     go v0  _       [] = rtError $ text $ "pattern match failure (fwd): " ++ prettyShow v0
     go v0 checker ((p,e,ch) : pes) =
       case findMatch v0 p of
-        Nothing -> do
+        Nothing -> 
           go v0 (ch:checker) pes
         Just binds ->
           newAddrs (length binds) $ \as -> do 
@@ -169,7 +169,7 @@ evalCaseF env hp f0 alts = do
              let binds' = zipWith (\a (x, _) ->
                                      (x, VRes (lookupHeap a) (return . singletonHeap a))) as binds
              VRes f _ <- evalU (extendsEnv binds' env) e
-             res <- f (foldr (\(a,v) -> extendHeap a v) hp hbinds)
+             res <- f (foldr (uncurry extendHeap) hp hbinds)
              checkAssert ch checker res
 
     checkAssert ch checker res = do
@@ -188,18 +188,17 @@ evalCaseB env vres b0 alts = do
   hp' <- b0 v
   return $ unionHeap hp hp'
   where
-    mkAssert :: Pat Name -> (Value -> Bool)
-    mkAssert p = \v -> case findMatch v p of
-                         Just _ -> True
-                         _      -> False 
+    mkAssert :: Pat Name -> Value -> Bool
+    mkAssert p v = case findMatch v p of
+                     Just _ -> True
+                     _      -> False 
     
     go _ [] = rtError $ text "pattern match failure (bwd)"
     go checker ((p,e,ch):pes) = do
       -- flg <- ch (VBang vres)
       flg <- ch vres 
-      case flg of
-        False -> go (mkAssert p:checker) pes
-        True -> do
+      if flg
+        then do
           let xs = freeVarsP p
           newAddrs (length xs) $ \as -> do 
             let binds' = zipWith (\x a ->
@@ -207,14 +206,14 @@ evalCaseB env vres b0 alts = do
             VRes _ b <- evalU (extendsEnv binds' env) e
             hpBr <- b vres
             v0 <- fillPat p <$> zipWithM (\x a -> (x,) <$> lookupHeap a hpBr) xs as
-            when (not (or $ map ($ v0) checker)) $
+            unless (any ($ v0) checker) $
               rtError $ text "Assertion failed (bwd)"
-            return $ (v0, removesHeap as hpBr)
+            return (v0, removesHeap as hpBr)
+        else go (mkAssert p:checker) pes
               
     fillPat :: Pat Name -> [ (Name, Value) ] -> Value
-    fillPat (PVar n) bs = case lookup n bs of
-      Just v -> v
-      Nothing -> error "Shouldn't happen."
+    fillPat (PVar n) bs =
+      fromMaybe (error "Shouldn't happen") (lookup n bs)
      
     fillPat (PCon c ps) bs =
       VCon c (map (flip fillPat bs) ps)

@@ -154,7 +154,7 @@ encNameL = go
       | c == 'z' = "zz" ++ go cs
       | c == '_' = "z_" ++ go cs
       | isLower c || isUpper c || isNumber c = c:go cs
-      | otherwise = "z" ++ (show $ ord c) ++ go cs 
+      | otherwise = "z" ++ show (ord c) ++ go cs 
 
 isOp :: String -> Bool
 isOp s
@@ -192,10 +192,10 @@ rhsNameG (RtName s)   = runtimePrefix ++ s
 
 
 instance MiniHaskellPat GName (Precedence -> Doc) where
-  pvar n = \_ -> text (lhsNameG n)
-  pcon n ps = \prec ->
+  pvar n _ = text (lhsNameG n)
+  pcon n ps prec = 
     parensIf (prec > 0) $ hsep (text (rhsNameG n) : map (\p -> p 1) ps)
-  ptuple ps = \_ ->
+  ptuple ps _ =
     parens (hsep $ punctuate comma $ map (\p -> p 0) ps)
 
 type TextGen = Precedence -> Doc
@@ -251,7 +251,7 @@ instance MiniHaskellExp Identity GName
   tuple es = Identity $ \_ ->
     parens $ hsep $ punctuate comma $ map ($ 0) es
 
-  do_ [s] = Identity $ \prec -> parensIf (prec > 0) $ s  -- it must be the case that s is nobind expression.
+  do_ [s] = Identity $ \prec -> parensIf (prec > 0) s  -- it must be the case that s is nobind expression.
   do_ ss = Identity $ \prec ->
     parensIf (prec > 0) $ nest 2 $ text "do" <>
       line <> hsblock ss
@@ -266,25 +266,25 @@ instance MiniHaskellExp Identity GName
       
 
 instance MiniHaskellType GName (Precedence -> Doc) where
-  tyvar x = \_ -> text (lhsNameG x)
+  tyvar x _ = text (lhsNameG x)
 
-  tycon n [] = \_ -> text (rhsNameG n) 
-  tycon n ts = \prec -> parensIf (prec > 2) $
-                        text (rhsNameG n) <+> hsep (map ($ 3) ts)
-  tytuple ts = \_ -> parens $ hsep $ punctuate comma (map ($ 0) ts)
-  tylist  t  = \_ -> brackets $ t 0
-  tyfun t1 t2 = \prec -> parensIf (prec > 1) $
-                         t1 2 <+> text "->" <+> t2 1
-  tyforall tvs t = \prec -> parensIf (prec > 0) $
-                            text "forall" <+> hsep (map (text . lhsNameG) tvs) <> text "."
-                            <+> t 0 
+  tycon n [] _    = text (rhsNameG n) 
+  tycon n ts prec = parensIf (prec > 2) $
+                    text (rhsNameG n) <+> hsep (map ($ 3) ts)
+  tytuple ts _ = parens $ hsep $ punctuate comma (map ($ 0) ts)
+  tylist  t  _ = brackets $ t 0
+  tyfun t1 t2 prec = parensIf (prec > 1) $
+                     t1 2 <+> text "->" <+> t2 1
+  tyforall tvs t prec = parensIf (prec > 0) $
+                        text "forall" <+> hsep (map (text . lhsNameG) tvs) <> text "."
+                        <+> t 0 
   
   
 
 hsblock :: [Doc] -> Doc     
 hsblock []  = text "{}"
 hsblock [d] = d
-hsblock ds  = (vcat $ zipWith (<+>) (text "{":repeat (text ";")) ds) <> text "}"
+hsblock ds  = vcat (zipWith (<+>) (text "{":repeat (text ";")) ds) <> text "}"
   
 
 toDocExp :: (forall m n p e d s t. MiniHaskellExp m n p e d s t => m e) -> Doc
@@ -436,10 +436,10 @@ genBind ds = do
     e'  <- genExp e 
     e'' <- T.lift $ mkApp (var $ rtName "runRevUnsafe") (do_ =<< addReturn e')
     return (fromName x, genTy ty, e'')
-  T.lift $ fmap concat $ mapM (\(n,t,e) -> do
-                                  d1 <- sigd n t
-                                  d2 <- vald n e
-                                  return [d1,d2]) ds'
+  T.lift $ concat <$> mapM (\(n,t,e) -> do
+                               d1 <- sigd n t
+                               d2 <- vald n e
+                               return [d1,d2]) ds'
 
 
   
@@ -458,7 +458,7 @@ mkApp e1 e2 = do
 addReturn :: MiniHaskellExp m n p e d s t => GenExp m s e -> m [s]
 addReturn e = 
   runCont e $ \v -> do
-    s <- nobinds =<< var (hsName "Prelude.return") `mkApp` (return v)
+    s <- nobinds =<< var (hsName "Prelude.return") `mkApp` return v
     return [s]
 
 lift :: MiniHaskellExp m n p e d s t => GenExp m s e -> GenExp m s e -> Gen m (GenExp m s e)
@@ -481,7 +481,7 @@ runit :: MiniHaskellExp m n p e d s t => Gen m (GenExp m s e)
 runit = do
   r <- newName
   return $ cont $ \k ->
-    liftM2 (:) (binds r =<< (var $ rtName "unitRev")) (k =<< var r)
+    liftM2 (:) (binds r =<< var (rtName "unitRev")) (k =<< var r)
 
 rpair :: MiniHaskellExp m n p e d s t => GenExp m s e -> GenExp m s e -> Gen m (GenExp m s e)
 rpair e1 e2 = do
@@ -489,7 +489,7 @@ rpair e1 e2 = do
   return $ cont $ \k -> 
     runCont e1 $ \d1 ->
     runCont e2 $ \d2 -> do 
-      e <- (var $ rtName "pairRev") `mkApp` return d1 `mkApp` return d2
+      e <- var (rtName "pairRev") `mkApp` return d1 `mkApp` return d2
       vr <- var r
       liftM2 (:) (binds r e) (k vr)
 
@@ -499,7 +499,7 @@ rpin e1 e2 = do
   return $ cont $ \k -> 
     runCont e1 $ \d1 ->
     runCont e2 $ \d2 -> do 
-      e <- (var $ rtName "pinRev") `mkApp` return d1 `mkApp` return d2
+      e <- var (rtName "pinRev") `mkApp` return d1 `mkApp` return d2
       vr <- var r
       liftM2 (:) (binds r e) (k vr)
 
@@ -508,10 +508,10 @@ rununit e1 e2 = do
   r <- newName
   return $ cont $ \k ->
     runCont e1 $ \v1 -> do 
-     let e2' = do_ =<< (runCont e2 $ \v2 -> do 
-                           s <- nobinds =<< mkApp (var $ hsName "Prelude.return") (return v2)
-                           return [s])
-     e <- (var $ rtName "ununitRev") `mkApp` return v1 `mkApp` e2'
+     let e2' = do_ =<< runCont e2 (\v2 -> do 
+                                      s <- nobinds =<< mkApp (var $ hsName "Prelude.return") (return v2)
+                                      return [s])
+     e <- var (rtName "ununitRev") `mkApp` return v1 `mkApp` e2'
      liftM2 (:) (binds r e) (k =<< var r)
   
 
@@ -524,10 +524,10 @@ runpair e1 e2 = do
   f <- newName
   return $ cont $ \k ->
     runCont e1 $ \v1 -> do
-    let e2' = abs x =<< abs y =<< do_ =<< (runCont e2 $ \v2 -> do
-                                              s1 <- binds f =<< mkApp (return v2) (var x)
-                                              s2 <- nobinds =<< mkApp (var f) (var y)
-                                              return [s1,s2])
+    let e2' = abs x =<< abs y =<< do_ =<< runCont e2 (\v2 -> do
+                                                         s1 <- binds f =<< mkApp (return v2) (var x)
+                                                         s2 <- nobinds =<< mkApp (var f) (var y)
+                                                         return [s1,s2])
     e <- var (rtName "unpairRev") `mkApp` return v1 `mkApp` e2'
     liftM2 (:) (binds r e) (k =<< var r)
 
@@ -542,7 +542,7 @@ rcase e0 _e4s = do
   where
     go :: n -> n -> e -> [e] -> [(GenExp m s e, GenExp m s e, GenExp m s e, GenExp m s e)] -> (e -> m [s]) -> m [s]
     go r _ v0 es [] k = do
-      s   <- binds r =<< var (rtName "caseRev") `mkApp` (return v0) `mkApp` list (reverse es)
+      s   <- binds r =<< var (rtName "caseRev") `mkApp` return v0 `mkApp` list (reverse es)
       (s:) <$> (k =<< var r) 
     go r i v0 es ((e1,e2,e3,e4):e4s) k =
       runCont e1 $ \v1 ->
@@ -647,7 +647,7 @@ genExp (C.RCon n es) = do
                            case_ vx [ (mkConP n (map pvar zs), body) ])
       e <- var (rtName "liftRev") `mkApp` return fwd `mkApp` return bwd 
       liftM2 (:) (binds r e) $
-        liftM2 (:) (binds rr =<< var r `mkApp` return vpair) $ (k =<< var rr)
+        liftM2 (:) (binds rr =<< var r `mkApp` return vpair) (k =<< var rr)
   where
     len = length es 
   
@@ -712,7 +712,7 @@ genRAlts (pat, bexp, wexp) = do
     
     mkUnpairs :: n -> [n] -> GenExp m s e -> Gen m (GenExp m s e)
     mkUnpairs x [] body = do
-      vx <- return $ cont $ \k -> k =<< var x 
+      let vx = cont $ \k -> k =<< var x 
       rununit vx body 
     mkUnpairs x [y] body = do
       r <- newName 
@@ -721,12 +721,13 @@ genRAlts (pat, bexp, wexp) = do
         z <- var x
         liftM2 (:) (binds r =<< app f z) (k =<< var r)
     mkUnpairs x (y:ys) body = do
-      vx <- return $ cont $ \k -> k =<< var x
+      let vx = cont $ \k -> k =<< var x
       r <- newName
       rr <- newName 
       res <- mkUnpairs r ys body
-      runpair vx =<< (return $ cont $ \k -> do
-                         liftM2 (:) (lets_ rr =<< abs y =<< mkApp (var $ hsName "Prelude.return") (abs r =<< do_ =<< addReturn res))
+      runpair vx (cont $ \k -> 
+                         liftM2 (:) (lets_ rr =<< abs y =<< mkApp (var $ hsName "Prelude.return")
+                                                                  (abs r =<< do_ =<< addReturn res))
                                     (k =<< var rr))
 
 

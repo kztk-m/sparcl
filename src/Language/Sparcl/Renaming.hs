@@ -102,16 +102,16 @@ resolveImportedName loc n = do
     Just qns@(_:_:_) ->
       let d = nest 2 $ text "Candidates are:" <$$>
                        vcat (map ppr qns)
-      in throwError $ (loc, text "Ambiguous name" <+> ppr n <> nest 2 (line <> d) )
+      in throwError (loc, text "Ambiguous name" <+> ppr n <> nest 2 (line <> d) )
     _ ->
-      throwError $ (loc, text "Unbound name: " <+> ppr n) 
+      throwError (loc, text "Unbound name: " <+> ppr n) 
 
 resolveName :: SrcSpan -> LocalNames -> SurfaceName -> Renaming Name
 resolveName loc localnames n
   | Bare bn <- n, Just n' <- M.lookup bn localnames = return n'
-  | otherwise = do
-      n' <- resolveImportedName loc n
-      return n' 
+  | otherwise = 
+      resolveImportedName loc n
+
 
 renameExp :: Int -> LocalNames -> LExp 'Parsing -> Renaming (LExp 'Renaming, FreeVars)
 renameExp level localnames (Loc loc expr) = first (Loc loc) <$> go expr
@@ -155,7 +155,7 @@ renameExp level localnames (Loc loc expr) = first (Loc loc) <$> go expr
       (alts', fvs) <- unzip <$> mapM (renameAlt level localnames) alts
       return (Case e0' alts', S.unions (fv:fvs))
 
-    go (Let decls e) = do
+    go (Let decls e) = 
       renameLocalDecls level localnames decls $ \decls' level' localnames' bvD fvD _ -> do
         (e', fvE) <- renameExp level' localnames' e
         return (Let decls' e', S.union fvE fvD S.\\ bvD)
@@ -280,7 +280,7 @@ renameClause level localnames (Clause e decls w) =
                (ew', fvw) <- renameExp level' localnames' ew
                return (Just ew', fvw)
              Nothing -> return (Nothing, S.empty)               
-     return $ (Clause e' decls' w', S.unions [fvB, fv, fvw] S.\\ fvD)
+     return (Clause e' decls' w', S.unions [fvB, fv, fvw] S.\\ fvD)
 
 type CurrentNames = LocalNames
 
@@ -313,7 +313,7 @@ renameLocalDeclsWork level' localnames currnames (Decls _ decls) cont = do
         
 
   deffvs <- forM defs $ \(loc, n, pcs) -> local (\c -> c { rnOpTable = M.union localOpTable (rnOpTable c) }) $ do
-    when (not $ checkEqualLengths (map fst pcs)) $
+    unless (checkEqualLengths (map fst pcs)) $
       throwError (loc, text "Function" <+> ppr n <+> text "has different numbers of arguments.")
     let Just n' = M.lookup n currnames -- must succeed
     (pcs', fvs) <- fmap unzip $ forM pcs $ \(ps, c) -> do
@@ -356,7 +356,7 @@ renameLocalDeclsWork level' localnames currnames (Decls _ decls) cont = do
 hasRev :: Pat p -> Bool
 hasRev (PVar _) = False
 hasRev (PREV _)  = True 
-hasRev (PCon _ ps) = or (map (hasRev . unLoc) ps)
+hasRev (PCon _ ps) = any (hasRev . unLoc) ps
 hasRev (PWild _) = False
 hasRev (PBang p) = hasRev (unLoc p)
 
@@ -377,7 +377,7 @@ renameLocalDecls level localnames ds@(Decls _ decls) cont = do
 
   -- current level names:
   -- NB: sig and fixity declarations are allowed only for current level names.
-  let currnames = foldr (\(n,n') -> M.insert n n') M.empty $ zip ns ns' 
+  let currnames = foldr (uncurry M.insert) M.empty $ zip ns ns' 
   renameLocalDeclsWork level' localnames currnames ds cont
 
 
@@ -413,7 +413,7 @@ renameTopDecls currentModule (Decls _ topdecls) = do
   let ns' = [ toOrig n | n <- ns ]
   let level' = length ns
 
-  let currnames = foldr (\(n,n') -> M.insert n n') M.empty $ zip ns ns'
+  let currnames = foldr (uncurry M.insert) M.empty $ zip ns ns'
 
                   
   local (\rnEnv -> rnEnv { rnNameTable = M.unionWith S.union nameTbl (rnNameTable rnEnv) }) $ do
@@ -507,10 +507,10 @@ renamePat level localnames boundVars (Loc loc pat) cont = go pat $ \p' lv nm bvs
       c' <- resolveImportedName loc c
       renamePats level localnames boundVars ps $ \ps' level' localnames' bvs' ->
         k (PCon c' ps') level' localnames' bvs' 
-    go (PBang p) k = do
+    go (PBang p) k = 
       renamePat level localnames boundVars p $ \p' level' localnames' bvs' ->
         k (PBang p') level' localnames' bvs'
-    go (PREV p) k = do
+    go (PREV p) k = 
       renamePat level localnames boundVars p $ \p' level' localnames' bvs' ->
         k (PREV p') level' localnames' bvs' 
 

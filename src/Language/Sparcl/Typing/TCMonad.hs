@@ -1,3 +1,5 @@
+{-# LANGUAGE TupleSections #-}
+
 module Language.Sparcl.Typing.TCMonad where
 
 import qualified Data.Map as M
@@ -157,14 +159,14 @@ initTypingContext = do
   r1 <- newIORef 0
   r2 <- newIORef 0
   r  <- newIORef Seq.empty 
-  return $ TypingContext { tcRefMvCount = r1,
-                           tcRefSvCount = r2,
-                           tcRefErrors  = r ,
-                           tcLoc        = Nothing, 
-                           tcContexts   = [],
-                           tcChecking   = CheckingNone, 
-                           tcTyEnv      = M.empty,
-                           tcSyn        = M.empty }
+  return TypingContext { tcRefMvCount = r1,
+                         tcRefSvCount = r2,
+                         tcRefErrors  = r ,
+                         tcLoc        = Nothing, 
+                         tcContexts   = [],
+                         tcChecking   = CheckingNone, 
+                         tcTyEnv      = M.empty,
+                         tcSyn        = M.empty }
 
 -- This function must be called before each session of type checking. 
 refreshTC :: TypingContext -> IO TypingContext
@@ -179,7 +181,7 @@ refreshTC tc = do
   
 setEnvs :: TypingContext -> TypeTable -> SynTable -> TypingContext 
 setEnvs tc tenv syn =
-  tc { tcTyEnv = fmap (\t -> (t, TyMult Omega)) tenv,
+  tc { tcTyEnv = fmap (, TyMult Omega) tenv,
        tcSyn   = syn }
 
 runTC :: TypingContext -> TC a -> IO a
@@ -248,9 +250,8 @@ tupleConTy n =
   in TyForAll tvs $ TyQual [] $ foldr (-@) (tupleTy tys) tys        
 
 arbitraryTy :: MonadTypeCheck m => m Ty
-arbitraryTy = do
-  t <- newMetaTyVar
-  return $ TyMetaV t 
+arbitraryTy = TyMetaV <$> newMetaTyVar
+
 
 instance MonadTypeCheck m => MonadTypeCheck (ReaderT r m) where
   abortTyping = lift abortTyping
@@ -287,15 +288,13 @@ instance MonadTypeCheck TC where
   whenChecking t =
     local (\tc -> tc { tcChecking = t })
 
-  atLoc NoLoc m = m
-  atLoc loc   m =
-    local (\tc -> tc { tcLoc = Just loc }) m
+  atLoc NoLoc = id
+  atLoc loc   = local (\tc -> tc { tcLoc = Just loc })
 
-  atExp e m =
-    local (\tc -> tc { tcContexts = e : tcContexts tc }) m 
+  atExp e = local (\tc -> tc { tcContexts = e : tcContexts tc }) 
 
   askType l n
-    | Just k <- checkNameTuple n = do
+    | Just k <- checkNameTuple n = 
         return $ tupleConTy k
     | otherwise = do        
         tyEnv <- asks tcTyEnv
@@ -311,10 +310,10 @@ instance MonadTypeCheck TC where
     ref <- liftIO $ newIORef Nothing
     return $ MetaTyVar cnt ref
 
-  readTyVar (MetaTyVar _ ref) = TC $ do
+  readTyVar (MetaTyVar _ ref) = TC $ 
     liftIO $ readIORef ref 
 
-  writeTyVar (MetaTyVar _ ref) ty = TC $ do
+  writeTyVar (MetaTyVar _ ref) ty = TC $ 
     liftIO $ writeIORef ref (Just ty) 
 
 
@@ -340,7 +339,7 @@ instance MonadTypeCheck TC where
       go _synMap (TyMetaV m) = return (TyMetaV m)      
       go synMap (TySyn origTy actualTy) =
         TySyn origTy <$> go synMap actualTy
-      go synMap orig@(TyCon c ts) = do
+      go synMap orig@(TyCon c ts) = 
         case M.lookup c synMap of
           Nothing ->
             TyCon c <$> mapM (go synMap) ts 
@@ -352,11 +351,11 @@ instance MonadTypeCheck TC where
             abortTyping
       go _ (TyMult m) = return $ TyMult m 
 
-  withVar x ty mult m = 
-    local (\tc -> tc { tcTyEnv = M.insert x (ty, mult) (tcTyEnv tc) }) m 
+  withVar x ty mult = 
+    local (\tc -> tc { tcTyEnv = M.insert x (ty, mult) (tcTyEnv tc) }) 
 
-  withSyn tv v m = 
-    local (\tc -> tc { tcSyn = M.insert tv v (tcSyn tc) }) m 
+  withSyn tv v = 
+    local (\tc -> tc { tcSyn = M.insert tv v (tcSyn tc) }) 
 
   getMetaTyVarsInEnv = do
     tyEnv <- asks tcTyEnv
@@ -366,7 +365,7 @@ instance MonadTypeCheck TC where
 
 
 newMetaTy :: MonadTypeCheck m => m Ty
-newMetaTy = fmap TyMetaV $ newMetaTyVar 
+newMetaTy = TyMetaV <$> newMetaTyVar 
 
 withVars :: MonadTypeCheck m => [ (Name, Ty, MultTy) ] -> m r -> m r
 withVars ns m = foldr (\(n,t,mult) -> withVar n t mult) m ns
@@ -438,8 +437,7 @@ freeTyVars types = do
   ts' <- mapM zonkType types
   return $ go ts' []
     where
-      go []     r = r
-      go (t:ts) r = goT [] t (go ts r)
+      go ts r = foldr (goT []) r ts
 
       goT :: [TyVar] -> Ty -> [TyVar] -> [TyVar] 
       goT bound (TyVar t) r
@@ -497,17 +495,17 @@ unifyUnboundMetaTyVar mv (TyMetaV mv2) = do
   case res of
     Nothing   ->
       unless (mv == mv2) $ 
-       writeTyVar mv (TyMetaV mv2) 
+        writeTyVar mv (TyMetaV mv2) 
     Just ty2' -> unifyUnboundMetaTyVar mv ty2' 
 unifyUnboundMetaTyVar mv ty2 = do 
   ty2' <- zonkType ty2
   let mvs = metaTyVars [ty2']
-  case mv `elem` mvs of
-    True  -> do 
+  if mv `elem` mvs 
+    then do
       reportError $ OccurrenceCheck mv ty2'
       -- We abort typing when occurrence check fails; otherwise, zonkType can diverge. 
       abortTyping 
-    False -> -- trace (show $ D.hsep [D.text "[assign]", ppr mv, D.text "=", D.align (ppr ty2')]) $ 
+    else -- trace (show $ D.hsep [D.text "[assign]", ppr mv, D.text "=", D.align (ppr ty2')]) $ 
       writeTyVar mv ty2'
 
         

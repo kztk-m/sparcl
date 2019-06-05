@@ -86,7 +86,7 @@ expr = getSrcLoc >>= \startLoc ->
       m <- P.optional (symbol ":" *> typeExpr)
       case m of
         Just ty -> pure $ Loc (location e <> location ty) $ Sig e ty
-        Nothing -> pure $ e)
+        Nothing -> pure e)
 
 
 assignment :: Monad m => P m (LPat 'Parsing, LExp 'Parsing)
@@ -104,19 +104,15 @@ simplePat = loc $
   <|> wildPat
   where
     conPat = do
-      c <- qconName
-      void sp 
+      c <- L.lexeme sp qconName
       return $ PCon c []
 
-    varPat = do
-      x <- varName
-      void sp 
-      return $ PVar x
+    varPat = 
+      PVar <$> L.lexeme sp varName
     
     wildPat = do
       void $ symbol "_"
-      void sp 
-      return $ (PWild () :: Pat 'Parsing)
+      return (PWild () :: Pat 'Parsing)
 
 tuplePat :: Monad m => P m (LPat 'Parsing)
 tuplePat = mkTuplePat <$> 
@@ -129,15 +125,15 @@ pat = do
   p <- appPat 
   case m of
     Just _  -> return $ Loc (s <> location p) $ PREV p
-    Nothing -> return $ p 
+    Nothing -> return p 
 
 appPat :: Monad m => P m (LPat 'Parsing)   
 appPat =
-  (P.try $ loc $ do
-      c <- qconName
-      sp
-      ps <- P.some simplePat
-      return $ PCon c ps)
+  P.try (loc $ do
+            c <- qconName
+            sp
+            ps <- P.some simplePat
+            return $ PCon c ps)
   <|>
   simplePat 
 
@@ -171,7 +167,7 @@ typeExpr = do
   mid   <- getSrcLoc 
   ctxt  <- P.optional $ P.try (constraint <* dRightArrow)
   ty    <- arrTy
-  return $ maybe id foralls ef $ maybe id (\cs -> Loc (mid <> location ty) . (TQual cs)) ctxt ty
+  return $ maybe id foralls ef $ maybe id (\cs -> Loc (mid <> location ty) . TQual cs) ctxt ty
     where
       foralls [] r     = r
       foralls (x:xs) r = Loc (location r) $ TForall x (foralls xs r) 
@@ -187,39 +183,40 @@ singleConstraint = do
   maxConstraint m1 <|> subConstraint m1 
     where
       maxConstraint m1 = do
-        void $ symbolTyEq
+        void symbolTyEq
         m2 <- multiplicity
-        void $ symbolMult
+        void symbolMult
         m3 <- multiplicity
-        return $ [MEqMax m1 m2 m3]
+        return [MEqMax m1 m2 m3]
 
       subConstraint m1 = do
-        void $ symbolTyLE
+        void symbolTyLE
         m2 <- multiplicity
-        return $ [MSub m1 m2] 
+        return [MSub m1 m2] 
 
+      -- TODO: move them to Helper.hs with appropriate naming. 
       symbolTyLE = symbol "<=" <|> symbol "≦"
-      symbolTyEq = (symbol "~" <|> symbol "≡")
-      symbolMult = (symbol "*" <|> symbol "↑")
+      symbolTyEq = symbol "~" <|> symbol "≡"
+      symbolMult = symbol "*" <|> symbol "↑"
 
 
 arrTy :: Monad m => P m (LTy 'Parsing)
 arrTy =
   -- Essentially, this implements foldr by foldl. 
-  (\t fs -> foldl (\f g -> \c -> f (g c)) (\c -> c t) fs id)
+  (\t fs -> foldl (.) (\c -> c t) fs id)
   <$> appTy <*> P.many ((\f x c z -> f z (c x)) <$> arr <*> appTy)
   where
     mkArr m e1 e2 = Loc (location e1 <> location e2) $ TCon (BuiltIn nameTyArr) [m, e1, e2] 
     arr = 
-      (do void $ rightArrow
+      (do void rightArrow
           pure $ \e1 e2 -> mkArr (noLoc $ TMult Omega) e1 e2)
       <|>
-      (do void $ lollipop 
+      (do void lollipop 
           pure $ \e1 e2 -> mkArr (noLoc $ TMult One) e1 e2)
       <|>
       (do void $ symbol "#"
           m <- multiplicity
-          void $ rightArrow
+          void rightArrow
           pure $ \e1 e2 -> mkArr m e1 e2)
 
 appTy :: Monad m => P m (LTy 'Parsing)
@@ -281,11 +278,11 @@ modul = do
     return (m, es) 
   is <- importList
   ds <- topDecls
-  let (m', es') = maybe (ModuleName "Main", Nothing) id modDecl
+  let (m', es') = fromMaybe (ModuleName "Main", Nothing) modDecl
   return $ Module m' es' is ds
 
 exportList :: Monad m => P m (Maybe [Export 'Parsing])
-exportList = do
+exportList = 
   P.optional $ parens (surfaceName `P.sepEndBy` comma)
 
 
@@ -298,9 +295,7 @@ importList = P.many singleImport
 singleImport :: Monad m => P m (Import 'Parsing)
 singleImport = do
   void $ symbol "import"
-  m  <- moduleName
-  ns <- impNames
-  return $ Import m ns
+  Import <$> moduleName <*> impNames
   where
     impNames = P.optional (parens surfaceName `P.sepEndBy` comma)
   
@@ -310,21 +305,21 @@ topDecls = Decls () <$> P.many topDecl
 topDecl :: Monad m => P m (Loc (TopDecl 'Parsing))
 topDecl = typeDecl <|> dataDecl <|> (fmap DDecl <$> localDecl)
   where
+    tyLHS = do
+      c <- L.lexeme sp conName
+      xs <- P.many (L.lexeme sp varName)
+      void $ symbol "=" 
+      return (c, xs) 
+    
     dataDecl = loc $ do
       void $ symbol "data"
-      c  <- conName <* sp 
-      xs <- P.many (varName <* sp) 
-      void $ symbol "="
-      cs <- cdecl `P.sepBy1` symbol "|"
-      return $ DData c xs cs
+      (c, xs) <- tyLHS 
+      DData c xs <$> cdecl `P.sepBy1` symbol "|"
 
     typeDecl = loc $ do
       void $ symbol "type"
-      c  <- conName <* sp
-      xs <- P.many (varName <* sp)
-      void $ symbol "="
-      ty <- typeExpr
-      return $ DType c xs ty 
+      (c, xs) <- tyLHS 
+      DType c xs <$> typeExpr
 
     cdecl = do
       start <- getSrcLoc 
@@ -350,7 +345,7 @@ defDecl = do
       compLoc = foldr (\(ps, c) r -> mconcat [ location p | p <- ps ]
                                      <> locationClause c <> r ) mempty
       locationClause (Clause e ws e') =
-        location e <> locationDecls ws <> maybe mempty id (fmap location e') 
+        location e <> locationDecls ws <> maybe mempty location e'
 
       locationDecls (Decls _ ds)   = mconcat $ map location ds
       locationDecls (HDecls _ dss) = mconcat $ map (mconcat . map location) dss 
@@ -360,7 +355,7 @@ defBody = do
   ps <- P.many simplePat
   void $ symbol "="
   c <- clause
-  return $ (ps, c) 
+  return (ps, c) 
 
 sigDecl :: Monad m => P m (LDecl 'Parsing)
 sigDecl = do
@@ -391,7 +386,7 @@ fixityDecl = do
 
 opExpr :: Monad m => P m (LExp 'Parsing)
 opExpr =
-  (\e1 rs -> foldl (\a f -> f a) e1 rs)  <$> 
+  foldl (\a f -> f a)  <$> 
   appExpr <*> P.many ((\o e2 e1 -> lop o e1 e2) <$> (qop <* sp) <*> appExpr)
   where
     lop o e1 e2 = Loc (location e1 <> location e2) $ Op o e1 e2 
@@ -488,7 +483,7 @@ literal = loc $ fmap Lit $
       void $ P.char '\''
       c <- L.charLiteral
       void $ P.char '\''
-      void $ sp 
+      void sp 
       return c 
     
       
@@ -502,7 +497,7 @@ alternatives = do
 alt :: Monad m => P m (LPat 'Parsing, Clause 'Parsing)    
 alt = do
   p <- pat
-  void $ rightArrow 
+  void rightArrow 
   c <- clause
   return (p, c)
 

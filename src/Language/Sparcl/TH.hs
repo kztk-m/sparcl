@@ -5,9 +5,7 @@ module Language.Sparcl.TH (sparcl, sparclf, parseToQDec, parseToQDec') where
 import Language.Sparcl.CodeGen.Haskell as Gen
 import Language.Sparcl.Core.Syntax as C
 import Language.Sparcl.Pretty hiding ((<$>))
--- import Language.Sparcl.Typing.Type as C
 import Language.Sparcl.Typing.TCMonad
--- import Language.Sparcl.Literal
 
 import Language.Sparcl.Surface.Parsing (parseDecl)
 import Language.Sparcl.Module (baseModuleInfo, ModuleInfo(..))
@@ -38,7 +36,7 @@ instance IsName HName where
     | nn == conFalse = mkGName "Prelude" "False" 
     | otherwise      =
       HName (TH.mkName $ unUser n)
-            (TH.mkName $ Gen.genModuleName m ++ "." ++ (unUser n))
+            (TH.mkName $ Gen.genModuleName m ++ "." ++ unUser n)
   fromName (Alpha i n) = mkLName $ "_a" ++ Gen.encNameL (unUser n) ++ show i
   fromName (Local n)   = mkLName $ "_l" ++ Gen.encNameL (unUser n)
   fromName (Generated n p) = mkLName $ "_g" ++ Gen.phaseStr p ++ show n
@@ -55,8 +53,8 @@ instance HsName HName where
 
 instance MiniHaskellPat HName TH.Pat where
   pvar n = TH.VarP (hLhsName n)
-  pcon n ps = TH.ConP (hRhsName n) ps
-  ptuple ps = TH.TupP ps 
+  pcon n = TH.ConP (hRhsName n) 
+  ptuple = TH.TupP 
 
 instance MiniHaskellExp TH.Q HName TH.Pat TH.Exp TH.Dec TH.Stmt TH.Type where
   var n = TH.varE (hRhsName n)
@@ -97,18 +95,18 @@ instance MiniHaskellExp TH.Q HName TH.Pat TH.Exp TH.Dec TH.Stmt TH.Type where
 
   lets = return . TH.LetS
   nobinds = return . TH.NoBindS
-  binds n e = return $ (TH.BindS (TH.VarP $ hLhsName n) e)
+  binds n e = return $ TH.BindS (TH.VarP $ hLhsName n) e
 
 
 instance MiniHaskellType HName TH.Type where
   tyvar x = TH.VarT $ hLhsName x
   tyfun t1 t2 = TH.ArrowT `TH.AppT` t1 `TH.AppT` t2
-  tycon n ts  =
-    foldl TH.AppT (TH.ConT (hRhsName n)) ts
+  tycon n =
+    foldl TH.AppT (TH.ConT (hRhsName n)) 
   tytuple ts = foldl TH.AppT (TH.TupleT (length ts)) ts
   tylist t   = TH.ListT `TH.AppT` t
-  tyforall ns t =
-    TH.ForallT [TH.PlainTV (hLhsName tv) | tv <- ns] [] t 
+  tyforall ns =
+    TH.ForallT [TH.PlainTV (hLhsName tv) | tv <- ns] [] 
 
 -- ty2ty :: C.Ty -> TH.Type
 -- ty2ty (C.TyCon n ts)
@@ -191,13 +189,7 @@ parseToQDec str = do
   -- dDecs <- convertDataDecls dataDecls'
   -- tDecs <- convertTypeDecls typeDecls'
 
-  decs  <- Gen.runGen $ Gen.genTopBind dataDecls' typeDecls' desugarred
-
---  let res = dDecs ++ tDecs ++ decs
-
-  -- liftIO $ print $ TH.ppr decs
-  
-  return decs
+  Gen.runGen $ Gen.genTopBind dataDecls' typeDecls' desugarred
   where
     nameError (l, d) =
        staticError (nest 2 (ppr l </> d))

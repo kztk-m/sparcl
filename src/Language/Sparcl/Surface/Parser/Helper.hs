@@ -50,7 +50,7 @@ withLoc :: Monad m => (SrcSpan -> P m a) -> P m a
 withLoc m = getSrcLoc >>= m
 
 loc :: Monad m => P m a -> P m (Loc a)
-loc m = do
+loc m =
   (\s d e -> Loc (s <> e) d) <$> getSrcLoc <*> m <*> getSrcLoc
 
 

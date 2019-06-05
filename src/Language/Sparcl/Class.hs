@@ -30,7 +30,7 @@ class Local key a m => Modify key a m where
   modify :: Proxy key -> (a -> a) -> m ()
   modify proxy f = do
     a <- ask proxy
-    set proxy $! (f a) 
+    set proxy $! f a
 
   set :: Proxy key -> a -> m ()
   set proxy a = modify proxy (const a) 

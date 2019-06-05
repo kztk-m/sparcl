@@ -2,6 +2,7 @@
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeApplications #-} -- for hlint 
 module Language.Sparcl.Surface.Syntax where
 
 import Language.Sparcl.SrcLoc
@@ -21,14 +22,6 @@ import Data.Kind
 import Data.Void
 
 import Data.Typeable 
-
--- makeTupleExp :: [LExp p] -> LExp p
--- makeTupleExp [e] = e
--- makeTupleExp es  = noLoc $ Con (nameTuple $ length es) es
-
--- makeTuplePat :: [LPat p] -> LPat p
--- makeTuplePat [p] = p
--- makeTuplePat ps = noLoc $ PCon (nameTuple $ length ps) ps 
 
 type LTy p = Loc (Ty p) -- located types (not linear) 
 
@@ -76,7 +69,7 @@ instance AllPretty p => Pretty (Ty p) where
                     TMult One   -> line <> text "-o"
                     _ -> text " " <> text "#" <+> ppr m D.<$> text "->"                        
         in parensIf (k > 0) $ D.group $ pprPrec 1 t1 <> arr <+> pprPrec 0 t2                
-  pprPrec k (TCon c ts) = parensIf  (k > 1) $ ppr c D.<+> (D.hsep $ map (pprPrec 2) ts)          
+  pprPrec k (TCon c ts) = parensIf  (k > 1) $ ppr c D.<+> D.hsep (map (pprPrec 2) ts)          
 
   pprPrec k (TQual cs t) = parensIf (k > 0) $ align $ 
     parens (hsep $ D.punctuate comma $ map ppr cs) D.<$> D.text "=>" D.<+> pprPrec 0 t 
@@ -175,7 +168,7 @@ instance AllPretty p => Pretty (Exp p) where
     D.text "end" 
     where
       pprPs (p, c) = D.text "|" D.<+>
-                     D.align (pprPrec 1 p D.<+> D.text "->" D.<+> (D.nest 2 $ ppr c))
+                     D.align (pprPrec 1 p D.<+> D.text "->" D.<+> D.nest 2 (ppr c))
 
   pprPrec _ Lift   = text "lift"
   pprPrec _ Unlift = text "unlift" 
@@ -201,7 +194,7 @@ instance AllPretty p => Pretty (Exp p) where
 
   pprPrec k (RDO as r) = parensIf (k > 0) $
     D.text "revdo" <+>
-    (D.align $ D.vcat (map (\(x, e) -> ppr x <+> text "<-" <+> ppr e) as)
+    D.align (D.vcat (map (\(x, e) -> ppr x <+> text "<-" <+> ppr e) as)
                <> D.line <> text "before" <+> ppr r)
     
 
@@ -321,8 +314,8 @@ type family XHDecls p where
 
 data TopDecl p
   = DDecl (Decl p)
-  | DData (XId p) [(XId p)] [Loc (CDecl p)]
-  | DType (XId p) [(XId p)] (LTy p)
+  | DData (XId p) [XId p] [Loc (CDecl p)]
+  | DType (XId p) [XId p] (LTy p)
 
 data Decl p
   = DDef (XId p) [ ([LPat p],  Clause p) ] 

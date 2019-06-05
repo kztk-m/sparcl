@@ -1,9 +1,9 @@
 module Language.Sparcl.Exception where
 
-import Control.Exception (Exception, throw)
-import Language.Sparcl.Pretty as D
+import           Control.Exception      (Exception, throw)
+import           Language.Sparcl.Pretty as D
 
-data RunTimeException = RunTimeException Doc
+newtype RunTimeException = RunTimeException Doc
 
 instance Show RunTimeException where
   show (RunTimeException d) =
@@ -14,7 +14,7 @@ instance Exception RunTimeException
 rtError :: Doc -> a
 rtError d = throw (RunTimeException d)
 
-data StaticException = StaticException Doc
+newtype StaticException = StaticException Doc
 
 instance Show StaticException where
   show (StaticException d) =

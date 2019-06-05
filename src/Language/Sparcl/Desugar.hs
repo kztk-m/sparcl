@@ -1,5 +1,4 @@
 {-# LANGUAGE ConstraintKinds #-}
-{-# LANGUAGE ViewPatterns #-}
 module Language.Sparcl.Desugar (
   desugarExp, desugarTopDecls, 
   runDesugar
@@ -58,7 +57,7 @@ desugarExp (Loc _ expr) = go expr
 
     go (S.Var (x, _)) = return $ C.Var x
     go (S.Lit l)      = return $ C.Lit l
-    go (S.App e1 e2)  = do
+    go (S.App e1 e2)  = 
       mkApp <$> desugarExp e1 <*> desugarExp e2 
 
     go (S.Abs [] e) = desugarExp e 
@@ -137,9 +136,9 @@ desugarRDO = go [] id
       in noLoc $ S.Case pinExp [ (pat, S.Clause er (S.HDecls () []) Nothing)]
       
     go ps kpin ((p,e):as) er =
-      let k hole = kpin $ (noLoc S.RPin) `app`
+      let k hole = kpin $ noLoc S.RPin `app`
                           e `app`
-                          (noLoc $ S.Abs [p] hole)
+                          noLoc (S.Abs [p] hole)
       in go (p:ps) k as er 
       
       
@@ -157,7 +156,7 @@ makeTuplePatC :: [C.Pat Name] -> C.Pat Name
 makeTuplePatC [p] = p
 makeTuplePatC ps  = C.PCon (nameTuple (length ps)) ps 
 
-makeCase :: Eq n => C.Exp n -> [(C.Pat n, C.Exp n)] -> C.Exp n
+makeCase :: Ord n => C.Exp n -> [(C.Pat n, C.Exp n)] -> C.Exp n
 makeCase (C.Con n []) [(C.PCon m [], e)] | n == m = e
 makeCase e0 [(C.PVar x, e)] = mkApp (mkAbs x e) e0 
 makeCase e0 alts = C.Case e0 alts 
@@ -166,9 +165,9 @@ makeCase e0 alts = C.Case e0 alts
 -- Removes apparent eta-redex.
 -- This is correct as Abs binds linear variable. So, occurence of x in "\x -> e x" means that
 -- there is not free occurrence x in e. 
-mkAbs :: Eq n => n -> C.Exp n -> C.Exp n
--- mkAbs n (C.App e (C.Var m)) | n == m && not (n `elem` freeVars e) = e
-mkAbs n e                    = C.Abs n e 
+mkAbs :: Ord n => n -> C.Exp n -> C.Exp n
+mkAbs n (C.App e (C.Var m)) | n == m && n `notElem` C.freeVars e = e
+mkAbs n e                                                        = C.Abs n e
 
 mkApp :: Eq n => C.Exp n -> C.Exp n -> C.Exp n
 mkApp (C.Abs n e) e1 =
@@ -204,8 +203,7 @@ punchHoleAffine n = conv . go
     conv (Once f) = Just f 
 
     list :: Monad f => [Occ (f a)] -> Occ (f [a])
-    list []     = None (pure [])
-    list (e:es) = liftO2 (liftM2 (:)) e (list es)
+    list = foldr (liftO2 $ liftM2 (:)) (None $ pure [])
 
     go (C.Var x) | x == n    = Once id
                  | otherwise = None (const $ C.Var x) 
@@ -229,7 +227,7 @@ punchHoleAffine n = conv . go
     go (C.Lift e1 e2) =
       liftO2 (liftM2 C.Lift) (go e1) (go e2)
 
-    go (C.Unlift e) = fmap C.Unlift <$> (go e)
+    go (C.Unlift e) = fmap C.Unlift <$> go e
     go (C.RCon c es) =
       fmap (C.RCon c) <$> list (map go es)
 
@@ -415,7 +413,7 @@ desugarAlts alts = do
           let p = fillCPat cp []
           e <- convertClauseU c
           return (p, e)
-    makeBCases ralts@((cp, firstSub, _):_) = do 
+    makeBCases ralts@((cp, firstSub, _):_) = 
           -- Notice that all @cp@ and @length sub@ are the same in @ralts@.
           withNewNames len $ \xs -> do 
             let outP = fillCPat cp [C.PVar x | x <- xs]

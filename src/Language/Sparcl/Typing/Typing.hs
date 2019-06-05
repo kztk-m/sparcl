@@ -25,7 +25,6 @@ import qualified Language.Sparcl.Core.Syntax as C (DDecl(..), TDecl(..))
 import qualified Language.Sparcl.Surface.Syntax as S
 
 
-
 import Language.Sparcl.Pretty as D hiding ((<$>))
 
 -- import Data.Maybe (isNothing)
@@ -247,7 +246,8 @@ checkPatTyWork isUnderRev (Loc loc pat) pmult patTy = do
           
           
     go (PREV p) = do
-      when isUnderRev $ (atLoc $ location p) $ reportError $ Other $ text "rev patterns cannot be nested."
+      when isUnderRev $ atLoc (location p) $
+        reportError $ Other $ text "rev patterns cannot be nested."
           
       ty <- ensureRevTy patTy
       (p', bind, cs) <- checkPatTyWork True p pmult ty
@@ -335,8 +335,7 @@ loopToEquiv constraints = do
   -- liftIO $ print $ red $ text "CS:" <+> ppr constraints
   -- liftIO $ print $ red $ text "SCC" <+> (align $ vcat $ map (\case G.AcyclicSCC x -> text "Acyc" <+> ppr x
   --                                                                  G.CyclicSCC x  -> text "Cyc " <+> ppr x) sccs)
-  isEffective <- foldM procSCCs False sccs
-  return isEffective
+  foldM procSCCs False sccs
   where
     procSCCs :: Bool -> G.SCC Ty -> m Bool
     procSCCs  isE (G.AcyclicSCC _)  = return isE
@@ -345,25 +344,16 @@ loopToEquiv constraints = do
       equate xs >> return True
 
     equate []       = error "Cannot happen." 
-    equate (ty:tys) = equate' tys
-      where
-        equate' []       = return ()
-        equate' (ty':ts) = unify ty ty' >> equate' ts 
-          
-                      
+    equate (ty:tys) = forM_ tys $ \ty' -> unify ty ty'
     
     makeSCC :: [TyConstraint] -> m [G.SCC Ty]
-    makeSCC xs = do
-      t <- makeLeMap xs
-      return $ G.stronglyConnComp $ map (\(k,vs) -> (k,k,vs)) $ M.toList t
+    makeSCC xs = G.stronglyConnComp . map (\(k,vs) -> (k,k,vs)) . M.toList <$> makeLeMap xs
 
     makeLeMap :: [TyConstraint] -> m (M.Map Ty [Ty])
     makeLeMap [] = return M.empty
-    makeLeMap (MEqMax t1 t2 t3:cs) = do
+    makeLeMap (c:cs) = do
       t <- makeLeMap cs
-      t1' <- zonkType t1
-      t2' <- zonkType t2
-      t3' <- zonkType t3
+      MEqMax t1' t2' t3' <- zonkTypeC c 
       return $ M.insertWith (++) t2' [t1'] $ M.insertWith (++) t3' [t1'] t 
         
             
@@ -378,10 +368,8 @@ propagateConstantsToFixedpoint xs = do
     
 propagateConstants :: MonadTypeCheck m => [TyConstraint] -> m [TyConstraint]
 propagateConstants [] = return []
-propagateConstants (MEqMax t1 t2 t3:cs) = do
-  t1' <- zonkType t1 
-  t2' <- zonkType t2
-  t3' <- zonkType t3
+propagateConstants (c:cs) = do
+  MEqMax t1' t2' t3' <- zonkTypeC c 
   case t1' of
     TyMult One   -> do
       unify t2' (TyMult One) -- 1 = max a b implies a = b = 1
@@ -472,7 +460,7 @@ raiseUse m = runWriterT . traverse f
         _         -> error "Kind error."
     f (MulConst Omega) = pure (MulConst Omega)
     f (MulVar   q)     = do
-      r <- lift $ newMetaTyVar
+      r <- lift newMetaTyVar
       tell [MEqMax (TyMetaV r) m (TyMetaV q) ]
       return (MulVar r)
       
@@ -531,7 +519,7 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first3 $ Loc loc) $ atLoc loc $ a
       tryUnify (foldr (uncurry tyarr) retTy $ zip qs ts) expectedTy
       csVars <- constrainVars xqs umap 
       
-      return (Abs pats' e', foldr M.delete umap (map fst xqs), csVars ++ cs ++ csPat)
+      return (Abs pats' e', foldr (M.delete .  fst) umap xqs, csVars ++ cs ++ csPat)
                
     go (App e1 e2) = do
       (e1', ty1, umap1, cs1) <- inferTy e1
@@ -552,7 +540,7 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first3 $ Loc loc) $ atLoc loc $ a
     go (Bang e) = do
       (e', umap, cs) <- checkTy e expectedTy
       (umap', cs') <- raiseUse (TyMult Omega) umap 
-      return $ (Bang e', umap', cs' ++ cs)
+      return (Bang e', umap', cs' ++ cs)
 
     go (Sig e tySyn) = do
       let sigTy = ty2ty tySyn
@@ -661,7 +649,8 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first3 $ Loc loc) $ atLoc loc $ a
 
           csV <- constrainVars xqs umapAs
 
-          return ((p',e'):as', bindAs ++ bind, mergeUseMap (foldr M.delete umapAs $ map fst xqs) umapE, csV ++ csE ++ csP ++ csAs) 
+          return ((p',e'):as', bindAs ++ bind,
+                   mergeUseMap (foldr (M.delete . fst) umapAs xqs) umapE, csV ++ csE ++ csP ++ csAs) 
           
 
 
@@ -718,7 +707,7 @@ checkAltsTy alts patTy q bodyTy =
 
       let xqs = map (\(x,_,qq) -> (x,qq)) bind 
       csVars <- constrainVars xqs umap 
-      return ((pat', c'), foldr M.delete umap (map fst xqs), csVars ++ cs ++ csP)  
+      return ((pat', c'), foldr (M.delete . fst) umap xqs, csVars ++ cs ++ csP)  
     -- checkAltTy (p, c) = do
     --   (p', ubind, lbind) <- checkPatTy p patTy
     --   c' <- withUVars ubind $ withLVars lbind $ checkClauseTy c bodyTy
@@ -776,9 +765,9 @@ inferTopDecls decls dataDecls typeDecls = do
 
         
   let typeTable = M.fromList $
-        [ (n, foldr (-@) typeKi (map (const typeKi) ns)) | Loc _ (n, ns, _) <- dataDecls ]
+        [ (n, foldr ((-@) . const typeKi) typeKi ns) | Loc _ (n, ns, _) <- dataDecls ]
         ++
-        [ (cn, TyForAll tvs $ TyQual [] (foldr (-@) (TyCon n $ map TyVar tvs) $ map ty2ty tys)) |
+        [ (cn, TyForAll tvs $ TyQual [] (foldr ((-@) . ty2ty) (TyCon n $ map TyVar tvs) tys)) |
           Loc _ (n, ns, cdecls) <- dataDecls,
           let tvs = map BoundTv ns, 
           Loc _ (CDecl cn tys) <- cdecls ]
@@ -800,7 +789,7 @@ splitConstraints cs = do
   return (csI, csO)
     where
       allIn env (MEqMax t1 t2 t3) =
-        all (\t -> t `elem` env) $ metaTyVars [t1,t2,t3]
+        all (`elem` env) $ metaTyVars [t1,t2,t3]
 
 
 inferMutual :: MonadTypeCheck m =>
@@ -821,7 +810,7 @@ inferMutual decls = do
     (pcs', umap, cs) <- gatherAltUC =<< mapM (flip (checkTyPC loc qs) ty) pcs 
     tyE <- askType loc n -- type of n in the environment
 
-    when (not $ M.member n sigMap) $ do 
+    unless (M.member n sigMap) $ 
       -- Defer unification if a declaration comes with a signature because
       -- the signature can be a polytype while unification targets monotypes.
 
@@ -896,7 +885,7 @@ inferMutual decls = do
         let xqs = map (\(x,_,q) -> (x,q)) bind 
 
         csVars <- constrainVars xqs umap 
-        return ((ps', c'), foldr M.delete umap' (map fst xqs), csR ++ csVars ++ cs ++ csPat)
+        return ((ps', c'), foldr (M.delete . fst) umap' xqs, csR ++ csVars ++ cs ++ csPat)
 
 
 checkClauseTy :: MonadTypeCheck m => Clause 'Renaming -> Ty -> m (Clause 'TypeCheck, UseMap, [TyConstraint])
@@ -921,7 +910,7 @@ skolemize (TyForAll tvs ty) = do
 skolemize ty = return ([], TyQual [] ty) 
 
 tryCheckMoreGeneral :: MonadTypeCheck m => SrcSpan -> Ty -> Ty -> m ()
-tryCheckMoreGeneral loc ty1 ty2 = do
+tryCheckMoreGeneral loc ty1 ty2 = 
   -- liftIO $ print $ red $ group $ text "Checking" <+> align (ppr ty1 <+>  text "is more general than" <> line <> ppr ty2)
   whenChecking (CheckingMoreGeneral ty1 ty2) $ checkMoreGeneral loc ty1 ty2
 
@@ -978,8 +967,8 @@ checkMoreGeneral3 loc origVars (TyQual cs1 ty1) (TyQual cs2 ty2) = atLoc loc $ d
   --                  undetermined         
 
   let prop = foldr (\a cnf ->
-                      (SAT.elim (MV a) True  cnf) .&&.
-                      (SAT.elim (MV a) False cnf))
+                      SAT.elim (MV a) True  cnf
+                      .&&. SAT.elim (MV a) False cnf)
                    (toFormula cs2' .&&. SAT.neg (toFormula cs1''))
                    undetermined 
                         
@@ -990,10 +979,10 @@ checkMoreGeneral3 loc origVars (TyQual cs1 ty1) (TyQual cs2 ty2) = atLoc loc $ d
   
   case cs1'' of
     [] -> return ()   
-    _  -> do
+    _  -> 
       case SAT.sat prop of
         Nothing -> return () 
-        Just bs -> do 
+        Just bs -> 
 --          liftIO $ print $ red $ text "SAT." 
           reportError $ Other $ D.group $
             vcat [ hsep [pprC cs2', text "does not imply", pprC cs1']
@@ -1116,7 +1105,7 @@ removeUnvisibleByConformanceStep mvs (TyQual cs0 t) =
             Just _ ->
               checkRemovable xs (c:cs') cs 
       where
-        cVars = (filter generalizable $ metaTyVarsC [c]) \\ (metaTyVarsC (cs'++cs) ++ visibleVars)
+        cVars = filter generalizable (metaTyVarsC [c]) \\ (metaTyVarsC (cs'++cs) ++ visibleVars)
         cf  = toFormula cs .&&. toFormula cs'
         cf' = toFormula [c] .&&. cf 
         prop =
@@ -1169,7 +1158,7 @@ removeUnvisibleHueristicStep mvs0 (TyQual cs0 t) =
       guard (v `elem` eliminatable)
       -- found v <= m2' and v ~ m2 * m3 
       
-      return $ (v, addMSub v m2 m2' $ addMSub v m3 m2' $ rest)
+      return (v, addMSub v m2 m2' $ addMSub v m3 m2' rest)
       
 
 quantify :: MonadTypeCheck m => [MetaTyVar] -> QualTy -> m PolyTy
