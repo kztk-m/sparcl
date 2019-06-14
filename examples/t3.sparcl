@@ -63,3 +63,15 @@ def until p f x = case p x of
 
 def append Nil y = y 
          | (Cons a x) y = Cons a (append x y)
+
+
+----
+
+data F a = MkF (F a -> a)
+
+sig out : forall a. F a -o F a -> a 
+def out (MkF f) = f 
+
+-- sig myfix : ((a # p -> b) -> (a # p -> b)) -> a # p -> b 
+def myfix f a = (\x a -> f (out x x) a) (MkF (\x a -> f (out x x) a)) a
+

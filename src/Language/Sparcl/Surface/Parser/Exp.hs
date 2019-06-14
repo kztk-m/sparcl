@@ -17,7 +17,9 @@ import Language.Sparcl.Surface.Parser.Id
 import Text.Megaparsec ((<|>))
 
 import Control.Monad 
+
 import Data.Maybe (fromMaybe)
+import qualified Data.Set as Set
 
 -- import Language.Sparcl.Pretty (ppr)
 
@@ -139,7 +141,7 @@ appPat =
 
 introForAll :: LTy 'Parsing -> LTy 'Parsing
 introForAll ty =
-  let freeVars = goL [] ty []
+  let freeVars = goL Set.empty ty Set.empty
   in foldr (\x -> Loc (location ty) . TForall x) ty freeVars
   where
     list _ [] = id
@@ -150,9 +152,9 @@ introForAll ty =
     goC xs (MEqMax t1 t2 t3) = goL xs t1 . goL xs t2 . goL xs t3
     goC xs (MSub   t1 t2)    = goL xs t1 . goL xs t2 
 
-    go xs (TVar x) | x `elem` xs = id
-                   | otherwise   = (x:)
-    go xs (TForall x t) = goL (x:xs) t
+    go xs (TVar x) | x `Set.member` xs = id
+                   | otherwise         = Set.insert x 
+    go xs (TForall x t) = goL (Set.insert x xs) t
     go xs (TQual cs t)  = list (goC xs) cs . goL xs t
 
     go xs (TCon _ ts) = list (goL xs) ts
