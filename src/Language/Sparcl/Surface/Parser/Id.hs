@@ -21,6 +21,13 @@ moduleName =
   <?> "module name"
 
 
+keyword :: Monad m => String -> P m String
+keyword s = do
+  r <- P.string s
+  P.notFollowedBy P.alphaNumChar
+  sp
+  return r
+
 qop :: Monad m => P m SurfaceName
 qop =
   (do m <- moduleName

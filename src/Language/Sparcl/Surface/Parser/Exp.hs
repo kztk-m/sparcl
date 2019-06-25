@@ -64,23 +64,23 @@ expr = getSrcLoc >>= \startLoc ->
       e <- expr
       return $ Loc (startLoc <> location e) $ Abs ps e )
   <|>
-  (do void $ symbol "let"
+  (do void $ keyword "let"
       decls <- localDecls
-      void $ symbol "in"
+      void $ keyword "in"
       e <- expr
       return $ Loc (startLoc <> location e) $ Let decls e)
   <|>
-  (do void $ symbol "case"
+  (do void $ keyword "case"
       e0   <- expr
-      void $ symbol "of" 
+      void $ keyword "of" 
       alts <- alternatives
-      void $ symbol "end"
+      void $ keyword "end"
       endLoc <- getSrcLoc 
       return $ Loc (startLoc <> endLoc) $ Case e0 alts)
   <|>
-  (do void $ symbol "revdo"
+  (do void $ keyword "revdo"
       as <- assignment `P.endBy` semicolon 
-      void $ symbol "before"
+      void $ keyword "before"
       e <- expr
       return $ Loc (startLoc <> location e) $ RDO as e)
   <|> 
@@ -123,7 +123,7 @@ tuplePat = mkTuplePat <$>
 pat :: Monad m => P m (LPat 'Parsing)
 pat = do
   s <- getSrcLoc
-  m <- P.optional (symbol "rev")
+  m <- P.optional (keyword "rev")
   p <- appPat 
   case m of
     Just _  -> return $ Loc (s <> location p) $ PREV p
@@ -232,7 +232,7 @@ appTy =
       return $ Loc (l <> mconcat (map location ts)) $ TCon c ts
 
     revTy = loc $ do      
-      void $ symbol "rev"
+      void $ keyword "rev"
       ty <- simpleTy
       return $ TCon (BuiltIn nameTyRev) [ty]
 
@@ -273,10 +273,10 @@ multiplicity = loc (one <|> omega <|> var) <* sp
 modul :: Monad m => P m (Module 'Parsing)
 modul = do
   modDecl <- P.optional $ do
-    void $ symbol "module" 
+    void $ keyword "module" 
     m  <- moduleName
     es <- exportList
-    void $ symbol "where"
+    void $ keyword "where"
     return (m, es) 
   is <- importList
   ds <- topDecls
@@ -296,7 +296,7 @@ importList = P.many singleImport
 
 singleImport :: Monad m => P m (Import 'Parsing)
 singleImport = do
-  void $ symbol "import"
+  void $ keyword "import"
   Import <$> moduleName <*> impNames
   where
     impNames = P.optional (parens surfaceName `P.sepEndBy` comma)
@@ -314,12 +314,12 @@ topDecl = typeDecl <|> dataDecl <|> (fmap DDecl <$> localDecl)
       return (c, xs) 
     
     dataDecl = loc $ do
-      void $ symbol "data"
+      void $ keyword "data"
       (c, xs) <- tyLHS 
       DData c xs <$> cdecl `P.sepBy1` symbol "|"
 
     typeDecl = loc $ do
-      void $ symbol "type"
+      void $ keyword "type"
       (c, xs) <- tyLHS 
       DType c xs <$> typeExpr
 
@@ -338,7 +338,7 @@ localDecl = defDecl <|> sigDecl <|> fixityDecl
 defDecl :: Monad m => P m (LDecl 'Parsing) 
 defDecl = do
   start <- getSrcLoc
-  void $ symbol "def"
+  void $ keyword "def"
   x <- varOpName
   sp
   ds <- defBody `P.sepBy1` symbol "|"
@@ -362,7 +362,7 @@ defBody = do
 sigDecl :: Monad m => P m (LDecl 'Parsing)
 sigDecl = do
   start <- getSrcLoc
-  void $ symbol "sig" 
+  void $ keyword "sig" 
   x <- varOpName
   sp
   void $ symbol ":" 
@@ -372,7 +372,7 @@ sigDecl = do
 fixityDecl :: Monad m => P m (LDecl 'Parsing)
 fixityDecl = do
   start <- getSrcLoc
-  void $ symbol "fixity" 
+  void $ keyword "fixity" 
   o <- op <* sp 
   n <- L.decimal <* sp 
   a <- fromMaybe N <$> P.optional assoc
@@ -380,9 +380,9 @@ fixityDecl = do
   return $ Loc (start <> end) $ DFixity o (Prec n) a
   where
     assoc =
-      (symbol "left" >> return L)
+      (keyword "left" >> return L)
       <|>
-      (symbol "right" >> return R)
+      (keyword "right" >> return R)
       
 
 
@@ -423,15 +423,15 @@ simpleExpr startLoc =
       return $ Loc (startLoc <> endLoc) t
     
     pinExpr = do
-      void $ symbol "pin"
+      void $ keyword "pin"
       withEnd RPin
 
     liftExpr = do
-      void $ symbol "lift"
+      void $ keyword "lift"
       withEnd Lift
 
     unliftExpr = do
-      void $ symbol "unlift"
+      void $ keyword "unlift"
       withEnd Unlift
 
     conExpr = do
@@ -439,7 +439,7 @@ simpleExpr startLoc =
       withEndSp $ Con c
 
     rconExpr = do
-      void $ symbol "rev"
+      void $ keyword "rev"
       c <- qconName
       withEndSp $ RCon c
 
@@ -449,7 +449,7 @@ simpleExpr startLoc =
 
 tupleExpr :: Monad m => P m (LExp 'Parsing)
 tupleExpr = do
-  p  <- P.optional (symbol "rev")
+  p  <- P.optional (keyword "rev")
   es <- parens (expr `P.sepBy` comma)
   case p of
     Just _  -> pure $ mkTupleExpR es
@@ -511,14 +511,14 @@ clause = do
   return $ Clause e d w
 
 withExpr :: Monad m => P m (LExp 'Parsing)
-withExpr = symbol "with" >> expr 
+withExpr = keyword "with" >> expr 
 
 
 whereClause :: Monad m => P m (Decls 'Parsing (LDecl 'Parsing))
 whereClause = do 
-  r <- P.optional $ do void $ symbol "where"
+  r <- P.optional $ do void $ keyword "where"
                        ds <- localDecls
-                       void $ symbol "end"
+                       void $ keyword "end"
                        return ds
   case r of
     Just ds -> return ds

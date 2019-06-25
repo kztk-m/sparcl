@@ -1,0 +1,95 @@
+data Either a b = Left a 
+                | Right b 
+
+def invert h = 
+    case unlift h of 
+      (f, g) -> lift g f 
+    end  
+
+def firstR f (rev (a, b)) = rev (f a, b) 
+
+sig trace : (rev a -o rev (a, a)) -> 
+            (rev (Either a b) -o rev (Either a b)) -> 
+            rev a -o rev a
+def trace dup f x =
+   case dup x of 
+     rev (x, x') -> 
+      case firstR f (go f (rev (f (rev Left x), rev Left x'))) of 
+        rev (Left y, Left y') -> invert dup (rev (y, y'))
+      end
+   end 
+
+def fwd h = case unlift h of 
+              (a,_) -> a 
+            end
+
+def bwd h = case unlift h of 
+               (_,b) -> b 
+            end
+
+def (.) f g = \x -> f (g x)
+
+def go f (rev (Left a,  y)) = rev (y, rev Left a) with \(a, _) -> isLeft a 
+     | f (rev (Right b, y)) = 
+          revdo  (r, a) <- go f (rev (f (rev Right b), y)); 
+          before rev (f r, a) 
+
+      
+def isLeft (Left _) = True 
+         | _        = False
+
+def isRight (Right _) = True
+         | _          = False 
+
+
+data List a = Nil | Cons a (List a) 
+
+def null Nil = True
+       | _   = False 
+
+def not True  = False
+      | False = True 
+
+def revStep (rev Left (Nil, ys))   = rev Left  (rev (rev Nil, ys)) 
+                                       with \x -> case x of Left (_,ys) -> null ys |  _ -> False end
+          | (rev Left (xs, ys))    = rev Right (rev (xs, ys))
+                                       with \x -> case x of Right (_,ys) -> null ys | _ -> False end
+          | (rev Right (Nil, ys))  = rev Left  (rev (rev Nil, ys))
+                                       with \x -> case x of Left (_,ys) -> not (null ys) | _ -> False end
+          | (rev Right (Cons a xs, ys)) = rev Right (rev (xs, rev Cons a ys))
+                                       with \x -> case x of Right (_,ys) -> not (null ys) | _ -> False end 
+
+data ABC = A | B | C 
+
+sig dupABC : rev ABC -o rev (ABC, ABC)
+def dupABC (rev A) = rev (rev A, rev A) with \(x,_) -> case x of A -> True | _ -> False end
+         | (rev B) = rev (rev B, rev B) with \(x,_) -> case x of B -> True | _ -> False end
+         | (rev C) = rev (rev C, rev C) with \(x,_) -> case x of C -> True | _ -> False end
+
+
+def fst (a, _) = a
+
+def dupListABC (rev Nil) = rev (rev Nil, rev Nil) with null . fst 
+             | (rev Cons a xs) = 
+       case dupABC a of 
+         rev (a', a'') -> 
+            case dupListABC xs of 
+               rev (xs', xs'') -> 
+                  rev (rev Cons a' xs', rev Cons a'' xs'')
+            end
+       end
+
+def dupPair dupA dupB (rev (a, b)) = 
+   case dupA a of 
+     rev (a', a'') -> 
+     case dupB b of 
+       rev (b', b'') -> rev (rev (a', b'), rev (a'', b''))
+     end
+   end 
+
+sig reverse : rev (List ABC) -o rev (List ABC)
+def reverse xs = case trace (dupPair dupListABC dupListABC) revStep (rev (xs, rev Nil)) of 
+                    rev (Nil, xs) -> xs 
+                 end
+ 
+def lst = Cons A (Cons B (Cons A (Cons C Nil)))
