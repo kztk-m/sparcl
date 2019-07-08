@@ -427,9 +427,16 @@ searchModule mo = do
   fs <- liftIO $ mapM Dir.doesFileExist searchFiles
   case map fst $ filter snd $ zip searchFiles fs of
     fp:_ -> return fp 
-    _    -> staticError $ text "Cannot find module:" <+> ppr mo
+    _    -> do
+      vlevel <- ask (key @KeyVerb)
+      staticError $ text "Cannot find module:" <+> ppr mo <> reportSearchFiles vlevel searchFiles
+  where
+    reportSearchFiles vlevel sf
+      | vlevel < 2 = mempty 
+      | otherwise  = 
+        line <> text "Files searched:" <+> align (vcat (map ppr sf))
 
-
+  
 importNames :: MonadModule v m => ModuleName -> [Loc SurfaceName] -> ModuleInfo v -> m (ModuleInfo v)
 importNames mn ns m = do
   onames <- forM ns $ \(Loc loc n) -> 

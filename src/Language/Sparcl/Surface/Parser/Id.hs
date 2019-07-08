@@ -17,7 +17,7 @@ modElem = (:) <$> P.upperChar <*> P.many P.alphaNumChar
 moduleName :: P m ModuleName
 moduleName =
   (\a as -> ModuleName $ concat (a:as)) <$>
-  modElem <*> P.many (P.try (P.char '.' *> modElem))
+  modElem <*> P.many (P.try ((:) <$> P.char '.' <*> modElem))
   <?> "module name"
 
 
@@ -37,7 +37,7 @@ qop =
   <?> "qualified operator"
 
 op :: Monad m => P m SurfaceName
-op = Bare <$> opRaw
+op = (Bare <$> opRaw) <?> "operator"
 
 opRaw :: Monad m => P m NameBase
 opRaw =

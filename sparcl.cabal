@@ -87,8 +87,7 @@ library
 
   hs-source-dirs:
       src
-  build-tool-depends: 
-      alex:alex, happy:happy 
+
 
 
 executable sparcl-exe  
@@ -100,6 +99,7 @@ executable sparcl-exe
   hs-source-dirs:
       app
   ghc-options:
+    -fprof-auto
     -- -threaded -rtsopts -with-rtsopts=-N
   build-depends:
     sparcl,

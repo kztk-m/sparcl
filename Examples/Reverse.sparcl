@@ -1,0 +1,88 @@
+-- NB: "Loop.sparcl" also contains another version of reverse.
+
+data List a = Nil | Cons a (List a) 
+
+def fwd f = case unlift f of (x, _) -> x end 
+def bwd f = case unlift f of (_, x) -> x end 
+
+def null Nil = True
+       | _   = False 
+
+def mkList n = case eqInt n 0 of 
+    | True -> Nil 
+    | False -> Cons n (mkList (n-1))
+    end 
+
+def exampleList = fwd revSnoc (mkList 20)
+
+def isSingle (Cons a Nil) = True
+           | _            = False 
+
+def snoc xs b = case xs of 
+    | rev Nil      -> rev Cons b (rev Nil) with isSingle 
+    | rev Cons a x -> rev Cons a (snoc x b) 
+    end 
+
+-- snoc-based reverse, which is easy to define but slow.
+def revSnoc (rev Nil)       = rev Nil with null
+          | (rev Cons a xs) = snoc (revSnoc xs) a 
+
+data Nat = Z | S Nat 
+
+def uncurryR f (rev (a, b)) = f a b 
+
+def fst (a, _) = a 
+def snd (_, b) = b 
+
+def (.) f g = \x -> f (g x)
+
+fixity . 90 right
+
+-- linear reverse, based on "There and Back Again"-style 
+-- The example is taken from:
+--   K. Matsuda et al. "A Grammar-Based Approach to Invertible Programs", ESOP 10.
+
+def revTaba = extract . uncurryR revWork . shape
+  where
+    def shape xs = case xs of 
+       | rev Nil       -> rev (rev Z, rev Nil) with null . snd
+       | rev Cons y ys -> 
+              case shape ys of 
+                   rev (n, zs) -> rev (rev S n, rev Cons y zs)
+              end
+       end 
+
+    def revWork n xs = 
+       case n of 
+       | rev Z   -> rev (xs, rev Nil) with null . snd 
+       | rev S m -> 
+         case revWork m xs of 
+         | rev (Cons x' xs', ys') -> rev (xs', rev Cons x' ys')
+         end 
+       end
+
+    def extract (rev (Nil, xs)) = xs                  
+  end
+
+def testRevTABAf = fwd revHO exampleList 
+def testRevTABAb = bwd revHO testRevTABAf
+
+def tail (Cons _ xs) = xs 
+
+-- reverse, with higher-order functions
+def revHO = go (\z -> revWork z (rev Nil)) null 
+    where
+      sig go : (List (rev a) -o rev (List a)) -o (List a -> Bool) -> rev (List a) -o rev (List a) 
+      def go f p z = case z of 
+          | rev Nil      -> f Nil with p 
+          | rev Cons a x -> go (\r -> f (Cons a r)) (p . tail) x
+          end 
+
+      def revWork xs r = case xs of 
+          | Nil       -> r
+          | Cons a xs -> revWork xs (rev Cons a r)
+          end 
+    end
+
+def testRevHOf = fwd revHO exampleList
+def testRevHOb = bwd revHO testRevHOf

@@ -274,7 +274,7 @@ modul :: Monad m => P m (Module 'Parsing)
 modul = do
   modDecl <- P.optional $ do
     void $ keyword "module" 
-    m  <- moduleName
+    m  <- L.lexeme sp moduleName
     es <- exportList
     void $ keyword "where"
     return (m, es) 
@@ -297,7 +297,7 @@ importList = P.many singleImport
 singleImport :: Monad m => P m (Import 'Parsing)
 singleImport = do
   void $ keyword "import"
-  Import <$> moduleName <*> impNames
+  Import <$> L.lexeme sp moduleName <*> impNames
   where
     impNames = P.optional (parens surfaceName `P.sepEndBy` comma)
   
