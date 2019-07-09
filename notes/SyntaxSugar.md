@@ -1,9 +1,8 @@
-Syntactic Sugars
-================
+Note on Syntax
+==============
 
-The language is not indentation sensitive, as being indentation
-sensitive complicates parsing process and makes it hard-wired to
-specific parsers (e.g. happy).
+NB: The language is not indentation sensitive, as being indentation
+sensitive complicates parsing process and makes parser definitions tricky.
 
 
 <!--### Keywords
@@ -32,21 +31,21 @@ Every nonempty combination of letters and symbols are identifiers. Some combinat
 like `!` has the special meaning. 
 -->
 
-## Desugaring of Patterns in Rules
+## Elaboration of Patterns 
 
 As Haskell, the language supports Haskell-like patterns. 
 
 ```
-let f P11 P12 ... P1n = ...
-  | f P21 P22 ... P2n = ...
-  ...
-  | f Pm1 Pm2 ... Pmn = ...
+def f P11 P12 ... P1n = ...
+    | P21 P22 ... P2n = ...
+    ...
+    | Pm1 Pm2 ... Pmn = ...
 ```
 
-Suppose that `Pij = Ckj[~(rev pij)]` where `k` is determined by `i` (here, we used `~` for the vector notation). Then, the above code is desugared to:
+Suppose that `Pij = Ckj[~(rev pij)]` where `k` may be common for consecutive `i`s (here, we used `~` for the vector notation). Then, the above code is desugared to:
 
 ```
-let f x1 x2 ... xn = case (x1,...,xn) of 
+def f x1 x2 ... xn = case (x1,...,xn) of 
    ...
    (Ck1[~xk1], Ck2[~xk2], ..., Ckn[~xkn]) -> 
      case rev (~xk1, ~xk2, ..., ~xkn) of 
@@ -57,43 +56,33 @@ let f x1 x2 ... xn = case (x1,...,xn) of
 
 This means that `ei` must come up with `with` clause if one of `Pij` contains `rev`.
 
-## [Planned] Syntactic Sugar for `pin`
+## Syntactic Sugar for `pin`
 
 The `pin` operator is typically used in the form of:
 
 ```
-let R (a, b) = pin ea (\a -> ...)  
-in ... 
+case pin ea (\a -> ...) of 
+ rev (a, b) -> ...
 ```
 
 We propose a syntax 
 
 ```
-let defer x1 = e1
-          x2 = e2
-          ...
-          xn = en 
-in e          
+revdo x1 <- e1;
+      x2 <- e2;
+      ...;
+      xn <- en 
+in    e          
 ```
 
 which will be desugared into
 
 ```
-let R (x1, (x2, ..., (x{n-1},xn)) ...) =
-   pin e1 (\x1 -> 
-    pin e2 (\x2 -> 
-     ... 
-     pin e{n-1} (\x{n-1} -> en
-    ))
-in e 
-```
-
-But, this incompatible with the current syntax. 
-
-```
-let def f x = ... g ...
-    def g y = ... f ...
-in e 
+case pin e1 (\x1 -> 
+       pin e2 (\x2 -> 
+         ... 
+           pin e{n-1} (\x{n-1} -> en)) ...) of 
+ rev (x1, (x2, ..., (x{n-1},xn)) ...) -> e  
 ```
 
 
@@ -101,27 +90,29 @@ in e
 
 Since the role of deferred binding is similar to "<-" in `do` in Haskell, we will borrow the syntax to write
 
-```
-revdo p1 <- e1; 
-      p2 <- e2; 
-      ...
-      pn <- en;
-      before e 
-```
+## [Proposal] Brackets for `rev`
 
-which will be desugarred into 
+It is sometimes tedious to put `rev` to all constructors. Thus, we need more easier notations. 
 
-```
-let rev (p1, (p2, ..., (p{n-1},pn)) ...) =
-   pin e1 (\p1 -> 
-    pin e2 (\p2 -> 
-     ... 
-     pin e{n-1} (\p{n-1} -> en
-    ))
-in e 
-```
+### 1. Automatic Promotion 
 
+There are some places we can only put lifted constructors; arguments of other lifted constructors and right-hand sides of invertible cases. 
+With the automatic promotion rules, one can simply write
 
+    rev Cons Z (Cons (S Z) Nil) 
+    
+for 
+
+    rev Cons (rev Z) (rev Cons (rev S (rev Z)) (rev Nil))
+    
+We may be able to apply inference system to determine whether a constructor
+should be lifted or not, but this would introduce confusion; the semantics of normal and lifted constructors are different. 
+
+### 2. Quotes and Unquotes
+
+Since the language is a two-level system, we may be able to borrow quotes and unquote syntax.    
+    
+    
 
 ## Undetermined Syntax
 
