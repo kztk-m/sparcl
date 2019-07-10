@@ -13,10 +13,12 @@ Important Difference from the Paper
 How to Use
 ----------
 
-First, we need to build the system.
+First, we need to build the system. We are using [`stack`](https://docs.haskellstack.org/en/stable/README/) for building, so please install `stack` by following the instruction found in the link.
 
     $ stack build
     
+The command may take time as it build all required packages including a version of GHC requested in the build script. 
+
 Then, we can run REPL by:
 
     $ stack exec sparcl-exe
@@ -64,11 +66,11 @@ Typing `:h` and then enter will show the following help.
         Print the expression's type.
 
 
-Known Bugs 
-----------
+Known Issues
+------------
 
 * The desugaring of Haskell-like rules do not work correctly, due to
   depth-first renaming of variables. Thus, please use `case` explicitly 
   if one wants to mix rev and non-rev patterns. 
-  
+* The system supports importing other modules but this functionality is not tested yet.
 * Type-checking is slow due to naive SAT solving.
