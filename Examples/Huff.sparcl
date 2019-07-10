@@ -47,9 +47,9 @@ sig huffCompressDo : rev (List Symbol) -o rev (Huff, List Bit)
 def huffCompressDo s = 
    revdo s  <- s ;
          h  <- const eqHuff (makeHuff s) ;
-         before revdo h <- h ; 
-                      r <- encode h s; 
-                      before rev (h, r)
+   in    revdo h <- h ; 
+               r <- encode h s; 
+         in    rev (h, r)
 
 sig encode : Huff -> rev (List Symbol) -o rev (List Bit)
 def encode h (rev Nil)       = rev Nil with null

@@ -1,4 +1,4 @@
--- Should cause a type error
+-- It is intentional that this program causes a type error.
 
 data Nat = Z | S Nat 
  

@@ -58,7 +58,7 @@ keyWords = ["let", "in", "if", "then", "else", "where", "end",
             "case", "of", "with", "rev", "module", "import",
             "sig", "def", "data", "type", "fixity",
             "lift", "unlift", "pin",
-            "revdo", "before" ]
+            "revdo" ]
 
 varName :: Monad m => P m SurfaceName
 varName = P.try (do x <- varidRaw

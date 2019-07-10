@@ -29,7 +29,7 @@ def s2l' = go 0
          | n (rev Cons x xs) = 
              revdo x' <- x;
                    r  <- go x' xs; 
-                   before rev Cons (flipsub n x') r 
+             in    rev Cons (flipsub n x') r 
   end
 
 -- sig ($) : forall a b. (a -o b) -o a -o b 

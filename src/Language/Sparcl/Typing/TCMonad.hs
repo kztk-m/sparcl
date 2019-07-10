@@ -63,14 +63,14 @@ instance Pretty TypeError where
       pprWhenChecking (CheckingEquality ty1 ty2) =
         D.line <> 
         item (D.text "when checking the following types are equivalent:"
-              D.<> D.nest 2 (line <> vsep [ hsep[text "Inferred:", ppr ty1],
-                                            hsep[text "Expected:", ppr ty2] ]))
+              D.<> D.nest 2 (line <> vsep [ hsep[text "Inferred:", align $ ppr ty1],
+                                            hsep[text "Expected:", align $ ppr ty2] ]))
 
       pprWhenChecking (CheckingMoreGeneral ty1 ty2) =
         D.line <>
         item (D.text "when checking the inferred type is more general than the expected."
-              D.<> D.nest 2 (line <> vsep [ hsep[text "Inferred:", ppr ty1],
-                                            hsep[text "Expected:", ppr ty2] ]))
+              D.<> D.nest 2 (line <> vsep [ hsep[text "Inferred:", align $ ppr ty1],
+                                            hsep[text "Expected:", align $ ppr ty2] ]))
         
       pprWhenChecking (CheckingConstraint cs) =
         D.line <>

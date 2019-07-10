@@ -80,7 +80,7 @@ expr = getSrcLoc >>= \startLoc ->
   <|>
   (do void $ keyword "revdo"
       as <- assignment `P.endBy` semicolon 
-      void $ keyword "before"
+      void $ keyword "in"
       e <- expr
       return $ Loc (startLoc <> location e) $ RDO as e)
   <|> 
