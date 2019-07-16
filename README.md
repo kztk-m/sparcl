@@ -73,4 +73,3 @@ Known Issues
   depth-first renaming of variables. Thus, please use `case` explicitly 
   if one wants to mix rev and non-rev patterns. 
 * The system supports importing other modules but this functionality is not tested yet.
-* Type-checking is slow due to naive SAT solving.
