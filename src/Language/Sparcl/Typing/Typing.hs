@@ -1,4 +1,4 @@
-{-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE ViewPatterns, OverloadedStrings #-}
 module Language.Sparcl.Typing.Typing where
 
 import Data.Void
@@ -27,11 +27,11 @@ import qualified Language.Sparcl.Surface.Syntax as S
 
 import Language.Sparcl.Pretty as D hiding ((<$>))
 
--- import Data.Maybe (isNothing)
+import Data.Maybe (isNothing)
 import Data.List (nub, partition, (\\))
 
 -- import Control.Exception (evaluate)
--- import Debug.Trace 
+import Debug.Trace 
 
 
 -- TODO: Implement kind checking
@@ -840,7 +840,8 @@ inferMutual decls = do
     let qt = TyQual csI ty 
     
     tt <- zonkTypeQ qt 
-    let mvs = metaTyVarsQ [tt]    
+    let mvs = metaTyVarsQ [tt]
+--    liftIO $ print $ red $ "Finding a polytype of " <+> ppr n 
     polyTy <- quantify (mvs \\ envMetaVars) tt 
     
     case M.lookup n sigMap of
@@ -966,16 +967,18 @@ checkMoreGeneral3 loc origVars (TyQual cs1 ty1) (TyQual cs2 ty2) = atLoc loc $ d
   --                  [([], toFormula cs2' .&&. SAT.neg (toFormula cs1''))]
   --                  undetermined         
 
+  -- To check exists origVars. forall `undetermined`. neg (cs2 => cs1'') holds
+  -- i.e.,    
   let prop = foldr (\a cnf ->
                       SAT.elim (MV a) True  cnf
                       .&&. SAT.elim (MV a) False cnf)
                    (toFormula cs2' .&&. SAT.neg (toFormula cs1''))
                    undetermined 
                         
-  -- liftIO $ print $ red $ text "CS1:" <+> ppr cs1''
-  -- liftIO $ print $ red $ text "CS2:" <+> ppr cs2'
-  -- liftIO $ print $ red $ text "Undetermined vars." <+> ppr undetermined
-  -- liftIO $ print $ red $ text "Prop:" <+> ppr prop 
+  liftIO $ print $ red $ text "CS1:" <+> ppr cs1''
+  liftIO $ print $ red $ text "CS2:" <+> ppr cs2'
+  liftIO $ print $ red $ text "Undetermined vars." <+> ppr undetermined
+  liftIO $ print $ red $ text "Prop:" <+> ppr prop 
   
   case cs1'' of
     [] -> return ()   
@@ -1021,9 +1024,13 @@ instance Pretty VV where
 
 toFormula :: [TyConstraint] -> SAT.Formula VV
 toFormula [] = SAT.true
-toFormula (MEqMax q1 q2 q3:cs) =
-  (conv q1 .<=>. conv q2 .||. conv q3) .&&. toFormula cs
+toFormula (c:cs) =
+  toForm c .&&. toFormula cs 
   where
+    toForm (MEqMax q1 q2 q3)
+      | q1 == q3  = conv q2 .=>. conv q1
+      | q1 == q2  = conv q3 .=>. conv q1 
+      | otherwise = conv q1 .<=>. (conv q2 .||. conv q3)
     conv (TyMult Omega) = SAT.true
     conv (TyMult One)   = SAT.false
     conv (TyMetaV v)    = SAT.var (MV v)
@@ -1079,13 +1086,21 @@ removeUnvisibleConstraint mvs tq@(TyQual cs t) =
 {-# INLINABLE removeUnvisibleByConformanceStep #-}
 removeUnvisibleByConformanceStep :: [MetaTyVar] -> QualTy -> ([MetaTyVar], QualTy)
 removeUnvisibleByConformanceStep mvs (TyQual cs0 t) =
-  -- A constraint is removable if it can be eliminated by fixing non
-  -- visible appropriately. That is, if there is some valuation of
-  -- visible parts for which any valuation of non visible part can
-  -- make cs => (c & cs) false, we can `c` is necessary and otherwise
-  -- c is redundant.
-  --
+  -- Suppose that @mvs@ is a set of variables that can be generalizable.
+  -- Let us say a variable visible if it appears in @t@.
+  -- 
+  -- The task here is: simplify @cs0@ by removing constraints @c@ that can be 
+  -- satisfied by instantiating non-visible and generalizable variables in @c@. 
   -- Here, we just consider removing constraints one by one. 
+  --  
+  -- The above problem can be formalized as QSAT.
+  -- Let X be non-visible and generalizable variables, and Y be others.
+  -- Then, our goal is to check @forall Y. exists X. cs => c@ holds.
+  --
+  -- To do so, we currently solve its contraposition
+  -- @exists Y. forall X. cs & neg c@
+  -- by a SAT solver after flattening @X@, i.e., 
+  -- @\bigwedge_X (cs & neg c)@
   
   let (cs', xs) = checkRemovable [] [] cs0
   in (mvs \\ xs, TyQual cs' t)
@@ -1097,22 +1112,30 @@ removeUnvisibleByConformanceStep mvs (TyQual cs0 t) =
     checkRemovable xs cs' (c:cs) =
       let 
       in case cVars of
-        [] -> checkRemovable xs (c:cs') cs
-        _  ->          
-          case SAT.sat prop of
+--        [] -> checkRemovable xs (c:cs') cs
+        _  -> trace (show $ red $ vcat ["Checking" <+> ppr c <+> "is implied by" <+> ppr (cs++cs'),
+                                        "after appropriate substition of" <+> ppr cVars, 
+                                        "Prop:" <+> align (ppr prop),
+                                        "Removable? (UNSAT):"  <+> ppr (isNothing res)]) $ 
+          case res of
             Nothing -> -- removing c does not change the satisfiability
               checkRemovable (cVars ++ xs) cs' cs
             Just _ ->
               checkRemovable xs (c:cs') cs 
       where
+        res = SAT.sat prop 
+        -- Variables that appear only in @c@ 
         cVars = filter generalizable (metaTyVarsC [c]) \\ (metaTyVarsC (cs'++cs) ++ visibleVars)
         cf  = toFormula cs .&&. toFormula cs'
-        cf' = toFormula [c] .&&. cf 
+        -- cf' = toFormula [c] .&&. cf
+        -- To check (neg (cf .=> cf')) is unsatisfiable for any choice of cVars
+        -- 
+        --  ~(A => A & B) <=> ~(A => B) <=> A & ~B
         prop =
             foldr (\x p -> SAT.elim (MV x) True p
                            .&&.
                            SAT.elim (MV x) False p)
-                  (cf .&&. SAT.neg cf') -- neg (cf .=>. cf')
+                  (cf .&&. SAT.neg (toFormula [c])) -- neg (cf .=>. toFormula [c])
                   cVars
 
 {-
@@ -1164,6 +1187,7 @@ removeUnvisibleHueristicStep mvs0 (TyQual cs0 t) =
 quantify :: MonadTypeCheck m => [MetaTyVar] -> QualTy -> m PolyTy
 quantify mvs0 ty0 = do
   -- liftIO $ print $ red $ text "Simplification:" <+> align (group (ppr ty0) <> line <> text "is simplified to" <> line <> group (ppr ty))
+  -- liftIO $ print $ red $ "Generalization:" <+> ppr (zip mvs newBinders)
   
   forM_ (zip mvs newBinders) $
     \(mv, tyv) -> writeTyVar mv (TyVar tyv) 

@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 {-
 A simple DPLL-based SAT solver.
 -}
@@ -8,28 +10,45 @@ module Language.Sparcl.Algorithm.SAT (
   ) where
 
 import qualified Data.Map               as M
-import qualified Data.Map.Merge.Lazy    as M
+import qualified Data.IntMap.Strict            as IM 
 
 import           Control.Monad.Writer
+import           Control.Monad.State 
 import           Language.Sparcl.Pretty hiding ((<$>))
 
-import           Data.Maybe             (catMaybes, mapMaybe)
+import           Data.Maybe             (mapMaybe, fromJust)
 
 data Formula v
   = FVar v
   | FAnd (Formula v) (Formula v)
+  | FOr  (Formula v) (Formula v) 
   | FNot (Formula v)
+  | FIff (Formula v) (Formula v) 
   | FTrue
   | FFalse
+  deriving (Functor, Foldable, Traversable) 
 
 (.&&.) :: Formula v -> Formula v -> Formula v
-(.&&.) = FAnd
+FFalse .&&. _  = FFalse
+FTrue  .&&. t2 = t2
+_  .&&. FFalse = FFalse
+t1 .&&. FTrue  = t1
+(FAnd t1 t2) .&&. t3 = t1 .&&. (t2 .&&. t3) 
+t1 .&&. t2 = FAnd t1 t2 
+
 
 (.||.) :: Formula v -> Formula v -> Formula v
-(.||.) t1 t2  = FNot (FAnd (FNot t1) (FNot t2))
+FTrue  .||. _  = FTrue
+FFalse .||. t2 = t2
+_  .||. FTrue  = FTrue
+t1 .||. FFalse = t1
+t1 .||. t2  = FOr t1 t2 
 
 neg :: Formula v -> Formula v
-neg = FNot
+neg FFalse   = FTrue
+neg FTrue    = FFalse
+neg (FNot t) = t 
+neg t = FNot t 
 
 var :: v -> Formula v
 var = FVar
@@ -39,59 +58,68 @@ elim v b = go
   where
     go (FVar x)
       | v == x    = if b then FTrue else FFalse
-      | otherwise = FVar x
-    go (FAnd t1 t2) = FAnd (go t1) (go t2)
-    go (FNot t)     = FNot (go t)
+      | otherwise   = var x
+    go (FAnd t1 t2) = go t1 .&&. go t2
+    go (FOr  t1 t2) = go t1 .||. go t2
+    go (FNot t)     = neg (go t)
     go FTrue        = FTrue
     go FFalse       = FFalse
+    go (FIff t1 t2) = go t1 .<=>. go t2 
 
-makeCNF :: Ord v => Formula v -> (CNF v, DNF v)
-makeCNF (FVar v) = ([M.singleton v True], [M.singleton v False])
-makeCNF (FAnd t1 t2) =
-  let r1 = makeCNF t1
-      r2 = makeCNF t2
-  in (fst r1 ++ fst r2,
-      catMaybes [ c1 `appC` c2 | c1 <- snd r1, c2 <- snd r2 ])
-makeCNF (FNot t) = swap (makeCNF t)
-  where
-    swap (a, b) = (b, a)
-makeCNF FTrue  = ([], [M.empty])
-makeCNF FFalse = ([M.empty], [])
-
-pCNF :: Ord v => Formula v -> CNF v
-pCNF = fst . makeCNF
-
-
--- data Formula v = Formula { pCNF :: CNF v,
---                            nDNF :: DNF v }
-type DNF v = [Clause v]
-type CNF v = [Clause v]
-
-instance (Pretty v, Ord v) => Pretty (Formula v) where
-  ppr = withSep (text "&") . map pprC . pCNF
+instance Pretty v => Pretty (Formula v) where
+  pprPrec _ (FVar x) = ppr x
+  pprPrec _ FTrue    = "true"
+  pprPrec _ FFalse   = "false"
+  pprPrec k (FAnd t1 t2) =
+    let ts = t1:andChain t2
+    in group $ parensIf (k > 3) $ align $ hcat $ punctuate (line <> "&" <> " ") $ map (pprPrec 4) ts
     where
-      withSep _ []     = empty
-      withSep _ [x]    = x
-      withSep d (x:xs) = x <+> d <+> withSep d xs
-      pprC = parens . withSep (text "|") . map pprL . M.toList
-      pprL (x, True)  = ppr x
-      pprL (x, False) = text "-" <> ppr x
+      andChain (FAnd s1 s2) = s1:andChain s2
+      andChain s            = [s]
+  pprPrec k (FOr t1 t2) =
+    let ts = t1:orChain t2
+    in group $ parensIf (k > 2) $ align $ hcat $ punctuate (line <> "|" <> " ") $ map (pprPrec 3) ts
+    where
+      orChain (FOr s1 s2) = s1:orChain s2
+      orChain s           = [s]
+  pprPrec k (FIff t1 t2) = parensIf (k > 1) $
+    pprPrec 2 t1 <+> "=" <+> pprPrec 2 t2 
+  pprPrec k (FNot t1) = parensIf (k > 9) $
+    "~" <> pprPrec 10 t1
 
--- FIXME: Comparison directly on `v` is slow, consider using Int intead.
 
-type Clause v = M.Map v Bool
+data Clause = Clause !Int -- cached size 
+                     (IM.IntMap Bool) 
 
-appC :: Ord v => Clause v -> Clause v -> Maybe (Clause v)
-appC =
-  M.mergeA (M.traverseMissing $ \_ x -> pure x)
-           (M.traverseMissing $ \_ x -> pure x)
-           (M.zipWithAMatched $ \_ x y -> if x == y then pure x else Nothing)
+lookupC :: IM.Key -> Clause -> Maybe Bool
+lookupC x (Clause _ m) = IM.lookup x m
 
-(.=>.) :: Ord v => Formula v -> Formula v -> Formula v
+deleteC :: IM.Key -> Clause -> Clause
+deleteC x (Clause s m) = (Clause (s-1) (IM.delete x m))
+
+lookupMinC :: Clause -> Maybe (IM.Key, Bool)
+lookupMinC (Clause _ m) = IM.lookupMin m 
+
+{-# INLINE sizeC #-}
+sizeC :: Clause -> Int
+sizeC (Clause i _) = i 
+
+{-# INLINE nullC #-}
+nullC :: Clause -> Bool 
+nullC (Clause i _) = i == 0
+
+toListC :: Clause -> [(Int, Bool)]
+toListC (Clause _ m) = IM.toList m 
+
+(.=>.) :: Formula v -> Formula v -> Formula v
 (.=>.) a b = neg a .||. b
 
-(.<=>.) :: Ord v => Formula v -> Formula v -> Formula v
-(.<=>.) a b = (neg a .||. b) .&&. (neg b .||. a)
+(.<=>.) :: Formula v -> Formula v -> Formula v
+FTrue  .<=>. b = b
+FFalse .<=>. b = neg b
+a .<=>. FTrue  = a
+a .<=>. FFalse = neg a 
+a .<=>. b = FIff a b -- (neg a .||. b) .&&. (neg b .||. a)
 
 true :: Formula v
 true = FTrue
@@ -108,81 +136,191 @@ infixr 1 .<=>.
 
 type Key = Int
 
--- Paring Heap -- from Chris Okasaki's book
-  -- We also referred the following URL
-  -- https://www-ps.informatik.uni-kiel.de/~sebf/projects/sat-solver/Control/Monad/Constraint/Boolean.lhs.html
-data PQueue a = EmptyQ
-              | NodeQ  Key a [PQueue a]
 
-mergeQ :: PQueue a -> PQueue a -> PQueue a
-mergeQ EmptyQ h = h
-mergeQ h EmptyQ = h
-mergeQ h1@(NodeQ k1 n1 ts1) h2@(NodeQ k2 n2 ts2) =
-  if k1 <= k2 then NodeQ k1 n1 (h2:ts1)
-  else             NodeQ k2 n2 (h1:ts2)
+data Join a = Empty | NonEmpty (JoinNonEmpty a)
+  deriving (Functor, Foldable, Traversable) 
 
-mergeQs :: [PQueue a] -> PQueue a
-mergeQs []         = EmptyQ
-mergeQs [h]        = h
-mergeQs (h1:h2:hs) = mergeQ (mergeQ h1 h2) (mergeQs hs)
+data JoinNonEmpty a = Single a | Join (JoinNonEmpty a) (JoinNonEmpty a) 
+  deriving (Functor, Foldable, Traversable) 
 
-singletonQ :: (a -> Key) -> a -> PQueue a
-singletonQ k n = NodeQ (k n) n []
+data MyQueue a = MyQueue !(Join a) -- elements of size 1 
+                         !(Join a) -- other elements 
+  deriving (Functor, Foldable, Traversable) 
 
-toListQ :: PQueue a -> [a]
-toListQ h = go h []
+instance Semigroup (Join a) where
+  Empty <> t = t
+  NonEmpty t <> Empty = NonEmpty t
+  NonEmpty t1 <> NonEmpty t2 = NonEmpty (Join t1 t2) 
+
+instance Monoid (Join a) where
+  mempty = Empty
+
+{-# INLINE singletonQ #-}
+singletonQ :: (a -> Key) -> a -> MyQueue a 
+singletonQ k n
+  | k n == 1  = MyQueue (NonEmpty $ Single n) Empty 
+  | otherwise = MyQueue Empty (NonEmpty $ Single n)
+
+{-# INLINE emptyQ #-}
+emptyQ :: MyQueue a
+emptyQ = MyQueue Empty Empty 
+
+{-# INLINE mergeQs #-}
+mergeQs :: [MyQueue a] -> MyQueue a
+mergeQs = foldr mergeQ emptyQ 
+
+{-# INLINE mergeQ #-}
+mergeQ :: MyQueue a -> MyQueue a -> MyQueue a
+mergeQ (MyQueue xs ys) (MyQueue xs' ys') = MyQueue (xs <> xs') (ys <> ys')
+
+pickOneJ :: Join a -> Maybe (a, Join a)
+pickOneJ Empty = Nothing
+pickOneJ (NonEmpty t) = go t Empty
   where
-    go EmptyQ r         = r
-    go (NodeQ _ x hs) r = foldr go (x:r) hs
+    go (Single a)   r = Just (a, r) 
+    go (Join t1 t2) r = go t1 (NonEmpty t2 <> r) 
 
-fromClauses :: [Clause v] -> PQueue (Clause v)
-fromClauses = mergeQs . map (singletonQ M.size)
+pickOne1 :: MyQueue a -> Maybe (a, MyQueue a)
+pickOne1 (MyQueue xs ys) =
+  case pickOneJ xs of
+    Just (a, xs') -> Just (a, MyQueue xs' ys)
+    Nothing       -> Nothing
 
-instance Foldable PQueue where
-  foldMap f = foldMap f . toListQ
+pickOne :: MyQueue a -> Maybe (a, MyQueue a)
+pickOne (MyQueue xs ys) =
+  case pickOneJ xs of
+    Just (a, xs') -> Just (a, MyQueue xs' ys)
+    Nothing       -> do 
+      (a, ys') <-  pickOneJ ys
+      return (a, MyQueue xs ys')
+        
 
-type CNFimpl v = PQueue (Clause v)
+{-# INLINE fromClauses #-}
+fromClauses :: [Clause] -> MyQueue Clause
+fromClauses = mergeQs . map (singletonQ sizeC)
 
-toImpl :: Ord v => Formula v -> CNFimpl v
-toImpl p = fromClauses $ pCNF p
 
-type Solver v m = WriterT [(v,Bool)] m
+type CNFimpl = MyQueue Clause
 
-assign :: forall m v. (Monad m, Ord v) => v -> Bool -> CNFimpl v -> Solver v m (CNFimpl v)
+toImpl :: forall v. Ord v => Formula v -> (CNFimpl, M.Map Int v)
+toImpl formula = -- fromClauses $ pCNF p
+  let cs = evalState (convert formula) cnt
+  in (fromClauses cs, i2v) 
+  where
+    -- Tseitin transformation
+    -- [[y]]x       => (~x | y) & (x | ~y) 
+    -- [[A & B]]x   => (~x | y) & (~x | z) & (~y | ~z | x) & [[A]]y & [[B]]z
+    -- [[A | B]]x   => (~x | y | z) & (~y | x) & (~z | x) & [[A]]y & [[B]]z
+    -- [[not A]]x   => (~x | ~y) & (x | y) & [[A]]y
+    -- [[A <=> B]]x => (~x | ~y | z) & (~x | ~z | y) & (y | z | x) & (~y | ~z | x) & [[A]]y & [[B]]z
+    -- [[A => B]]x  => (~x | ~y | z) & (x | y) & (x | ~z) & [[A]]y & [[B]]z 
+    -- [[true]]x    => x
+    -- [[false]]x   => ~x
+    convert :: Formula v -> State Int [Clause]
+    convert p = do n <- newVar p 
+                   ($ []) <$> execWriterT (tell (wrap $ IM.singleton n True) >> go n p) 
+      where
+        newVar :: MonadState Int m => Formula v -> m Int 
+        newVar (FVar x) = return (fromJust $ M.lookup x v2i)
+        newVar _        = next
+        wrap x = (Clause (IM.size x) x:)
+        go :: Int -> Formula v -> WriterT ([Clause] -> [Clause]) (State Int)  () 
+        go x (FVar v) =
+          let Just y = M.lookup v v2i
+          in if x == y then
+               tell mempty
+             else do 
+               tell $ wrap $ IM.fromList [(x,False), (y, True)]
+               tell $ wrap $ IM.fromList [(x,True), (y,False)]
+        go x (FAnd t1 t2) = do 
+          y <- newVar t1
+          z <- newVar t2
+          tell $ wrap $ IM.fromList [ (x, False), (y, True) ]
+          tell $ wrap $ IM.fromList [ (x, False), (z, True) ]
+          tell $ wrap $ IM.fromList [ (x, True), (y, False), (z, False) ]
+          go y t1
+          go z t2
+        go x (FIff t1 t2) = do
+          y <- newVar t1
+          z <- newVar t2
+          tell $ wrap $ IM.fromList [ (x, False), (y, False), (z, True) ]
+          tell $ wrap $ IM.fromList [ (x, False), (y, True),  (z, False) ]
+          tell $ wrap $ IM.fromList [ (x, True),  (y, True),  (z, True) ]
+          tell $ wrap $ IM.fromList [ (x, True),  (y, False), (z, False) ] 
+          go y t1
+          go z t2
+
+
+        go x (FOr (FNot t1) t2) = do -- t1 => t2
+          y <- newVar t1
+          z <- newVar t2
+          tell $ wrap $ IM.fromList [ (x, False), (y, False), (z, True) ]
+          tell $ wrap $ IM.fromList [ (x, True),  (y, True) ]
+          tell $ wrap $ IM.fromList [ (x, True),  (z, False) ]
+          go y t1
+          go z t2          
+          
+        go x (FOr t1 t2) = do
+          y <- newVar t1
+          z <- newVar t2 
+          tell $ wrap $ IM.fromList [ (x, False), (y, True), (z, True) ]
+          tell $ wrap $ IM.fromList [ (x, True), (y, False) ]
+          tell $ wrap $ IM.fromList [ (x, True), (z, False) ]
+          go y t1
+          go z t2 
+          
+        go x (FNot t) = do 
+          y <- newVar t
+          tell $ wrap $ IM.fromList [ (x, False), (y, False) ]
+          tell $ wrap $ IM.fromList [ (x, True) , (y, True)  ]
+          go y t 
+        go x FTrue  = tell $ wrap $ IM.singleton x True 
+        go x FFalse = tell $ wrap $ IM.singleton x False 
+          
+                            
+    
+    i2v = M.fromList $ map (\(x,n) -> (n,x)) $ M.toList v2i
+    (v2i, cnt) =
+      flip runState 0 $ 
+      traverse (const next) $   
+      foldr (\x -> M.insert x (1 :: Int)) M.empty formula
+
+    next :: MonadState Int m => m Int 
+    next = do
+      i <- get
+      put (i + 1)
+      return i 
+
+type Solver m = WriterT [(Int,Bool)] m
+
+assign :: forall m. Monad m => Int -> Bool -> CNFimpl -> Solver m CNFimpl
 assign v b cs = do
   tell [(v, b)]
-  return $ fromClauses $ mapMaybe tryAssign $ toListQ cs
+--  return $ fromClauses $ mapMaybe tryAssign $ toListQ cs
+  return $ foldr (\c r ->
+                     case tryAssign c of
+                       Nothing -> r
+                       Just c' -> singletonQ sizeC c' `mergeQ` r) emptyQ cs 
   where
     {-# INLINABLE tryAssign #-}
-    tryAssign :: Clause v -> Maybe (Clause v)
+    tryAssign :: Clause -> Maybe Clause
     tryAssign m =
-      case M.lookup v m of
+      case lookupC v m of
         Just b' ->
           if b == b' then -- the assignment make the literal true
             Nothing -- the whole clause becomes true
           else
-            Just $ M.delete v m
+            Just $ deleteC v m
         Nothing ->
           Just m -- the assignment does not affect the clause
 
--- assignNM :: Ord v => v -> Bool -> CNFimpl v -> CNFimpl v
--- assignNM v b cs = fst $ runWriter (assign v b cs)
-
--- assignAll :: (MonadPlus m, Ord v) => [v] -> Bool -> CNFimpl v -> Solver v m (CNFimpl v)
--- assignAll []     _ m = return m
--- assignAll (x:xs) b m = do
---   m' <- assign x b m
---   assignAll xs b m'
-
-
-unitProp :: (MonadPlus m, Ord v) => CNFimpl v -> Solver v m (CNFimpl v)
-unitProp EmptyQ = return EmptyQ
-unitProp h@(NodeQ k x hs)
-  | k == 1 = do
-      let [(v,b)] = M.toList x
-      hs' <- assign v b (mergeQs hs)
-      unitProp hs'
-  | otherwise = return h
+unitProp :: MonadPlus m => CNFimpl -> Solver m CNFimpl
+unitProp q = case pickOne1 q of
+  Nothing     -> return q
+  Just (x,q') -> do 
+    let [(v,b)] = toListC x
+    q'' <- assign v b q'
+    unitProp q''
 
 -- data Pure = Pure !Bool
 --           | Impure
@@ -204,9 +342,13 @@ unitProp h@(NodeQ k x hs)
 --         f _        _                 = Impure
 
 
-pickOneVariable :: Ord v => CNFimpl v -> Maybe v
-pickOneVariable EmptyQ        = Nothing
-pickOneVariable (NodeQ _ m _) = fst <$> M.lookupMin m
+pickOneVariable :: CNFimpl -> Maybe Int
+pickOneVariable q = do
+  (c, _) <- pickOne q
+  fst <$> lookupMinC c
+                      
+-- pickOneVariable EmptyQ        = Nothing
+-- pickOneVariable (NodeQ _ m _) = fst <$> IM.lookupMin m
 
 
 -- dpll :: (MonadPlus m, Ord v) => CNFimpl v -> Solver v m ()
@@ -222,9 +364,9 @@ pickOneVariable (NodeQ _ m _) = fst <$> M.lookupMin m
 --                      (dpll =<< assign v False cs'')
 
 
-dpll :: (MonadPlus m, Ord v) => CNFimpl v -> Solver v m ()
-dpll cs | null cs     = return ()
-        | any null cs = mzero
+dpll :: MonadPlus m => CNFimpl -> Solver m ()
+dpll cs | null cs      = return ()
+        | any nullC cs = mzero
         | otherwise  = do
             cs'  <- unitProp cs
             case pickOneVariable cs' of
@@ -232,17 +374,22 @@ dpll cs | null cs     = return ()
               Just v  -> (dpll =<< assign v True  cs') `mplus`
                          (dpll =<< assign v False cs')
 
-satI :: Ord v => CNFimpl v -> Maybe [(v, Bool)]
+satI :: CNFimpl -> Maybe [(Int, Bool)]
 satI cs =
   case execWriterT (dpll cs) of
     []   -> Nothing
     vs:_ -> Just vs
 
 sat :: Ord v => Formula v -> Maybe [(v, Bool)]
-sat = satI . toImpl
+sat p = do 
+  let (cs, i2v) = toImpl p 
+  res <- satI cs
+  return $ mapMaybe (\(n,t) -> do
+                        x <- M.lookup n i2v
+                        return (x, t)) res
 
-allsat :: Show v => Ord v => Formula v -> [[(v,Bool)]]
-allsat cs =
+allsat :: Ord v => Formula v -> [[(v,Bool)]]
+allsat cs = -- trace (show $ "<" <> ppr cs <> ">") $ 
   case sat cs of
     Nothing -> []
     Just vs ->
