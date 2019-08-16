@@ -5,32 +5,6 @@ NB: The language is not indentation sensitive, as being indentation
 sensitive complicates parsing process and makes parser definitions tricky.
 
 
-<!--### Keywords
-
-```
-sig type data newtype let and in where case of rev with infix infixr infixl 
-```
-
-The following words are reserved for future.
-
-```
-import module open begin end 
-```
-
-### Special Symbols
-
-The following characters cannot be a part of identifiers. 
-
-```
-( ) { } , _
-```
-
-### Identifiers
-
-Every nonempty combination of letters and symbols are identifiers. Some combinations
-like `!` has the special meaning. 
--->
-
 ## Elaboration of Patterns 
 
 As Haskell, the language supports Haskell-like patterns. 
@@ -90,11 +64,14 @@ case pin e1 (\x1 ->
 
 Since the role of deferred binding is similar to "<-" in `do` in Haskell, we will borrow the syntax to write
 
-## [Proposal] Brackets for `rev`
+    
+## Discussions 
+
+### Brackets for `rev`
 
 It is sometimes tedious to put `rev` to all constructors. Thus, we need more easier notations. 
 
-### 1. Automatic Promotion 
+#### 1. Automatic Promotion 
 
 There are some places we can only put lifted constructors; arguments of other lifted constructors and right-hand sides of invertible cases. 
 With the automatic promotion rules, one can simply write
@@ -105,14 +82,46 @@ for
 
     rev Cons (rev Z) (rev Cons (rev S (rev Z)) (rev Nil))
     
-We may be able to apply inference system to determine whether a constructor
+This approach also removes the syntactic gap between `rev`s used in expressions and patterns. 
+
+A solution is to use the notation of a syntactic context in which constructors are automatically lifted. For example, writing 
+
+    (| Cons Z (Cons (S Z) Nil) |) 
+    
+to obtain the same effect as above. Using the parentheses `(|` `|)` would not be appropriate as they have a special meaning in the context. How above the following for example? 
+
+    (% Cons Z (Cons (S Z) Nil) %)
+    
+We can use the syntax also in patterns 
+
+    f (% Nil %)      = (% Nil %)
+    f (% Cons a x %) = (% Cons a (f x) %)
+        
+We might be able to apply inference system to determine whether a constructor
 should be lifted or not, but this would introduce confusion; the semantics of normal and lifted constructors are different. 
 
-### 2. Quotes and Unquotes
+#### 2. Quotes and Unquotes
 
 Since the language is a two-level system, we may be able to borrow quotes and unquote syntax.    
-    
-    
+
+
+### Keyword `rev`
+
+The keyword `rev` is too lengthy. More shorter form would be nicer. For example:
+
+  - `` `Cons``
+  - `+Cons` 
+  - `*Cons`
+  - `%Cons` 
+  - `$Cons` 
+  - `&Cons` 
+  - `Cons%`
+  - `Cons$`
+  - `Cons&`
+  - `Cons#`
+  - `Cons*` 
+
+I personally like prefixing `%`. Another choice is to use the unicode superscript `ʳ` as a postfix as `Consʳ`. 
 
 ## Undetermined Syntax
 
