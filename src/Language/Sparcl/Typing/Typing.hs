@@ -664,7 +664,11 @@ inferPolyTy isMultipleUse expr = do
                   else return (umap, [])
   
   cs' <- simplifyConstraints (cs ++ csM)
+
+  -- TODO: We conjecture that this splitConstraint is superfluous, as algorithm cannot yield constraints only on outsides. 
   (csI, csO) <- splitConstraints cs'
+  -- liftIO $ print $ blue $ "csO (in inferPoly): " <+> ppr csO
+
 
   ty' <- zonkTypeQ (TyQual csI ty)
   
@@ -835,7 +839,10 @@ inferMutual decls = do
     cs' <- simplifyConstraints cs
 
     -- NB: splitConstraints must be done outside of this mutual definition..
+
+    -- TODO: We conjecture that this splitConstraint is superfluous, as algorithm cannot yield constraints only on outsides. 
     (csI, csO) <- splitConstraints cs'
+--    liftIO $ print $ blue $ "csO (in inferMutual): " <+> ppr csO
 
     let qt = TyQual csI ty 
     
