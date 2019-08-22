@@ -195,7 +195,8 @@ instance Local KeyValue ValueTable REPL
 instance Has KeyTC TypingContext REPL where
   ask _ = Rd.asks confTC
   
-
+instance Local KeyTC TypingContext REPL where
+  local _ f = Rd.local (\d -> d { confTC = f (confTC d) } )
 
     
 -- Verbosity is not implemented yet. 
@@ -461,10 +462,11 @@ readExp ::
   (Has KeyDebugLevel Int m,
    Has KeyName NameTable m,
    Has KeyOp   OpTable m,
-   Has KeyTC   TypingContext m,
+   Local KeyTC   TypingContext m,
    Has KeyType  TypeTable m,
    Has KeySyn   SynTable m, 
-   MonadIO m) => String -> m (Exp Name, Ty) 
+   MonadIO m,
+   MonadCatch m) => String -> m (Exp Name, Ty) 
 readExp str = do
   nameTable <- ask (key @KeyName)
   opTable   <- ask (key @KeyOp)
@@ -477,7 +479,7 @@ readExp str = do
   debugPrint 1 $ text "Renaming Ok."
 
 
-  tinfo <- ask (key @KeyTC)
+  -- tinfo <- ask (key @KeyTC)
 
   typeTable <- ask (key @KeyType)
   synTable  <- ask (key @KeySyn) 
@@ -487,11 +489,11 @@ readExp str = do
                                                 text "synenv:" <+> align (pprMap synTable) ])
   
   -- liftIO $ setEnvs tinfo typeTable synTable   
-  (typedExp, ty) <- liftIO $ runTCWith tinfo typeTable synTable $ inferExp renamedExp 
+  (typedExp, ty) <- runTCWith typeTable synTable $ inferExp renamedExp 
   debugPrint 1 $ text "Type checking Ok."
 
   debugPrint 1 $ text "Desugaring expression..."
-  desugaredExp <- liftIO $ runTC tinfo $ runDesugar $ desugarExp typedExp
+  desugaredExp <- runTC $ runDesugar $ desugarExp typedExp
   debugPrint 1 $ text "Desugaring Ok."
   debugPrint 2 $ text "Desugared:" </> align (ppr desugaredExp)
 

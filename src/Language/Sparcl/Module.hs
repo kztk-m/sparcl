@@ -13,6 +13,7 @@ import qualified System.FilePath                 as FP (takeDirectory, (<.>),
                                                         (</>))
 
 import           Control.Monad                   (forM, when)
+import           Control.Monad.Catch
 import           Control.Monad.IO.Class
 import qualified Control.Monad.State             as St
 
@@ -41,13 +42,13 @@ data KeyType
 data KeySyn
 data KeySearchPath
 data KeyValue
-data KeyTC
 data KeyLoadPath
 
 type MonadModule v m =
   (MonadIO m,
+   MonadCatch m,
    Has   KeyLoadPath   FilePath m,
-   Has   KeyTC         TypingContext m,
+   Local KeyTC         TypingContext m,
    Has   KeyDebugLevel Int   m,
    Local KeyName       NameTable m,
    Local KeyOp         OpTable   m,
@@ -523,7 +524,6 @@ readModule fp interp = do
 
     debugPrint 1 $ text "Renaming Ok."
 
-    tinfo  <- setDebugLevel <$> ask (key @KeyTC) <*> ask (key @KeyDebugLevel)
     tyEnv  <- ask (key @KeyType)
     synEnv <- ask (key @KeySyn)
 
@@ -531,11 +531,11 @@ readModule fp interp = do
     debugPrint 2 $ text "under ty env" </> pprMap tyEnv
 
     (typedDecls, nts, dataDecls', typeDecls', newTypeTable, newSynTable) <-
-      liftIO $ runTCWith tinfo tyEnv synEnv $ inferTopDecls renamedDecls tyDecls synDecls
+      runTCWith tyEnv synEnv $ inferTopDecls renamedDecls tyDecls synDecls
 
     debugPrint 1 $ text "Type checking Ok."
     debugPrint 1 $ text "Desugaring ..."
-    bind <- liftIO $ runTC tinfo $ runDesugar $ desugarTopDecls typedDecls
+    bind <- runTC $ runDesugar $ desugarTopDecls typedDecls
 
     debugPrint 1 $ text "Desugaring Ok."
     debugPrint 2 $ text "Desugared:" <> line <> align (vcat (map (\(x,_,e) -> ppr (x,e)) bind))

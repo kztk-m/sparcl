@@ -22,9 +22,10 @@ import Language.Sparcl.Typing.TCMonad
 import qualified Language.Sparcl.Typing.Type as T 
 import Language.Sparcl.Pass
 
--- import Language.Sparcl.Pretty hiding ((<$>), list)
-import Debug.Trace
+import Language.Sparcl.Pretty hiding ((<$>), list)
+-- import Debug.Trace
 
+import Language.Sparcl.DebugPrint
 
 type NameSource = Int -- de Brujin levels 
 
@@ -338,6 +339,15 @@ data CPat = CPHole
           | CPBang CPat
           deriving (Eq , Show)
 
+
+instance Pretty CPat where
+  pprPrec _ CPHole    = text "_"
+  pprPrec _ (CPVar n) = ppr n
+  pprPrec _ (CPCon n []) = ppr n 
+  pprPrec k (CPCon n ps) = parensIf (k > 0) $ ppr n <+> hsep (map (pprPrec 1) ps)
+  pprPrec _ (CPBang p)   = text "!" <> pprPrec 1 p 
+                           
+
 separatePat :: S.LPat 'TypeCheck -> (CPat, [S.LPat 'TypeCheck])
 separatePat pat = go False (unLoc pat) 
   where
@@ -400,7 +410,8 @@ desugarAlts alts = do
                       let (cp, subs) = separatePat p
                       in (cp, subs, c)) alts
   -- grouping alts that have the same unidir patterns.
-  let altss = trace ("> " ++ show [ cp | (cp, _, _) <- alts']) $ groupBy ((==) `on` (\(cp,_,_) -> cp)) alts'
+  debugPrint 3 $ text "Common patterns:" <+> ppr [ cp | (cp, _, _) <- alts' ]
+  let altss = groupBy ((==) `on` (\(cp,_,_) -> cp)) alts'
   mapM makeBCases altss
   where
     makeBCases :: [ (CPat, [S.LPat 'TypeCheck], S.Clause 'TypeCheck) ] -> m (C.Pat Name, C.Exp Name)

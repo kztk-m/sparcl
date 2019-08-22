@@ -164,7 +164,6 @@ parseToQDec' fp str = do
   liftIO $ writeFile fp $ show $ TH.ppr decs
   return decs
   
-
 parseToQDec :: String -> TH.Q [TH.Dec]
 parseToQDec str = do
   decls <- either (staticError . text) return $ parseDecl str
@@ -182,9 +181,9 @@ parseToQDec str = do
   -- liftIO $ setEnvs tinfo (miTypeTable baseModuleInfo) (miSynTable baseModuleInfo)
 
   (typedDecls, _nts, dataDecls', typeDecls', _newTypeTable, _newSynTable) <-
-      liftIO $ runTCWith tinfo (miTypeTable baseModuleInfo) (miSynTable baseModuleInfo) $ inferTopDecls renamedDecls dataDecls synDecls
+      liftIO $ runSimpleTC tinfo $ runTCWith (miTypeTable baseModuleInfo) (miSynTable baseModuleInfo) $ inferTopDecls renamedDecls dataDecls synDecls
 
-  desugarred <- liftIO $ runTC tinfo $ runDesugar $ desugarTopDecls typedDecls
+  desugarred <- liftIO $ runSimpleTC tinfo $ runTC $ runDesugar $ desugarTopDecls typedDecls
 
   -- dDecs <- convertDataDecls dataDecls'
   -- tDecs <- convertTypeDecls typeDecls'

@@ -14,6 +14,9 @@ class Monad m => Has (key :: k) a m | key m -> a where
   ask    :: Proxy key -> m a
   {-# MINIMAL ask #-}
 
+asks :: Has key a m => Proxy key -> (a -> b) -> m b
+asks k f = f <$> ask k 
+
 class Has key a m => Local key a m where
   local  :: Proxy key -> (a -> a) -> m r -> m r 
 
