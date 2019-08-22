@@ -1,5 +1,6 @@
 {-# OPTIONS_GHC -fprint-potential-instances #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module Language.Sparcl.REPL where
 
@@ -48,6 +49,10 @@ import System.Directory (getCurrentDirectory, getHomeDirectory)
 import qualified System.FilePath as FP ((</>))
 
 import qualified Language.Haskell.Interpreter as Hint
+import qualified Language.Haskell.TH as TH
+import Data.Time.Clock (getCurrentTime)
+
+import Language.Sparcl.DebugPrint
 
 -- import Data.Coerce 
 
@@ -55,7 +60,7 @@ data Conf =
   Conf { confSearchPath  :: [FilePath],
          confLoadPath    :: FilePath, 
          confCurrentDir  :: FilePath, 
-         confVerbosity   :: Int,
+         confVerbosity   :: !Int,
          confLastLoad    :: Maybe FilePath,
          confTC          :: TypingContext,
          confNameTable   :: IORef NameTable,
@@ -129,10 +134,10 @@ instance Has KeyLoadPath FilePath REPL where
 instance Has KeySearchPath [FilePath] REPL where
   ask _ = Rd.asks confSearchPath 
 
-instance Has KeyVerb Int REPL where
+instance Has KeyDebugLevel Int REPL where
   ask _ = Rd.asks confVerbosity
 
-instance Local KeyVerb Int REPL where
+instance Local KeyDebugLevel Int REPL where
   local _ f =
     Rd.local (\conf -> conf { confVerbosity = f (confVerbosity conf) })
 
@@ -299,8 +304,11 @@ startREPL vl searchPath inputFile = do
   let comp = case inputFile of
         Just fp -> procLoad fp
         Nothing -> waitCommand
+  putStrLn $ "Built: " ++ compileTime 
   runREPL setting conf' comp 
-
+  where
+    compileTime = $( do t <- TH.runIO $ getCurrentTime
+                        return $ TH.LitE $ TH.StringL (show t) )
 
 commandSpec :: [CommandSpec (REPL ())]
 commandSpec = [
@@ -375,7 +383,7 @@ resetModule = do
 --  modifyTables $ const initTables
   -- ref <- ask
   -- liftIO $ modifyIORef ref $ \conf -> conf { confTables = initTables } 
-  local (key @KeyVerb) (const 0) $ setModule baseModuleInfo
+  local (key @KeyDebugLevel) (const 0) $ setModule baseModuleInfo
         
   
             
@@ -450,7 +458,7 @@ procType str = do
   
 -- parseAndDesugarExp :: VerbosityLevel -> [QName] -> OpTable -> String -> IO OLExp
 readExp ::
-  (Has KeyVerb Int m,
+  (Has KeyDebugLevel Int m,
    Has KeyName NameTable m,
    Has KeyOp   OpTable m,
    Has KeyTC   TypingContext m,
@@ -505,7 +513,7 @@ readExp str = do
 --   liftIO $ evaluate t
 
 -- evalExp :: ValueTable -> OLExp -> IO Value
-evalExp :: (Has KeyVerb Int m, Has KeyValue ValueTable m, MonadIO m) => Exp Name -> m Value 
+evalExp :: (Has KeyDebugLevel Int m, Has KeyValue ValueTable m, MonadIO m) => Exp Name -> m Value 
 evalExp e = do
   env <- ask (key @KeyValue) -- getValueTable
   liftIO $ evaluate $ force $ runEval (evalU env e)

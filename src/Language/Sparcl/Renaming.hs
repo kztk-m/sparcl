@@ -480,11 +480,12 @@ renameTy level localnames lty = go level localnames lty (\lty' _ _ -> return lty
       goC lv nm c $ \c' lv' nm' ->
         goCs lv' nm' cs $ \cs' lv'' nm'' -> k (c':cs') lv'' nm''
 
-    goC lv nm (MSub t1 t2) k =
-      gos lv nm [t1,t2] $ \[t1',t2'] lv' nm' -> k (MSub t1' t2') lv' nm'
+    goC lv nm (MSub ts1 ts2) k =
+      gos lv  nm  ts1 $ \ts1' lv1 nm1 ->
+      gos lv1 nm1 ts2 $ \ts2' lv2 nm2 ->
+      k (MSub ts1' ts2') lv2 nm2 
+      
 
-    goC lv nm (MEqMax t1 t2 t3) k =
-      gos lv nm [t1,t2,t3] $ \[t1',t2',t3'] lv' nm' -> k (MEqMax t1' t2' t3') lv' nm' 
         
 
 renamePats :: Int -> LocalNames -> BoundVars -> [LPat 'Parsing] 

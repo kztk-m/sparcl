@@ -4,6 +4,7 @@ module Language.Sparcl.Typing.TCMonad where
 
 import qualified Data.Map as M
 import Data.Map (Map)
+import Data.Map.Merge.Lazy as M 
 
 import qualified Data.Sequence as Seq 
 import Data.Sequence (Seq)
@@ -24,6 +25,10 @@ import Language.Sparcl.Exception
 import Language.Sparcl.Pretty hiding ((<$>))
 import qualified Language.Sparcl.Pretty as D 
 import qualified Language.Sparcl.Surface.Syntax as S 
+
+import qualified Language.Sparcl.Class as C
+
+import Language.Sparcl.DebugPrint 
 
 data AbortTyping = AbortTyping 
   deriving Show
@@ -120,12 +125,11 @@ instance Pretty TypeError where
         D.text "In:" D.<+> ppr (location e) 
         D.<> D.nest 2 (D.line D.<> ppr e)
 
- 
+  
 
 -- A typing environment just holds type information.  This reflects
 -- our principle; multiplicites are synthesized instead of checked.
-
-type TyEnv = Map Name (Ty, MultTy) 
+type TyEnv = Map Name Ty
 
 dummyName :: Name 
 dummyName = Original (ModuleName "") (User "") (Bare (User ""))
@@ -135,54 +139,145 @@ dummyName = Original (ModuleName "") (User "") (Bare (User ""))
 -- Storing multiplicity variable is necessarly for application for a
 -- function of type a # p -> b to an expression that variables used in
 -- the expression has multiplicity `p` if it were used one.
-type UseMap = Map Name Mul
+type UseMap = Map Name Multiplication
+
+data Multiplication = Multiply Multiplication Multiplication
+                    | MSingle Mul 
+
+instance MultiplicityLike Multiplication where
+  one   = MSingle one 
+  omega = MSingle omega
+  fromMultiplicity = MSingle . fromMultiplicity 
+
+instance Lub Multiplication where
+  lub (MSingle (MulConst Omega)) _ = MSingle (MulConst Omega)
+  lub (MSingle (MulConst One))   t = t
+  lub _ (MSingle (MulConst Omega)) = MSingle (MulConst Omega)
+  lub t (MSingle (MulConst One))   = t
+  lub t1 t2 = Multiply t1 t2
+
+ty2mult :: MonadTypeCheck m => MultTy -> m Multiplication
+ty2mult = zonkType >=> go 
+    where
+      go (TyMult t)  = return $ MSingle (MulConst t)
+      go (TyMetaV t) = return $ MSingle (MulVar t)
+      go _           = do
+        reportError $ Other $ text "Expected multiplicity"
+        m <- newMetaTyVar
+        return $ MSingle (MulVar m) 
+
 data Mul = MulConst Multiplicity | MulVar MetaTyVar 
 
+instance MultiplicityLike Mul where
+  one   = MulConst One
+  omega = MulConst Omega
+  fromMultiplicity = MulConst 
+
+
+m2ty :: Multiplication -> [Ty]
+m2ty ms = case go ms [] of
+            Nothing -> [omega]
+            Just v  -> v 
+  where
+    go :: Multiplication -> [Ty] -> Maybe [Ty]
+    go (Multiply t1 t2) r = go t1 =<< go t2 r
+    go (MSingle m) r =
+      case m of
+        MulConst Omega -> Nothing 
+        MulConst One   -> return r
+        MulVar   t     -> return (TyMetaV t : r)
+        
+        
+-- (Multiply t1 t2) = mult t1 t2
+--   where
+--     mult [TyMult Omega] _ = TyMult Omega 
+--     mult []             t = t
+--     mult 
+    
+-- m2ty MUnit            = [one]
+-- m2ty (MSingle t)      = [t] 
+
+singletonUseMap :: Name -> UseMap
+singletonUseMap n = M.singleton n one 
+
+lookupUseMap :: Name -> UseMap -> Maybe Multiplication
+lookupUseMap = M.lookup 
+
+multiplyUseMap :: UseMap -> UseMap -> UseMap
+multiplyUseMap = M.merge (M.mapMissing $ \_ _ -> MSingle (MulConst Omega))
+                         (M.mapMissing $ \_ _ -> MSingle (MulConst Omega))
+                         (M.zipWithMatched $ \_ -> Multiply)
+
 mergeUseMap :: UseMap -> UseMap -> UseMap
-mergeUseMap = M.unionWith (\_ _ -> MulConst Omega)
+mergeUseMap = M.unionWith (\_ _ -> MSingle $ MulConst Omega)
+
+raiseUse :: Multiplication -> UseMap -> UseMap
+raiseUse m = fmap (lub m) 
+
+emptyUseMap :: UseMap 
+emptyUseMap = M.empty
+
+deleteUseMap :: Name -> UseMap -> UseMap
+deleteUseMap = M.delete 
 
 -- the following information is used. The information is kept globally. 
 data TypingContext =
   TypingContext { tcRefMvCount :: !(IORef Int),
                   tcRefSvCount :: !(IORef Int),
+                  tcTcLevel    :: TcLevel,
+                  tcConstraint :: !(IORef [TyConstraint]), 
                   tcTyEnv      :: TyEnv,    -- Current typing environment
                   tcSyn        :: SynTable, -- Current type synonym table
                   tcContexts   :: [S.LExp 'Renaming], -- parent expressions
                   tcLoc        :: Maybe SrcSpan,  -- focused part
-                  tcChecking   :: WhenChecking, 
+                  tcChecking   :: WhenChecking,
+                  tcDebugLevel :: !Int, 
                   tcRefErrors  :: !(IORef (Seq TypeError))
                                -- Type errors are accumulated for better error messages 
                   }
+
+
+instance C.Has KeyDebugLevel Int TC where
+  ask _ = TC $ asks tcDebugLevel
 
 initTypingContext :: IO TypingContext
 initTypingContext = do
   r1 <- newIORef 0
   r2 <- newIORef 0
-  r  <- newIORef Seq.empty 
+  r  <- newIORef Seq.empty
+  rc <- newIORef [] 
   return TypingContext { tcRefMvCount = r1,
                          tcRefSvCount = r2,
+                         tcTcLevel    = 0 , 
                          tcRefErrors  = r ,
+                         tcConstraint = rc, 
                          tcLoc        = Nothing, 
                          tcContexts   = [],
-                         tcChecking   = CheckingNone, 
+                         tcChecking   = CheckingNone,
+                         tcDebugLevel = 0, 
                          tcTyEnv      = M.empty,
                          tcSyn        = M.empty }
 
 -- This function must be called before each session of type checking. 
 refreshTC :: TypingContext -> IO TypingContext
 refreshTC tc = do
-  r <- newIORef Seq.empty 
+  r <- newIORef Seq.empty
+  rc <- newIORef [] 
   return $ tc { tcTyEnv     = M.empty,
                 tcSyn       = M.empty,
                 tcLoc       = Nothing,
+                tcConstraint = rc,
                 tcRefErrors = r,
                 tcChecking  = CheckingNone, 
                 tcContexts  = [] } 
-  
+
 setEnvs :: TypingContext -> TypeTable -> SynTable -> TypingContext 
 setEnvs tc tenv syn =
-  tc { tcTyEnv = fmap (, TyMult Omega) tenv,
+  tc { tcTyEnv = tenv,
        tcSyn   = syn }
+
+setDebugLevel :: TypingContext -> Int -> TypingContext
+setDebugLevel tc lv = tc { tcDebugLevel = lv } 
 
 runTC :: TypingContext -> TC a -> IO a
 runTC tc m = do 
@@ -210,8 +305,8 @@ instance MonadError AbortTyping TC where
   throwError e = TC $ ReaderT $ \_ -> throw e
   catchError (TC x) f = TC $ ReaderT $ \r ->
     catch (evaluate =<< runReaderT x r) (\y -> runReaderT (unTC $ f y) r) 
-  
-class MonadIO m => MonadTypeCheck m where
+
+class (C.Has KeyDebugLevel Int m, MonadIO m) => MonadTypeCheck m where
   -- Error reporting. The method does not abort the current computation. 
   reportError :: ErrorDetail -> m ()
 
@@ -222,22 +317,31 @@ class MonadIO m => MonadTypeCheck m where
   -- Ask the type of a symbol 
   askType :: SrcSpan -> Name -> m Ty 
 
+  askCurrentTcLevel :: m TcLevel 
 
   atLoc :: SrcSpan -> m r -> m r
   atExp :: S.LExp 'Renaming -> m r -> m r 
+
+
+  addConstraint  :: [TyConstraint] -> m ()
+  readConstraint :: m [TyConstraint]
+  setConstraint  :: [TyConstraint] -> m () 
 
   newMetaTyVar :: m MetaTyVar
   readTyVar  :: MetaTyVar -> m (Maybe Ty)
   writeTyVar :: MetaTyVar -> Ty -> m ()
 
-  getMetaTyVarsInEnv :: m [MetaTyVar] 
+  -- getMetaTyVarsInEnv :: m [MetaTyVar] 
 
   resolveSyn :: Ty -> m Ty 
 
   newSkolemTyVar :: TyVar -> m TyVar 
 
   -- type checking with a new entry in the type environment. 
-  withVar :: Name -> Ty -> MultTy -> m r -> m r
+  withVar :: Name -> Ty -> m r -> m r
+
+  -- m r is performed in the next level. 
+  pushLevel :: m r -> m r 
 
   -- type checking with a new entry in the synonym table.
   withSyn :: Name -> ([TyVar], Ty) -> m r -> m r
@@ -262,7 +366,16 @@ instance MonadTypeCheck m => MonadTypeCheck (ReaderT r m) where
   atLoc loc m = ReaderT $ \r -> atLoc loc (runReaderT m r)
   atExp ex m = ReaderT $ \r -> atExp ex (runReaderT m r)
 
+
+  addConstraint c = lift (addConstraint c)
+  readConstraint = lift readConstraint
+
+  setConstraint cs = lift (setConstraint cs)
+  
+
   askType l n = lift (askType l n)
+
+  askCurrentTcLevel = lift askCurrentTcLevel
 
   newMetaTyVar = lift newMetaTyVar
   newSkolemTyVar = lift . newSkolemTyVar
@@ -270,11 +383,13 @@ instance MonadTypeCheck m => MonadTypeCheck (ReaderT r m) where
   readTyVar tv = lift (readTyVar tv)
   writeTyVar tv t = lift (writeTyVar tv t)
 
-  withVar n t mult m = ReaderT $ \r -> withVar n t mult (runReaderT m r) 
+  pushLevel m = ReaderT $ \r -> pushLevel (runReaderT m r) 
+
+  -- withVar n t mult m = ReaderT $ \r -> withVar n t mult (runReaderT m r)
+  withVar n t m = ReaderT $ \r -> withVar n t (runReaderT m r) 
   withSyn tv t m = ReaderT $ \r -> withSyn tv t (runReaderT m r)
 
-
-  getMetaTyVarsInEnv = lift getMetaTyVarsInEnv
+  -- getMetaTyVarsInEnv = lift getMetaTyVarsInEnv
   resolveSyn ty = lift (resolveSyn ty) 
 
 instance MonadTypeCheck TC where
@@ -293,27 +408,48 @@ instance MonadTypeCheck TC where
 
   atExp e = local (\tc -> tc { tcContexts = e : tcContexts tc }) 
 
+  askCurrentTcLevel = asks tcTcLevel
+
+  readConstraint = do
+    csRef <- asks tcConstraint
+    liftIO $ readIORef csRef
+
+  addConstraint cs = do
+    csRef <- asks tcConstraint
+    liftIO $ modifyIORef csRef (cs ++) 
+
+  setConstraint cs = do
+    csRef <- asks tcConstraint
+    liftIO $ writeIORef csRef cs
+    
+  
+
   askType l n
     | Just k <- checkNameTuple n = 
         return $ tupleConTy k
     | otherwise = do        
         tyEnv <- asks tcTyEnv
         case M.lookup n tyEnv of
-          Just (ty,_) -> return ty
+          Just ty -> do 
+            ty' <- zonkType ty
+            debugPrint 4 $ ppr n <+> text ":" <+> ppr ty'
+            return ty' 
           Nothing -> do 
             atLoc l (reportError $ Undefined n)
             arbitraryTy
 
   newMetaTyVar = do
     cref <- asks tcRefMvCount
+    lv   <- asks tcTcLevel 
     cnt <- liftIO $ atomicModifyIORef' cref $ \cnt -> (cnt + 1, cnt)
     ref <- liftIO $ newIORef Nothing
-    return $ MetaTyVar cnt ref
+    lref <- liftIO $ newIORef lv 
+    return $ MetaTyVar cnt ref lref  
 
-  readTyVar (MetaTyVar _ ref) = TC $ 
+  readTyVar (MetaTyVar _ ref _) = TC $ 
     liftIO $ readIORef ref 
 
-  writeTyVar (MetaTyVar _ ref) ty = TC $ 
+  writeTyVar (MetaTyVar _ ref _) ty = TC $ 
     liftIO $ writeIORef ref (Just ty) 
 
 
@@ -330,8 +466,11 @@ instance MonadTypeCheck TC where
       goQ synMap (TyQual cs t) = 
         TyQual <$> mapM (goC synMap) cs <*> go synMap t
 
-      goC synMap (MEqMax t1 t2 t3) =
-        MEqMax <$> go synMap t1 <*> go synMap t2 <*> go synMap t3 
+      -- goC synMap (MEqMax t1 t2 t3) =
+      --   MEqMax <$> go synMap t1 <*> go synMap t2 <*> go synMap t3 
+
+      goC synMap (MSub ts1 ts2) =
+        MSub <$> go synMap ts1 <*> traverse (go synMap) ts2 
       
       go _synMap (TyVar x) = return (TyVar x)
       go synMap (TyForAll ns t) =
@@ -351,33 +490,42 @@ instance MonadTypeCheck TC where
             abortTyping
       go _ (TyMult m) = return $ TyMult m 
 
-  withVar x ty mult = 
-    local (\tc -> tc { tcTyEnv = M.insert x (ty, mult) (tcTyEnv tc) }) 
+  -- withVar x ty mult = 
+  --   local (\tc -> tc { tcTyEnv = M.insert x (ty, mult) (tcTyEnv tc) }) 
+
+  pushLevel =
+    local (\tc -> tc { tcTcLevel = succ (tcTcLevel tc) })
+
+  withVar x ty =
+    local (\tc -> tc { tcTyEnv = M.insert x ty (tcTyEnv tc) })
 
   withSyn tv v = 
     local (\tc -> tc { tcSyn = M.insert tv v (tcSyn tc) }) 
 
-  getMetaTyVarsInEnv = do
-    tyEnv <- asks tcTyEnv
-    let ts = concatMap (\(t,m) -> [t,m]) $ M.elems tyEnv
-    ts' <- mapM zonkType ts
-    return $ metaTyVars ts' -- (ts ++ multEnv)
+  -- getMetaTyVarsInEnv = do
+  --   tyEnv <- asks tcTyEnv
+  --   let ts = concatMap (\(t,m) -> [t,m]) $ M.elems tyEnv
+  --   ts' <- mapM zonkType ts
+  --   return $ metaTyVars ts' -- (ts ++ multEnv)
 
 
 newMetaTy :: MonadTypeCheck m => m Ty
 newMetaTy = TyMetaV <$> newMetaTyVar 
 
-withVars :: MonadTypeCheck m => [ (Name, Ty, MultTy) ] -> m r -> m r
-withVars ns m = foldr (\(n,t,mult) -> withVar n t mult) m ns
+-- withVars :: MonadTypeCheck m => [ (Name, Ty, MultTy) ] -> m r -> m r
+-- withVars ns m = foldr (\(n,t,mult) -> withVar n t mult) m ns
 
-withMultVar :: MonadTypeCheck m => MultTy -> m r -> m r
-withMultVar mult = withVar dummyName mult mult 
+-- withMultVar :: MonadTypeCheck m => MultTy -> m r -> m r
+-- withMultVar mult = withVar dummyName mult mult 
 
-withMultVars :: MonadTypeCheck m => [MultTy] -> m r -> m r
-withMultVars ms m = foldr withMultVar m ms 
+-- withMultVars :: MonadTypeCheck m => [MultTy] -> m r -> m r
+-- withMultVars ms m = foldr withMultVar m ms 
 
-withUnrestrictedVars :: MonadTypeCheck m => [ (Name, Ty) ] -> m r -> m r
-withUnrestrictedVars = withVars . map (\(n,t) -> (n, t, TyMult Omega))
+withVars :: MonadTypeCheck m => [ (Name, Ty) ] -> m r -> m r
+withVars ns m = foldr (\(n,t) -> withVar n t) m ns 
+
+-- withUnrestrictedVars :: MonadTypeCheck m => [ (Name, Ty) ] -> m r -> m r
+-- withUnrestrictedVars = withVars . map (\(n,t) -> (n, t, TyMult Omega))
 
 withSyns :: MonadTypeCheck m => [ (Name, ([TyVar], Ty)) ] -> m r -> m  r
 withSyns xs m = foldr (uncurry withSyn) m xs  
@@ -395,7 +543,7 @@ zonkMetaTyVar mv = {- trace "zonk!" $ -} do
 zonkType :: MonadTypeCheck m => Ty -> m Ty
 zonkType (TyVar n) = return $ TyVar n
 zonkType (TyCon c ts) =
-  TyCon c <$> mapM zonkType ts
+  TyCon c <$> traverse zonkType ts
 zonkType (TyForAll ns t) =
   TyForAll ns <$> zonkTypeQ t
 zonkType (TyMetaV m) = zonkMetaTyVar m
@@ -404,10 +552,10 @@ zonkType (TySyn origTy ty) =
 zonkType (TyMult m) = return (TyMult m) 
 
 zonkTypeQ :: MonadTypeCheck m => QualTy -> m QualTy
-zonkTypeQ (TyQual cs t) = TyQual <$> mapM zonkTypeC cs <*> zonkType t
+zonkTypeQ (TyQual cs t) = TyQual <$> traverse zonkTypeC cs <*> zonkType t
 
 zonkTypeC :: MonadTypeCheck m => TyConstraint -> m TyConstraint
-zonkTypeC (MEqMax t1 t2 t3) = MEqMax <$> zonkType t1 <*> zonkType t2 <*> zonkType t3
+zonkTypeC (MSub t1 ts2) = MSub <$> zonkType t1 <*> traverse zonkType ts2 
 
 zonkTypeError :: MonadTypeCheck m => TypeError -> m TypeError
 zonkTypeError (TypeError loc es wc res) = do
@@ -421,7 +569,7 @@ zonkWhenChecking (CheckingEquality t1 t2) =
 zonkWhenChecking (CheckingMoreGeneral t1 t2) =
   CheckingMoreGeneral <$> zonkType t1 <*> zonkType t2 
 zonkWhenChecking (CheckingConstraint cs) =
-  CheckingConstraint <$> mapM zonkTypeC cs
+  CheckingConstraint <$> traverse zonkTypeC cs
 zonkWhenChecking (OtherContext d) = return (OtherContext d)   
 zonkWhenChecking CheckingNone = return CheckingNone
 
@@ -455,7 +603,8 @@ freeTyVars types = do
       goQ bound (TyQual cs t) r = foldr (goC bound) (goT bound t r) cs
 
       goC :: [TyVar] -> TyConstraint -> [TyVar] -> [TyVar]
-      goC bound (MEqMax t1 t2 t3) r = goT bound t1 $ goT bound t2 $ goT bound t3 r 
+      goC bound (MSub t1 ts2) r = goT bound t1 (foldr (goT bound) r ts2) 
+--       goC bound (MEqMax t1 t2 t3) r = goT bound t1 $ goT bound t2 $ goT bound t3 r 
 
 
 unify :: MonadTypeCheck m => MonoTy -> MonoTy -> m ()
@@ -492,10 +641,15 @@ unifyMetaTyVar mv ty2 = do
 unifyUnboundMetaTyVar :: MonadTypeCheck m => MetaTyVar -> MonoTy -> m ()
 unifyUnboundMetaTyVar mv (TyMetaV mv2) = do 
   res <- readTyVar mv2
+  lv  <- readTcLevelMv mv
+  lv2 <- readTcLevelMv mv2 
   case res of
     Nothing   ->
-      unless (mv == mv2) $ 
-        writeTyVar mv (TyMetaV mv2) 
+      if | mv == mv2 -> return ()
+         | lv < lv2 ->
+             writeTyVar mv2 (TyMetaV mv) 
+         | otherwise -> 
+           writeTyVar mv (TyMetaV mv2) 
     Just ty2' -> unifyUnboundMetaTyVar mv ty2' 
 unifyUnboundMetaTyVar mv ty2 = do 
   ty2' <- zonkType ty2
@@ -505,7 +659,9 @@ unifyUnboundMetaTyVar mv ty2 = do
       reportError $ OccurrenceCheck mv ty2'
       -- We abort typing when occurrence check fails; otherwise, zonkType can diverge. 
       abortTyping 
-    else -- trace (show $ D.hsep [D.text "[assign]", ppr mv, D.text "=", D.align (ppr ty2')]) $ 
-      writeTyVar mv ty2'
+    else do
+      lvl <- readTcLevelMv mv
+      ty2'LevelAdjusted <- capLevel lvl ty2' 
+      writeTyVar mv ty2'LevelAdjusted
 
         

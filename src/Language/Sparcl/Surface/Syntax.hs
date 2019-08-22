@@ -38,16 +38,22 @@ data Ty p
   | TMult   Multiplicity
 
 -- TODO: Maybe, we should add Eq or Ord later. 
-data TConstraint p = MSub   (LTy p) (LTy p)          -- p ≦ q
-                   | MEqMax (LTy p) (LTy p) (LTy p) -- p = max q r 
+data TConstraint p = MSub [LTy p] [LTy p] -- max p1 ... pn <= max q1 ... qm
 
 type family XTId (p :: Pass) where
   XTId 'Parsing = SurfaceName
   XTId _        = Name 
 
 instance AllPretty p => Pretty (TConstraint p) where
-  ppr (MSub p1 p2)      = ppr p1 <+> text "<=" <+> ppr p2
-  ppr (MEqMax p1 p2 p3) = ppr p1 <+> text "~" <+> ppr p2 <+> text "*" <+> ppr p3 
+  ppr (MSub p1 p2)      = pprMs p1 <+> text "<=" <+> pprMs p2
+    where
+      pprMs []  = ppr One -- unit of multiplication 
+      pprMs [x] = ppr x
+      pprMs (x:xs) = go x xs
+
+      go x []     = ppr x
+      go x (y:ys) = ppr x <> text "*" <> go y ys 
+    
 
 
 isTyArr :: forall p. Typeable p => Proxy p -> XTId p -> Bool

@@ -149,8 +149,7 @@ introForAll ty =
 
     goL xs = go xs . unLoc 
 
-    goC xs (MEqMax t1 t2 t3) = goL xs t1 . goL xs t2 . goL xs t3
-    goC xs (MSub   t1 t2)    = goL xs t1 . goL xs t2 
+    goC xs (MSub   t1 t2)    = list (goL xs) t1 . list (goL xs) t2 
 
     go xs (TVar x) | x `Set.member` xs = id
                    | otherwise         = Set.insert x 
@@ -181,25 +180,41 @@ constraint =
 
 singleConstraint :: Monad m => P m [TConstraint 'Parsing]
 singleConstraint = do
-  m1 <- multiplicity 
-  maxConstraint m1 <|> subConstraint m1 
-    where
-      maxConstraint m1 = do
-        void symbolTyEq
-        m2 <- multiplicity
-        void symbolMult
-        m3 <- multiplicity
-        return [MEqMax m1 m2 m3]
+  ms1 <- multiplicities
+  leConstraint ms1 <|> eqConstraint ms1
+  where
+    leConstraint ms1 = do
+      void symbolTyLE
+      ms2 <- multiplicities
+      return [MSub ms1 ms2]
+    eqConstraint ms1 = do
+      void symbolTyEq
+      ms2 <- multiplicities
+      return [MSub ms1 ms2, MSub ms2 ms1]
+      
+    multiplicities =
+      multiplicity `P.sepBy` symbolMult 
+      
+  
+  -- m1 <- multiplicity 
+  -- maxConstraint m1 <|> subConstraint m1 
+  --   where
+  --     maxConstraint m1 = do
+  --       void symbolTyEq
+  --       m2 <- multiplicity
+  --       void symbolMult
+  --       m3 <- multiplicity
+  --       return [MEqMax m1 m2 m3]
 
-      subConstraint m1 = do
-        void symbolTyLE
-        m2 <- multiplicity
-        return [MSub m1 m2] 
+  --     subConstraint m1 = do
+  --       void symbolTyLE
+  --       m2 <- multiplicity
+  --       return [MSub m1 m2] 
 
-      -- TODO: move them to Helper.hs with appropriate naming. 
-      symbolTyLE = symbol "<=" <|> symbol "≦"
-      symbolTyEq = symbol "~" <|> symbol "≡"
-      symbolMult = symbol "*" <|> symbol "↑"
+    -- TODO: move them to Helper.hs with appropriate naming. 
+    symbolTyLE = symbol "<=" <|> symbol "≦"
+    symbolTyEq = symbol "~" <|> symbol "≡"
+    symbolMult = symbol "*" <|> symbol "↑"
 
 
 arrTy :: Monad m => P m (LTy 'Parsing)
@@ -263,10 +278,10 @@ mkTupleTy ts  = Loc (mconcat $ map location ts) $
                 TCon (BuiltIn $ nameTyTuple $ length ts) ts   
     
 multiplicity :: Monad m => P m (LTy 'Parsing)
-multiplicity = loc (one <|> omega <|> var) <* sp 
+multiplicity = loc (symOne <|> symOmega <|> var) <* sp 
   where
-    one   = TMult One <$ (symbol "1" <|> symbol "One")
-    omega = TMult Omega <$ (symbol "ω" <|> symbol "Omega" <|> symbol "Many")
+    symOne   = TMult One <$ (symbol "1" <|> symbol "One")
+    symOmega = TMult Omega <$ (symbol "ω" <|> symbol "Omega" <|> symbol "Many")
     var   = TVar  <$> varName 
 
 

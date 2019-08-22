@@ -1,30 +1,45 @@
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE DerivingStrategies #-}
 module Language.Sparcl.Typing.Type where
 
 import qualified Data.Map as M
 
-import Language.Sparcl.Pretty as D
+import Language.Sparcl.Pretty as D hiding ((<$>))
+import qualified Language.Sparcl.Pretty as D 
 import Language.Sparcl.Name
 import Language.Sparcl.Multiplicity
 
 import Data.IORef
 import Data.Maybe (fromMaybe) 
 
-data Ty = TyCon   Name [Ty]     -- ^ Type constructor 
-        | TyVar   TyVar          -- ^ Type variable         
-        | TyMetaV MetaTyVar      -- ^ Metavariables (to be substituted in type inf.) 
+import Control.Monad.IO.Class (MonadIO(..))
+
+import System.IO.Unsafe
+
+newtype TcLevel = TcLevel Int
+  deriving (Eq, Ord, Enum, Num)
+  deriving newtype Show 
+
+data Ty = TyCon   Name [Ty]       -- ^ Type constructor 
+        | TyVar   TyVar           -- ^ Type variable         
+        | TyMetaV MetaTyVar       -- ^ Metavariables (to be substituted in type inf.) 
         | TyForAll [TyVar] QualTy -- ^ polymorphic types 
-        | TySyn   Ty Ty          -- ^ type synonym (@TySym o u@ means @u@ but @o@ will be used for error messages)
-        | TyMult  Multiplicity   -- ^ 1 or ω
+        | TySyn   Ty Ty           -- ^ type synonym (@TySym o u@ means @u@ but @o@ will be used for error messages)
+        | TyMult  Multiplicity    -- ^ 1 or ω
          deriving (Eq, Ord, Show)
+
+instance MultiplicityLike Ty where
+  one   = TyMult One
+  omega = TyMult Omega 
+  fromMultiplicity = TyMult 
 
 data QualTy = TyQual [TyConstraint] BodyTy
   deriving (Eq, Ord, Show)
 
-data TyConstraint = MEqMax Ty Ty Ty 
+data TyConstraint = MSub Ty [Ty] 
   deriving (Eq, Ord, Show)
 
-data TyVar = BoundTv Name
+data TyVar = BoundTv  Name
            | SkolemTv TyVar Int -- used only for checking of which type is more general. 
   deriving Show 
 
@@ -41,9 +56,36 @@ instance Ord TyVar where
 
 
 instance Pretty TyVar where
-  ppr (BoundTv n) = ppr n
+  ppr (BoundTv n)    = ppr n
   ppr (SkolemTv n i) = ppr n D.<> D.text "@" D.<> D.int i 
 
+
+readTcLevelMv :: MonadIO m => MetaTyVar -> m TcLevel
+readTcLevelMv mv = liftIO $ readIORef (metaTcLevelRef mv)
+
+setTcLevelMv :: MonadIO m => MetaTyVar -> TcLevel -> m () 
+setTcLevelMv mv lvl = liftIO $ writeIORef (metaTcLevelRef mv) lvl 
+
+capLevel :: MonadIO m => TcLevel -> Ty -> m Ty
+capLevel n = go
+  where
+    cap = min n
+
+    goQ (TyQual cs t) = TyQual <$> traverse goC cs <*> go t
+
+    goC (MSub t ts) = MSub <$> go t <*> traverse go ts
+    
+    go (TyCon c ts) = TyCon c <$> traverse go ts
+    go (TyVar x)    = return $ TyVar x
+    go (TyMetaV mv) = do
+      lv <- readTcLevelMv mv
+      setTcLevelMv mv (cap lv) 
+      return $ TyMetaV mv 
+    go (TyForAll qs ts) = TyForAll qs <$> goQ ts
+    go (TySyn o u) = TySyn o <$> go u
+    go (TyMult p)  = return $ TyMult p 
+
+    
 
 instance Pretty Ty where
   pprPrec _ (TyCon c ts)
@@ -87,30 +129,33 @@ instance Pretty QualTy where
       d = parens $ hsep $ punctuate comma (map ppr cs)
 
 instance Pretty TyConstraint where
-  ppr (MEqMax ty1 ty2 ty3)
-    | ty1 == ty2 =
-      hsep [ ppr ty3 <+> text "<=" <+> ppr ty1 ]
-    | ty1 == ty3 =
-      hsep [ ppr ty2 <+> text "<=" <+> ppr ty1 ]       
-    | otherwise = 
-      ppr ty1 <+> text "~" <+> ppr ty2 <+> text "*" <+> ppr ty3
+  ppr (MSub ty1 tys2) = ppr ty1 <+> text "<=" <+> pprMs tys2
+    where
+      pprMs []  = ppr One
+      pprMs (x:xs) = pprMs' x xs
 
-data MetaTyVar = MetaTyVar !Int !TyRef 
+      pprMs' x []     = ppr x
+      pprMs' x (y:ys) = ppr x <+> text "*" <+> pprMs' y ys 
+    
+
+data MetaTyVar = MetaTyVar { metaID :: !Int, metaRef :: !TyRef, metaTcLevelRef ::  !(IORef TcLevel)}
  
 type TyRef = IORef (Maybe MonoTy)
 
 instance Pretty MetaTyVar where
-  ppr (MetaTyVar i _) = D.text $ "_" ++ show i 
+  ppr (MetaTyVar i _ r) =
+    let l = unsafePerformIO (readIORef r) 
+    in D.text $ "_" ++ show i ++ "[" ++ show l ++ "]" 
 
 instance Show MetaTyVar where
   show = prettyShow 
 
 instance Eq MetaTyVar where
   -- MetaTyVar i _ == MetaTyVar j _ = i == j
-  MetaTyVar _ i == MetaTyVar _ j = i == j 
+  MetaTyVar _ i _ == MetaTyVar _ j _ = i == j 
 
 instance Ord MetaTyVar where
-  MetaTyVar i _ <= MetaTyVar j _ = i <= j 
+  MetaTyVar i _ _ <= MetaTyVar j _ _ = i <= j 
 
 type BodyTy = MonoTy  -- forall body. only consider rank 1
 type PolyTy = Ty      -- polymorphic types
@@ -134,8 +179,7 @@ substTyQ :: [ (TyVar, Ty) ] -> QualTy -> QualTy
 substTyQ tbl' (TyQual cs t) = TyQual (map (substTyC tbl') cs) (substTy tbl' t)
 
 substTyC :: [ (TyVar, Ty) ] -> TyConstraint -> TyConstraint 
-substTyC tbl' (MEqMax t1 t2 t3)  = MEqMax (substTy tbl' t1) (substTy tbl' t2) (substTy tbl' t3)
-
+substTyC tbl' (MSub t1 ts2)  = MSub (substTy tbl' t1) (map (substTy tbl') ts2)
 
 metaTyVars :: [Ty] -> [MetaTyVar]
 metaTyVarsQ :: [QualTy] -> [MetaTyVar]
@@ -144,19 +188,19 @@ metaTyVarsC :: [TyConstraint] -> [MetaTyVar]
 (metaTyVars, metaTyVarsQ, metaTyVarsC) =
   (flip (apps goTy) [], flip (apps goQ) [], flip (apps goC) [])
   where
-    apps _f [] = id
-    apps f  (t:ts) = f t . apps f ts 
+    apps _f []     r = r
+    apps f  (t:ts) r = f t (apps f ts r) 
     
-    goTy (TyCon _ ts) = apps goTy ts
-    goTy (TyForAll _ t) = goQ t
-    goTy (TySyn _ t)    = goTy t
-    goTy (TyMetaV m)    = \r -> if m `elem` r then r else m:r
-    goTy _              = id 
+    goTy (TyCon _ ts)   r = apps goTy ts r
+    goTy (TyForAll _ t) r = goQ t r
+    goTy (TySyn _ t)    r = goTy t r
+    goTy (TyMetaV m)    r = if m `elem` r then r else m:r
+    goTy _              r = r 
 
-    goQ (TyQual cs t) = foldr (\c r -> goC c . r) (goTy t) cs
+    goQ (TyQual cs t) r = apps goC cs $ goTy t r 
 
     goC :: TyConstraint -> [MetaTyVar] -> [MetaTyVar]
-    goC (MEqMax t1 t2 t3)  = goTy t1 . goTy t2 . goTy t3 
+    goC (MSub ts1 ts2) r = goTy ts1 $ apps goTy ts2 r 
 
 bangTy :: Ty -> Ty
 bangTy ty = TyCon nameTyBang [ty]

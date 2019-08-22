@@ -21,6 +21,7 @@ common deps
 --      ghc  >=8.4 && <8.8,
       hint >= 0.8 && <1,
       exceptions >= 0.10 && <0.11, 
+      time, 
       template-haskell, 
       mtl,
       megaparsec, 
@@ -51,7 +52,9 @@ common deps
 
 library
   import: deps
-  exposed-modules:
+  exposed-modules:  
+      Language.Sparcl.Class
+      Language.Sparcl.DebugPrint
       Language.Sparcl.Algorithm.SAT 
       Language.Sparcl.SrcLoc
       Language.Sparcl.Name
@@ -76,7 +79,6 @@ library
       Language.Sparcl.Desugar
       Language.Sparcl.Value
       Language.Sparcl.Eval
-      Language.Sparcl.Class
       Language.Sparcl.Module
       Language.Sparcl.Command 
       Language.Sparcl.REPL
