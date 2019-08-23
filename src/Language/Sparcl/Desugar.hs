@@ -1,36 +1,35 @@
 {-# LANGUAGE ConstraintKinds #-}
 module Language.Sparcl.Desugar (
-  desugarExp, desugarTopDecls, 
+  desugarExp, desugarTopDecls,
   runDesugar
   ) where
 
-import Data.List     (groupBy)
-import Data.Function (on) 
-import Data.Void 
+import           Data.Function                  (on)
+import           Data.List                      (groupBy)
+import           Data.Void
 
-import Control.Monad.Reader
-import Control.Monad.State
+import           Control.Monad.Reader
+import           Control.Monad.State
 
+import           Language.Sparcl.SrcLoc
 import qualified Language.Sparcl.Surface.Syntax as S
-import Language.Sparcl.SrcLoc
 
-import Language.Sparcl.Name
+import           Language.Sparcl.Name
 
-import qualified Language.Sparcl.Core.Syntax as C
--- import Language.Sparcl.Typing.Type 
-import Language.Sparcl.Typing.TCMonad
-import qualified Language.Sparcl.Typing.Type as T 
-import Language.Sparcl.Pass
+import qualified Language.Sparcl.Core.Syntax    as C
+import           Language.Sparcl.Pass
+import           Language.Sparcl.Typing.TCMonad
+import qualified Language.Sparcl.Typing.Type    as T
 
-import Language.Sparcl.Pretty hiding ((<$>), list)
+import           Language.Sparcl.Pretty         hiding (list, (<$>))
 -- import Debug.Trace
 
-import Language.Sparcl.DebugPrint
+import           Language.Sparcl.DebugPrint
 
-type NameSource = Int -- de Brujin levels 
+type NameSource = Int -- de Brujin levels
 
--- Desugaring may refer to types, so it will use type checking monad. 
-type Desugar m a = MonadTypeCheck m => ReaderT NameSource m a 
+-- Desugaring may refer to types, so it will use type checking monad.
+type Desugar m a = MonadTypeCheck m => ReaderT NameSource m a
 
 type MonadDesugar m = (MonadReader Int m, MonadTypeCheck m)
 
@@ -43,25 +42,25 @@ withNewNames :: MonadDesugar m => Int -> ([Name] -> m r) -> m r
 withNewNames n k = do
   i <- ask
   local (+ n) (k $ map (flip Generated Desugaring) [i..i+n-1])
-  
+
 runDesugar :: MonadTypeCheck m => Desugar m a -> m a
-runDesugar m = runReaderT m 0 
+runDesugar m = runReaderT m 0
 
 numberOfArgs :: T.Ty -> Int
 numberOfArgs (T.TyCon n [_,_,t]) | n == nameTyArr = numberOfArgs t + 1
-numberOfArgs _                                    = 0 
+numberOfArgs _                   = 0
 
-desugarExp :: forall m. MonadDesugar m => S.LExp 'TypeCheck -> m (C.Exp Name) 
+desugarExp :: forall m. MonadDesugar m => S.LExp 'TypeCheck -> m (C.Exp Name)
 desugarExp (Loc _ expr) = go expr
   where
-    go :: S.Exp 'TypeCheck -> m (C.Exp Name) 
+    go :: S.Exp 'TypeCheck -> m (C.Exp Name)
 
     go (S.Var (x, _)) = return $ C.Var x
     go (S.Lit l)      = return $ C.Lit l
-    go (S.App e1 e2)  = 
-      mkApp <$> desugarExp e1 <*> desugarExp e2 
+    go (S.App e1 e2)  =
+      mkApp <$> desugarExp e1 <*> desugarExp e2
 
-    go (S.Abs [] e) = desugarExp e 
+    go (S.Abs [] e) = desugarExp e
     go (S.Abs (p:ps) e) = withNewName $ \n -> do
       r <- desugarAlts [(p, S.Clause (noLoc $ S.Abs ps e) (S.HDecls () []) Nothing)]
       return $ mkAbs n (makeCase (C.Var n) r)
@@ -69,9 +68,9 @@ desugarExp (Loc _ expr) = go expr
     go (S.Con (c, ty)) = do
       ty' <- zonkType ty
       let n = numberOfArgs ty'
-      withNewNames n $ \xs -> do 
+      withNewNames n $ \xs -> do
         let b = C.Con c [ C.Var x | x <- xs ]
-        return $ foldr C.Abs b xs 
+        return $ foldr C.Abs b xs
     -- go (S.Con (c,_ty) es) =
     --   C.Con c <$> mapM desugarExp es
 
@@ -83,66 +82,66 @@ desugarExp (Loc _ expr) = go expr
       rs' <- desugarAlts alts
       return (C.Case e' rs')
 
-    go S.Lift = 
-      withNewNames 2 $ \[x, y] -> 
-      return $ foldr C.Abs (C.Lift (C.Var x) (C.Var y)) [x,y] 
-      
+    go S.Lift =
+      withNewNames 2 $ \[x, y] ->
+      return $ foldr C.Abs (C.Lift (C.Var x) (C.Var y)) [x,y]
+
     go (S.Sig e _) = desugarExp e
 
     go (S.Let (S.Decls v _) _) = absurd v
     go (S.Let (S.HDecls xinfo bss) e) =
       case bss of
         [] -> desugarExp e
-        bs:rest -> do 
+        bs:rest -> do
           e' <- go (S.Let (S.HDecls xinfo rest) e)
           bs' <- mapM (\(Loc _ (S.DDef (n,ty) pcs)) -> do
                           r <- desugarRHS pcs
-                          return (n, ty, r)) bs 
-          return $ C.Let bs' e'            
+                          return (n, ty, r)) bs
+          return $ C.Let bs' e'
 
     go (S.Parens e) = desugarExp e
-    
-    go (S.Op (op, _ty) e1 e2) = do 
+
+    go (S.Op (op, _ty) e1 e2) = do
       e1' <- desugarExp e1
       e2' <- desugarExp e2
-      return $ C.App (C.App (C.Var op) e1') e2' 
-    
+      return $ C.App (C.App (C.Var op) e1') e2'
+
     go S.Unlift =
       withNewName $ \x ->
       return $ C.Abs x (C.Unlift (C.Var x))
 
     go S.RPin =
-      withNewName $ \x -> withNewName $ \y -> 
+      withNewName $ \x -> withNewName $ \y ->
       return $ C.Abs x $ C.Abs y $ C.RPin (C.Var x) (C.Var y)
 
     go (S.RCon (c, ty)) = do
       ty' <- zonkType ty
       let n = numberOfArgs ty'
-      withNewNames n $ \xs -> do 
+      withNewNames n $ \xs -> do
         let b = C.RCon c [ C.Var x | x <- xs ]
-        return $ foldr C.Abs b xs 
+        return $ foldr C.Abs b xs
 
     go (S.RDO as er) = go (unLoc $ desugarRDO as er)
 
 
 
 desugarRDO :: [(S.LPat 'TypeCheck, Loc (S.Exp 'TypeCheck))] -> Loc (S.Exp 'TypeCheck) -> Loc (S.Exp 'TypeCheck)
-desugarRDO = go [] id 
+desugarRDO = go [] id
   where
     app e1 e2 = noLoc (S.App e1 e2)
-    go _  _    [] er = er -- this branch is used only for the expressions of the form "revdo before e0"
+    go _  _    [] er = er -- this branch is used only for the expressions of the form "revdo in e0"
     go ps kpin [(p,e)] er =
       let pinExp = kpin e
           pat    = noLoc $ S.PREV $ foldr1 (\p1 p2 -> makeTuplePatS [p1, p2]) $ reverse (p:ps)
       in noLoc $ S.Case pinExp [ (pat, S.Clause er (S.HDecls () []) Nothing)]
-      
+
     go ps kpin ((p,e):as) er =
       let k hole = kpin $ noLoc S.RPin `app`
                           e `app`
                           noLoc (S.Abs [p] hole)
-      in go (p:ps) k as er 
-      
-      
+      in go (p:ps) k as er
+
+
 makeTupleExpC :: [C.Exp Name] -> C.Exp Name
 makeTupleExpC [e] = e
 makeTupleExpC es  = C.Con (nameTuple (length es)) es
@@ -151,24 +150,22 @@ makeTuplePatS :: [S.LPat 'TypeCheck] -> S.LPat 'TypeCheck
 makeTuplePatS [p] = p
 makeTuplePatS ps  = noLoc (S.PCon (nameTuple len, tupleConTy len) ps)
   where
-    len = length ps 
+    len = length ps
 
 makeTuplePatC :: [C.Pat Name] -> C.Pat Name
 makeTuplePatC [p] = p
-makeTuplePatC ps  = C.PCon (nameTuple (length ps)) ps 
+makeTuplePatC ps  = C.PCon (nameTuple (length ps)) ps
 
 makeCase :: Ord n => C.Exp n -> [(C.Pat n, C.Exp n)] -> C.Exp n
 makeCase (C.Con n []) [(C.PCon m [], e)] | n == m = e
-makeCase e0 [(C.PVar x, e)] = mkApp (mkAbs x e) e0 
-makeCase e0 alts = C.Case e0 alts 
-  
+makeCase e0 [(C.PVar x, e)]              = mkApp (mkAbs x e) e0
+makeCase e0 alts                         = C.Case e0 alts
+
 
 -- Removes apparent eta-redex.
--- This is correct as Abs binds linear variable. So, occurence of x in "\x -> e x" means that
--- there is not free occurrence x in e. 
 mkAbs :: Ord n => n -> C.Exp n -> C.Exp n
 mkAbs n (C.App e (C.Var m)) | n == m && n `notElem` C.freeVars e = e
-mkAbs n e                                                        = C.Abs n e
+mkAbs n e                   = C.Abs n e
 
 mkApp :: Eq n => C.Exp n -> C.Exp n -> C.Exp n
 mkApp (C.Abs n e) e1 =
@@ -184,34 +181,34 @@ mkApp e1 e2          = C.App e1 e2
 
 
 data Occ a = Once a | None a | More
-  deriving Functor 
+  deriving Functor
 
 liftO2 :: (a -> b -> r) -> Occ a -> Occ b -> Occ r
 liftO2 f (None a) (None b) = None (f a b)
 liftO2 f (None a) (Once b) = Once (f a b)
 liftO2 f (Once a) (None b) = Once (f a b)
 liftO2 _ (Once _) (Once _) = More
-liftO2 _ _        _        = More 
+liftO2 _ _        _        = More
 
 -- @punchHoleAffine n e@ checks if @n@ occurs at most once in @e@, and
--- returned a holed expression if so. 
+-- returned a holed expression if so.
 
 punchHoleAffine :: Eq n => n -> C.Exp n -> Maybe (C.Exp n -> C.Exp n)
 punchHoleAffine n = conv . go
   where
     conv More     = Nothing
     conv (None f) = Just f
-    conv (Once f) = Just f 
+    conv (Once f) = Just f
 
     list :: Monad f => [Occ (f a)] -> Occ (f [a])
     list = foldr (liftO2 $ liftM2 (:)) (None $ pure [])
 
     go (C.Var x) | x == n    = Once id
-                 | otherwise = None (const $ C.Var x) 
+                 | otherwise = None (const $ C.Var x)
 
     go (C.Lit l) = None (const $ C.Lit l)
     go (C.App e1 e2) =
-      liftO2 (liftM2 C.App) (go e1) (go e2) 
+      liftO2 (liftM2 C.App) (go e1) (go e2)
 
     go (C.Abs x e) | x == n    = None (const $ C.Abs x e)
                    | otherwise = fmap (C.Abs x) <$> go e
@@ -221,8 +218,8 @@ punchHoleAffine n = conv . go
 
     go (C.Bang e) = (C.Bang .) <$> go e
 
-    go (C.Case _ _) = More     
-    go (C.Let _ _) = More 
+    go (C.Case _ _) = More
+    go (C.Let _ _) = More
     go (C.RCase _ _) = More
 
     go (C.Lift e1 e2) =
@@ -233,105 +230,19 @@ punchHoleAffine n = conv . go
       fmap (C.RCon c) <$> list (map go es)
 
     go (C.RPin e1 e2) =
-      liftO2 (liftM2 C.RPin) (go e1) (go e2) 
-      
+      liftO2 (liftM2 C.RPin) (go e1) (go e2)
 
--- runCheckSubst :: CheckSubst a -> a
--- runCheckSubst (Substituted a)  = a
--- runCheckSubst (Untouched a) = a
 
--- -- subst n e e1 = Left  e1' means that e1 does not contain n (and e1' = e1) 
--- -- subst n e e1 = Right e1' means that e1 contains n (no futher substitution is needed)
--- subst :: Eq n => n -> C.Exp n -> C.Exp n -> C.Exp n
--- subst n t = runCheckSubst . go
---   where
---     go (C.Var x) | n == x    = Substituted t
---                  | otherwise = Untouched (C.Var x)
---     go (C.Lit l) = Untouched (C.Lit l)
---     go (C.App e1 e2) =
---       case go e1 of
---         Substituted e1' -> Substituted (C.App e1' e2)
---         Untouched   e1' -> C.App e1' <$> go e2
-
---     go (C.Abs x e) | x == n    = Untouched (C.Abs x e)
---                    | otherwise = C.Abs x <$> go e  
-
---     go (C.Con c es) =
---       C.Con c <$> gos es
-    
---     go (C.Bang e) = C.Bang <$> go e
---     go (C.Case e0 alts) =
---       case go e0 of
---         Substituted e0' -> Substituted $ C.Case e0' alts
---         Untouched e0'   -> C.Case e0' <$> goAlts alts
-
---     go (C.Let bind e) =
---       case goBind bind of
---         Substituted bind' -> Substituted (C.Let bind' e) 
---         Untouched bind'   -> C.Let bind' <$> go e
-
---     go (C.Lift e1 e2) =
---       uncurry C.Lift <$> goPair e1 e2 
-
---     go (C.Unlift e) = C.Unlift <$> go e
-
---     go (C.RCon c es) = C.RCon c <$> gos es
-    
---     go (C.RCase e ralts) = case go e of
---       Substituted e' -> Substituted (C.RCase e' ralts)
---       Untouched   e' -> C.RCase e' <$> goRAlts ralts
-
---     go (C.RPin e1 e2) =
---       uncurry C.RPin  <$> goPair e1 e2 
-
---     gos [] = Untouched []
---     gos (e:es) =
---       case go e of
---         Substituted e' -> Substituted (e':es)
---         Untouched   e' -> (e':) <$> gos es 
-
---     goPair e1 e2 =
---       case go e1 of
---         Substituted e1' -> Substituted (e1', e2)
---         Untouched   e1' -> (\y -> (e1', y)) <$> go e2 
-
---     goAlts [] = Untouched []
---     goAlts ((p,e):alts) =
---       if n `elem` C.freeVarsP p then
---         ((p,e):) <$> goAlts alts
---       else
---         case go e of
---           Substituted e' -> Substituted ((p,e'):alts)
---           Untouched   e' -> ((p,e'):) <$> goAlts alts 
-        
---     goRAlts [] = Untouched []
---     goRAlts ((p,e1,e2):ralts) =
---       if n `elem ` C.freeVarsP p then
---         ((p,e1,e2):) <$> goRAlts ralts
---       else
---         case goPair e1 e2 of
---           Substituted (e1', e2') -> Substituted ((p,e1',e2'):ralts)
---           Untouched   (e1', e2') -> ((p,e1',e2'):) <$> goRAlts ralts
-
---     goBind bs =
---       if n `elem` map fst lhs then
---         Untouched bs
---       else
---         zipWith (\(x,ty) e -> (x,ty,e)) lhs <$> gos rhs 
---       where
---         lhs = map (\(x,ty,_) -> (x,ty)) bs
---         rhs = map (\(_,_, e) -> e)      bs
-                               
 desugarRHS :: MonadDesugar m => [([S.LPat 'TypeCheck], S.Clause 'TypeCheck)] -> m (C.Exp Name)
-desugarRHS pcs = withNewNames len $ \ns -> do 
-  let e0 = makeTupleExpC [C.Var n | n <- ns]  
+desugarRHS pcs = withNewNames len $ \ns -> do
+  let e0 = makeTupleExpC [C.Var n | n <- ns]
   let alts = map (\(ps, c) -> (makeTuplePatS ps, c)) pcs
-  alts' <- desugarAlts alts  
-  return $ foldr C.Abs (makeCase e0 alts') ns 
+  alts' <- desugarAlts alts
+  return $ foldr C.Abs (makeCase e0 alts') ns
   where
     len = case pcs of
             []       -> 0
-            (ps,_):_ -> length ps 
+            (ps,_):_ -> length ps
 
 data CPat = CPHole
           | CPVar  Name
@@ -343,19 +254,27 @@ data CPat = CPHole
 instance Pretty CPat where
   pprPrec _ CPHole    = text "_"
   pprPrec _ (CPVar n) = ppr n
-  pprPrec _ (CPCon n []) = ppr n 
+  pprPrec _ (CPCon n []) = ppr n
   pprPrec k (CPCon n ps) = parensIf (k > 0) $ ppr n <+> hsep (map (pprPrec 1) ps)
-  pprPrec _ (CPBang p)   = text "!" <> pprPrec 1 p 
-                           
+  pprPrec _ (CPBang p)   = text "!" <> pprPrec 1 p
 
+-- mergeCPat :: MonadDesugar m => CPat -> CPat -> m CPat
+-- mergeCPat = do
+
+
+-- | 'separatePat' separate a unidirectional pattern from a pattern.
+--   For example, for a patter @Cons a (rev b)@, it returns
+--   @Cons a _@ and @[b]@. Extracted reversible patterns are ordered
+--   from left-to-right. For example, for @Cons (rev a) (rev b)@
+--   it generates @Cons _ _@ and @[a,b]@.
 separatePat :: S.LPat 'TypeCheck -> (CPat, [S.LPat 'TypeCheck])
-separatePat pat = go False (unLoc pat) 
+separatePat pat = go False (unLoc pat)
   where
     go _ (S.PVar (x, _ty)) = (CPVar x, [])
     go b (S.PCon (c, _ty) ps) =
       let (ps', subs) = gos b ps
-      in (CPCon c ps', subs) 
-      
+      in (CPCon c ps', subs)
+
     go _ (S.PREV p)  = (CPHole, [p])
     go _ (S.PWild (x, _ty)) =
       -- (if b then CPVar x else CPBang (CPVar x), [])
@@ -364,14 +283,18 @@ separatePat pat = go False (unLoc pat)
       let (p', subs) = go True (unLoc p)
       in (CPBang p', subs)
 
-    gos _ []       = ([], []) 
+    gos _ []       = ([], [])
     gos b (p:ps) =
       let (p', subsP) = go b (unLoc p)
           (ps', subsPs) = gos b ps
-      in (p':ps', subsP ++ subsPs) 
+      in (p':ps', subsP ++ subsPs)
 
+{- |
+'fillCPat' does the opposite of 'separatePat', but it generates
+'C.Pat' instead of 'S.Pat'.
+-}
 fillCPat :: CPat -> [C.Pat Name] -> C.Pat Name
-fillCPat = evalState . go 
+fillCPat = evalState . go
   where
     next :: State [C.Pat Name] (C.Pat Name)
     next = do
@@ -380,10 +303,10 @@ fillCPat = evalState . go
       return p
 
     go :: CPat -> State [C.Pat Name] (C.Pat Name)
-    go (CPVar x) = return (C.PVar x)
+    go (CPVar x)    = return (C.PVar x)
     go (CPCon c ps) = C.PCon c <$> mapM go ps
     go (CPBang p)   = C.PBang <$> go p
-    go CPHole       = next 
+    go CPHole       = next
 
 convertClauseU :: MonadDesugar m => S.Clause 'TypeCheck -> m (C.Exp Name)
 convertClauseU (S.Clause body ws Nothing) =
@@ -391,17 +314,17 @@ convertClauseU (S.Clause body ws Nothing) =
 convertClauseU _ = error "Cannot happen."
 
 convertClauseR :: MonadDesugar m => S.Clause 'TypeCheck -> m (C.Exp Name, C.Exp Name)
-convertClauseR (S.Clause body ws wi) = do 
+convertClauseR (S.Clause body ws wi) = do
   body' <- desugarExp (noLoc $ S.Let ws body)
   we' <- case wi of
            Just e  -> desugarExp e
-           Nothing -> generateWithExp body' 
+           Nothing -> generateWithExp body'
   return (body', we')
   where
     generateWithExp _ = withNewName $ \n ->
-      return $ C.Abs n $ C.Con conTrue [] 
+      return $ C.Abs n $ C.Con conTrue []
     -- generateWithExp _ = withNewName $ \n -> withNewName $ \n' ->
-    --   -- FIXME: more sophisticated with-exp generation. 
+    --   -- FIXME: more sophisticated with-exp generation.
     --   return $ C.Bang $ C.Abs n $ C.Case (C.Var n) [ (C.PBang (C.PVar n'), C.Con conTrue []) ]
 
 desugarAlts :: forall m. MonadDesugar m => [(S.LPat 'TypeCheck, S.Clause 'TypeCheck)] -> m [(C.Pat Name, C.Exp Name)]
@@ -416,22 +339,22 @@ desugarAlts alts = do
   where
     makeBCases :: [ (CPat, [S.LPat 'TypeCheck], S.Clause 'TypeCheck) ] -> m (C.Pat Name, C.Exp Name)
     makeBCases [] = error "Cannot happen"
-    makeBCases ((cp, [], c):_) = do 
+    makeBCases ((cp, [], c):_) = do
           -- In this case, the original pattern does not have any REV.
-          -- so @length ralts > 1@ means that thare are some redundant patterns. 
+          -- so @length ralts > 1@ means that thare are some redundant patterns.
           -- TOOD: say warning.
 
           let p = fillCPat cp []
           e <- convertClauseU c
           return (p, e)
-    makeBCases ralts@((cp, firstSub, _):_) = 
+    makeBCases ralts@((cp, firstSub, _):_) =
           -- Notice that all @cp@ and @length sub@ are the same in @ralts@.
-          withNewNames len $ \xs -> do 
+          withNewNames len $ \xs -> do
             let outP = fillCPat cp [C.PVar x | x <- xs]
-            let re0 = makeTupleExpC [ C.Var x | x <- xs ] 
+            let re0 = makeTupleExpC [ C.Var x | x <- xs ]
 
             pes <- forM ralts $ \(_, sub, c) -> do
-              sub' <- mapM desugarPat sub 
+              sub' <- mapM desugarPat sub
               let rp = makeTuplePatC sub'
               (re, rw) <- convertClauseR c
               return (rp, re, rw)
@@ -446,13 +369,13 @@ desugarPat = go . unLoc
     go (S.PVar (x, _ty))    = return $ C.PVar x
     go (S.PCon (c, _ty) ps) = C.PCon c <$> mapM desugarPat ps
     go _                    = error "desugarPat: Cannot happen."
-    
+
 desugarTopDecls ::
   MonadDesugar m => S.Decls 'TypeCheck (S.LDecl 'TypeCheck) -> m (C.Bind Name)
 desugarTopDecls (S.Decls v _) = absurd v
-desugarTopDecls (S.HDecls _ bss) = do 
+desugarTopDecls (S.HDecls _ bss) = do
   let defs = [ (n, ty, pcs) | bs <- bss, Loc _ (S.DDef (n, ty) pcs) <- bs ]
   forM defs $ \(n, ty, pcs) -> do
     e <- desugarRHS pcs
     return (n, ty, e)
-    
+
