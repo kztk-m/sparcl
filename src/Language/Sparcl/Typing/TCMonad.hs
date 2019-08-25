@@ -307,149 +307,48 @@ runTC m = do
     errs' <- mapM zonkTypeError $ toList errs
     staticError $ vcat (map ppr errs')
     else do
-    return res 
+    return res
 
--- runTC :: TypingContext -> TC a -> IO a
--- runTC tc m = do 
---   res <- runReaderT (unTC m) tc `catch` (\(_ :: AbortTyping) -> return undefined)
---   errs <- readIORef (tcRefErrors tc)  
---   if not (Seq.null errs) -- if this is not empty, it must be the case that res is not undefined. 
---     then do
---     errs' <- runReaderT (unTC $ mapM zonkTypeError $ toList errs) tc 
---     staticError $ vcat (map ppr errs')    
---     else
---     return res
 
--- runTCWith :: TypingContext -> TypeTable -> SynTable -> TC a -> IO a 
--- runTCWith tc tytbl syntbl m = do 
---   tc' <- refreshTC tc
---   runTC (setEnvs tc' tytbl syntbl) m 
-  
-    
 runTCWith :: MonadTypeCheck m => TypeTable -> SynTable -> m a -> m a
 runTCWith tytbl syntbl m = do
-  runTC $ C.local (C.key @KeyTC) (\tc -> setEnvs tc tytbl syntbl) m 
-
--- -- A concrete implementation of typing checking monad. 
--- newtype TC a = TC { unTC :: ReaderT TypingContext IO a }
---   deriving (Functor, Applicative, Monad, MonadReader TypingContext, MonadIO)
-
--- instance MonadError AbortTyping TC where
---   throwError e = TC $ ReaderT $ \_ -> throw e
---   catchError (TC x) f = TC $ ReaderT $ \r ->
---     catch (evaluate =<< runReaderT x r) (\y -> runReaderT (unTC $ f y) r) 
-
-
--- class (C.Has KeyDebugLevel Int m, MonadIO m) => MonadTypeCheck m where
---   -- Error reporting. The method does not abort the current computation. 
---   reportError :: ErrorDetail -> m ()
-
---   whenChecking :: WhenChecking -> m r -> m r 
-
---   abortTyping :: m a 
-
---   -- Ask the type of a symbol 
---   askType :: SrcSpan -> Name -> m Ty 
-
---   askCurrentTcLevel :: m TcLevel 
-
---   atLoc :: SrcSpan -> m r -> m r
---   atExp :: S.LExp 'Renaming -> m r -> m r 
-
-
---   addConstraint  :: [TyConstraint] -> m ()
---   readConstraint :: m [TyConstraint]
---   setConstraint  :: [TyConstraint] -> m () 
-
---   newMetaTyVar :: m MetaTyVar
---   readTyVar  :: MetaTyVar -> m (Maybe Ty)
---   writeTyVar :: MetaTyVar -> Ty -> m ()
-
---   -- getMetaTyVarsInEnv :: m [MetaTyVar] 
-
---   resolveSyn :: Ty -> m Ty 
-
---   newSkolemTyVar :: TyVar -> m TyVar 
-
---   -- type checking with a new entry in the type environment. 
---   withVar :: Name -> Ty -> m r -> m r
-
---   -- m r is performed in the next level. 
---   pushLevel :: m r -> m r 
-
---   -- type checking with a new entry in the synonym table.
---   withSyn :: Name -> ([TyVar], Ty) -> m r -> m r
+  tc <- C.ask (C.key @KeyTC)
+  tc' <- liftIO $ refreshTC tc
+  C.local (C.key @KeyTC) (\_ -> setEnvs tc' tytbl syntbl) $ runTC m
 
 
 tupleConTy :: Int -> Ty
 tupleConTy n =
   let tvs = map BoundTv [ Alpha i (User $ 't':show i) | i <- [1..n] ]
       tys = map TyVar tvs
-  in TyForAll tvs $ TyQual [] $ foldr (-@) (tupleTy tys) tys        
+  in TyForAll tvs $ TyQual [] $ foldr (-@) (tupleTy tys) tys
 
 arbitraryTy :: MonadTypeCheck m => m Ty
 arbitraryTy = TyMetaV <$> newMetaTyVar
 
 
--- instance MonadTypeCheck m => MonadTypeCheck (ReaderT r m) where
---   abortTyping = lift abortTyping
-
---   reportError mes = lift (reportError mes)
---   whenChecking t m = ReaderT $ whenChecking t . runReaderT m 
-
---   atLoc loc m = ReaderT $ \r -> atLoc loc (runReaderT m r)
---   atExp ex m = ReaderT $ \r -> atExp ex (runReaderT m r)
-
-
---   addConstraint c = lift (addConstraint c)
---   readConstraint = lift readConstraint
-
---   setConstraint cs = lift (setConstraint cs)
-  
-
---   askType l n = lift (askType l n)
-
---   askCurrentTcLevel = lift askCurrentTcLevel
-
---   newMetaTyVar = lift newMetaTyVar
---   newSkolemTyVar = lift . newSkolemTyVar
-
---   readTyVar tv = lift (readTyVar tv)
---   writeTyVar tv t = lift (writeTyVar tv t)
-
---   pushLevel m = ReaderT $ \r -> pushLevel (runReaderT m r) 
-
---   -- withVar n t mult m = ReaderT $ \r -> withVar n t mult (runReaderT m r)
---   withVar n t m = ReaderT $ \r -> withVar n t (runReaderT m r) 
---   withSyn tv t m = ReaderT $ \r -> withSyn tv t (runReaderT m r)
-
---   -- getMetaTyVarsInEnv = lift getMetaTyVarsInEnv
---   resolveSyn ty = lift (resolveSyn ty) 
-
--- instance MonadTypeCheck TC where
-
 abortTyping :: MonadTypeCheck m => m a
-abortTyping = throwM AbortTyping 
+abortTyping = throwM AbortTyping
 
 reportError :: MonadTypeCheck m => ErrorDetail -> m ()
 reportError mes = do
   tc <- C.ask (C.key @KeyTC)
-  let err = TypeError (tcLoc tc) (tcContexts tc) (tcChecking tc) mes 
+  let err = TypeError (tcLoc tc) (tcContexts tc) (tcChecking tc) mes
   liftIO $ modifyIORef (tcRefErrors tc) $ \s -> s Seq.:|> err
 
-whenChecking ::  MonadTypeCheck m => WhenChecking -> m a -> m a 
+whenChecking ::  MonadTypeCheck m => WhenChecking -> m a -> m a
 whenChecking t =
   C.local (C.key @KeyTC) (\tc -> tc { tcChecking = t })
 
 
-atLoc :: MonadTypeCheck m => SrcSpan -> m a -> m a 
+atLoc :: MonadTypeCheck m => SrcSpan -> m a -> m a
 atLoc NoLoc = id
 atLoc loc   = C.local (C.key @KeyTC) (\tc -> tc { tcLoc = Just loc })
 
-atExp :: MonadTypeCheck m => S.LExp 'Renaming -> m r -> m r 
-atExp e = C.local (C.key @KeyTC) (\tc -> tc { tcContexts = e : tcContexts tc }) 
+atExp :: MonadTypeCheck m => S.LExp 'Renaming -> m r -> m r
+atExp e = C.local (C.key @KeyTC) (\tc -> tc { tcContexts = e : tcContexts tc })
 
-askCurrentTcLevel :: MonadTypeCheck m => m TcLevel 
+askCurrentTcLevel :: MonadTypeCheck m => m TcLevel
 askCurrentTcLevel = C.asks (C.key @KeyTC) tcTcLevel
 
 readConstraint :: MonadTypeCheck m => m [TyConstraint]
