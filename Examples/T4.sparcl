@@ -1,0 +1,9 @@
+
+
+data List a = Nil | Cons a (List a) 
+
+def null Nil = True
+       | _   = False  
+
+def f (rev Nil) n      = rev Nil with null 
+    | (rev Cons a x) m = rev Cons a (f x (m-1)) 

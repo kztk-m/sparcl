@@ -69,7 +69,4 @@ Typing `:h` and then enter will show the following help.
 Known Issues
 ------------
 
-* The desugaring of Haskell-like rules do not work correctly, due to
-  depth-first renaming of variables. Thus, please use `case` explicitly 
-  if one wants to mix rev and non-rev patterns. 
 * The system supports importing other modules but this functionality is not tested yet.

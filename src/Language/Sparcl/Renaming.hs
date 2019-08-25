@@ -10,55 +10,56 @@ This modules performs:
 - resolution of fixity:
 - stratifying mutual recursions.
 
-Notice that renaming is a pure operation. 
+Notice that renaming is a pure operation.
 
 -}
 
-import qualified Data.Map as M 
-import Data.Void
-import qualified Data.Set as S
+import qualified Data.Map                       as M
+import qualified Data.Set                       as S
+import           Data.Void
 
-import Data.Graph as G 
-import Data.List (partition)
+import           Data.Graph                     as G
+import           Data.List                      (partition)
 
-import Control.Monad.Reader 
-import Control.Monad.Except
+import           Control.Monad.Except
+import           Control.Monad.Reader
+import           Control.Monad.State
 
-import Control.Arrow (first) 
+import           Control.Arrow                  (first)
 
-import Language.Sparcl.Name 
-import Language.Sparcl.Surface.Syntax 
-import Language.Sparcl.Pass
-import Language.Sparcl.SrcLoc
-import Language.Sparcl.Pretty hiding ((<$>))
+import           Language.Sparcl.Name
+import           Language.Sparcl.Pass
+import           Language.Sparcl.Pretty         hiding ((<$>))
+import           Language.Sparcl.SrcLoc
+import           Language.Sparcl.Surface.Syntax
 
 
 -- | Operator Precedence Table
-type OpTable = M.Map Name (Prec, Assoc) 
+type OpTable = M.Map Name (Prec, Assoc)
 
 -- | Tables for Defined Names
---   
+--
 --   This is implemented as a mapping from surface names to sets of names.
 --   Notice that one name can be mapped to multiple names.
 --
---   (This feature is not implemented yet.) 
---   A surface can be qualified. For example, 
+--   (This feature is not implemented yet.)
+--   A surface can be qualified. For example,
 --
 --   import Some.Module as F ( name )
 --
 --   introduces three entries:
---  
+--
 --       Bare (User "name")               -> Original "Some.Module" "name" (Bare (User "name"))
 --       Qual "F" (User "Name")           -> Original "Some.Module" "name" (Qual "F" (User "Name"))
 --       Qual "Some.Module" (User "Name") -> Original "Some.Module" "name" (Qual "SomeModule" (User "Name"))
 --
---   
+--
 type NameTable = M.Map SurfaceName (S.Set (ModuleName, NameBase))
 
-data RenamingEnv = RnEnv { rnOpTable    :: OpTable, 
-                           rnNameTable  :: NameTable }
+data RenamingEnv = RnEnv { rnOpTable   :: OpTable,
+                           rnNameTable :: NameTable }
 
-type Renaming a = ReaderT RenamingEnv (Either (SrcSpan,Doc)) a 
+type Renaming a = ReaderT RenamingEnv (Either (SrcSpan,Doc)) a
 
 runRenaming :: NameTable -> OpTable -> Renaming a -> Either (SrcSpan, Doc) a
 runRenaming ntbl optbl m = runReaderT m (RnEnv optbl ntbl)
@@ -77,23 +78,23 @@ isAssocLeft (k1, a1) (k2, a2)
   | otherwise = False
 
 isAssocRight :: (Prec, Assoc) -> (Prec, Assoc) -> Bool
-isAssocRight (k1, a1) (k2, a2) 
+isAssocRight (k1, a1) (k2, a2)
   | k1 <  k2 = True
   | k1 == k2, R <- a1, R <- a2 = True
-  | otherwise = False 
-  
+  | otherwise = False
 
-type LocalNames = M.Map NameBase Name 
+
+type LocalNames = M.Map NameBase Name
 
 type FreeVars  = S.Set Name
-type BoundVars = S.Set Name 
+type BoundVars = S.Set Name
 
 unBare :: SurfaceName -> NameBase
 unBare (Bare n) = n
 unBare _        = error "unBare: no Bare"
 
 resolveImportedName :: SrcSpan -> SurfaceName -> Renaming Name
-resolveImportedName _ (BuiltIn n) = return n 
+resolveImportedName _ (BuiltIn n) = return n
 resolveImportedName loc n = do
   mp <- asks rnNameTable
   case fmap S.toList (M.lookup n mp) of
@@ -104,99 +105,101 @@ resolveImportedName loc n = do
                        vcat (map ppr qns)
       in throwError (loc, text "Ambiguous name" <+> ppr n <> nest 2 (line <> d) )
     _ ->
-      throwError (loc, text "Unbound name: " <+> ppr n) 
+      throwError (loc, text "Unbound name: " <+> ppr n)
 
 resolveName :: SrcSpan -> LocalNames -> SurfaceName -> Renaming Name
 resolveName loc localnames n
   | Bare bn <- n, Just n' <- M.lookup bn localnames = return n'
-  | otherwise = 
+  | otherwise =
       resolveImportedName loc n
 
+-- De Bruijn Level
+type DBLevel = Int
 
-renameExp :: Int -> LocalNames -> LExp 'Parsing -> Renaming (LExp 'Renaming, FreeVars)
+renameExp :: DBLevel -> LocalNames -> LExp 'Parsing -> Renaming (LExp 'Renaming, FreeVars)
 renameExp level localnames (Loc loc expr) = first (Loc loc) <$> go expr
   where
 --    reLoc = Loc loc
     go (Var n) = do
       n' <- resolveName loc localnames n
       return (Var n', S.singleton n')
-    
+
     go (Lit l) = return (Lit l, S.empty)
 
     go (App e1 e2) = do
       (e1', fv1) <- renameExp level localnames e1
       (e2', fv2) <- renameExp level localnames e2
-      return (App e1' e2', S.union fv1 fv2) 
-                  
-    go (Abs ps e) = 
+      return (App e1' e2', S.union fv1 fv2)
+
+    go (Abs ps e) =
       renamePats level localnames S.empty ps $ \ps' level' localnames' bvP -> do
-      (e', fv) <- renameExp level' localnames' e 
-      return (Abs ps' e', fv S.\\ bvP) 
+        (e', fv) <- renameExp level' localnames' e
+        return (Abs ps' e', fv S.\\ bvP)
 
     go (Con c) = do
       c' <- resolveImportedName loc c
-      return (Con c', S.empty) 
-        
+      return (Con c', S.empty)
+
     go (Bang e) = do
       (e', fv) <- renameExp level localnames e
-      return (Bang e', fv) 
+      return (Bang e', fv)
 
     go Lift = return (Lift, S.empty)
-    
+
 
     go (Sig e t) = do
       (e', fv) <- renameExp level localnames e
       t' <- renameTy 0 M.empty t
-      return (Sig e' t', fv) 
-      
+      return (Sig e' t', fv)
 
-    go (Case e0 alts) = do 
-      (e0', fv)    <- renameExp level localnames e0 
+
+    go (Case e0 alts) = do
+      (e0', fv)    <- renameExp level localnames e0
       (alts', fvs) <- unzip <$> mapM (renameAlt level localnames) alts
       return (Case e0' alts', S.unions (fv:fvs))
 
-    go (Let decls e) = 
+    go (Let decls e) =
       renameLocalDecls level localnames decls $ \decls' level' localnames' bvD fvD _ -> do
         (e', fvE) <- renameExp level' localnames' e
         return (Let decls' e', S.union fvE fvD S.\\ bvD)
 
-    go (Parens e) = do 
+    go (Parens e) = do
       (e', fvE) <- renameExp level localnames e
       return (Parens e', fvE)
 
     go (Op n e1 e2) = do
-      n' <- resolveName loc localnames n 
+      n' <- resolveName loc localnames n
       (e', fv) <- rearrangeOp loc level localnames n' e1 e2
       return (unLoc e', S.insert n' fv)
 
 
     go (RCon c) = do
       e' <- RCon <$> resolveImportedName loc c
-      return (e', S.empty) 
+      return (e', S.empty)
 
     go Unlift = return (Unlift, S.empty)
 
     go RPin = return (RPin, S.empty)
-      
+
 
     go (RDO as er) = do
       (as', er', fvs) <- goAs level localnames as er
       return (RDO as' er', fvs)
 
-    goAs :: Int -> LocalNames -> [(LPat 'Parsing, LExp 'Parsing)] -> LExp 'Parsing
+    goAs :: DBLevel -> LocalNames -> [(LPat 'Parsing, LExp 'Parsing)] -> LExp 'Parsing
             -> Renaming ([(LPat 'Renaming, LExp 'Renaming)] , LExp 'Renaming, FreeVars)
     goAs lv lns [] er = do
       (er', fvs) <- renameExp lv lns er
-      return ([], er', fvs) 
-    goAs lv lns ((p,e):as) er = do            
+      return ([], er', fvs)
+    goAs lv lns ((p,e):as) er = do
       (e', fvs1) <- renameExp lv lns e
-      renamePat lv lns S.empty p $ \p' lv' lns' bvs' -> do 
+      renamePat lv lns S.empty p $ \p' lv' lns' bvs' -> do
         (as', er', fvs2) <- goAs lv' lns' as er
         return ((p',e'):as', er', S.union fvs1 (fvs2 `S.difference` bvs'))
-      
-      
-      
-      
+
+
+
+
 
 {-
 Currently, the operators are parsed as if they were left-associative
@@ -214,21 +217,21 @@ Let us focus on op1 and op2 first. The association (x1 op1 x2) op2 x3
 is right only if
 
   - op1 and op2 has the same precedence and op1 and op2 are
-    left-associative, or 
+    left-associative, or
   - op1 has the greater precedence than op2.
 
-Instead, it should be associated as x1 op1 (x2 op2 x3) 
+Instead, it should be associated as x1 op1 (x2 op2 x3)
 
   - op1 and op2 has the same precedence and op1 and op2 are
-    right-associative, or 
+    right-associative, or
   - op2 has the greater precedence than op1.
 
 Otherwise, we need parentheses; that is, there is a syntax error.
 
-In the former case, it is rather straight forward to proceed the 
+In the former case, it is rather straight forward to proceed the
 
 -}
-rearrangeOp :: SrcSpan -> Int -> LocalNames -> Name -> LExp 'Parsing -> LExp 'Parsing
+rearrangeOp :: SrcSpan -> DBLevel -> LocalNames -> Name -> LExp 'Parsing -> LExp 'Parsing
                -> Renaming (LExp 'Renaming, FreeVars)
 rearrangeOp loc level localnames op exp1 exp2 = do
   (exp2', fv2) <- renameExp level localnames exp2
@@ -256,22 +259,22 @@ rearrangeOp loc level localnames op exp1 exp2 = do
       go l e1 op' e2' = do
         (e1', fv1) <- renameExp level localnames e1
         return (opExp l op' e1' e2' , fv1)
-                                         
-      opExp l opName e1 e2 = Loc l (Op opName e1 e2)                                   
+
+      opExp l opName e1 e2 = Loc l (Op opName e1 e2)
 
 
 
-renameAlt :: Int -> LocalNames -> (LPat 'Parsing, Clause 'Parsing)
+renameAlt :: DBLevel -> LocalNames -> (LPat 'Parsing, Clause 'Parsing)
              -> Renaming ((LPat 'Renaming, Clause 'Renaming), FreeVars)
-renameAlt level localnames (p, c) = do 
+renameAlt level localnames (p, c) = do
   when (not (hasRev $ unLoc p) && hasWith c) $
     throwError (location p, text "Unidirectional patterns cannot have `with'-clause")
-  renamePat level localnames S.empty p $ \p' level' localnames' bvP -> do 
+  renamePat level localnames S.empty p $ \p' level' localnames' bvP -> do
     (c', fv) <- renameClause level' localnames' c
-    return ((p', c'), fv S.\\ bvP) 
-  
+    return ((p', c'), fv S.\\ bvP)
 
-renameClause :: Int -> LocalNames -> Clause 'Parsing -> Renaming (Clause 'Renaming, FreeVars)
+
+renameClause :: DBLevel -> LocalNames -> Clause 'Parsing -> Renaming (Clause 'Renaming, FreeVars)
 renameClause level localnames (Clause e decls w) =
   renameLocalDecls level localnames decls $ \decls' level' localnames' fvD fvB _ -> do
      (e', fv)  <- renameExp level' localnames' e
@@ -279,16 +282,16 @@ renameClause level localnames (Clause e decls w) =
              Just ew -> do
                (ew', fvw) <- renameExp level' localnames' ew
                return (Just ew', fvw)
-             Nothing -> return (Nothing, S.empty)               
+             Nothing -> return (Nothing, S.empty)
      return (Clause e' decls' w', S.unions [fvB, fv, fvw] S.\\ fvD)
 
 type CurrentNames = LocalNames
 
 renameLocalDeclsWork
-  :: Int -> LocalNames -> CurrentNames -> Decls 'Parsing (LDecl 'Parsing)
-  -> (Decls 'Renaming (LDecl 'Renaming) -> Int -> LocalNames -> BoundVars -> FreeVars -> OpTable -> Renaming r)
+  :: DBLevel -> LocalNames -> CurrentNames -> Decls 'Parsing (LDecl 'Parsing)
+  -> (Decls 'Renaming (LDecl 'Renaming) -> DBLevel -> LocalNames -> BoundVars -> FreeVars -> OpTable -> Renaming r)
   -> Renaming r
-renameLocalDeclsWork _ _ _ (HDecls v _) _ = absurd v 
+renameLocalDeclsWork _ _ _ (HDecls v _) _ = absurd v
 renameLocalDeclsWork level' localnames currnames (Decls _ decls) cont = do
   let defs = [ (loc, unBare n, pcs)  | Loc loc (DDef n pcs) <- decls ]
   let sigs = [ (loc, unBare n, t)    | Loc loc (DSig n t) <- decls ]
@@ -296,8 +299,8 @@ renameLocalDeclsWork level' localnames currnames (Decls _ decls) cont = do
 
   let localnames' = M.union currnames localnames
 
-  
-  sigs' <- forM sigs $ \(loc, n, t) -> 
+
+  sigs' <- forM sigs $ \(loc, n, t) ->
     case M.lookup n currnames of
       Just n' -> do
         t' <- renameTy 0 M.empty t
@@ -305,16 +308,17 @@ renameLocalDeclsWork level' localnames currnames (Decls _ decls) cont = do
       Nothing ->
         throwError (loc, text "Signature declaration is allowed only for the current level name:" <+> ppr n)
 
-  localOpTable <- fmap M.fromList $ forM fixs $ \(loc, n, p, a) -> 
+  localOpTable <- fmap M.fromList $ forM fixs $ \(loc, n, p, a) ->
     case M.lookup n currnames of
       Just n' -> return (n', (p, a))
       Nothing ->
         throwError (loc, text "Fixity declaration is allowed only for the current level name:" <+> ppr n)
-        
+
 
   deffvs <- forM defs $ \(loc, n, pcs) -> local (\c -> c { rnOpTable = M.union localOpTable (rnOpTable c) }) $ do
     unless (checkEqualLengths (map fst pcs)) $
       throwError (loc, text "Function" <+> ppr n <+> text "has different numbers of arguments.")
+
     let Just n' = M.lookup n currnames -- must succeed
     (pcs', fvs) <- fmap unzip $ forM pcs $ \(ps, c) -> do
       when (all (not . hasRev . unLoc) ps && hasWith c) $
@@ -325,11 +329,11 @@ renameLocalDeclsWork level' localnames currnames (Decls _ decls) cont = do
 
     return (Loc loc (DDef n' pcs'), S.unions fvs)
 
-  let defss = insertSigs sigs' $ stratify deffvs 
+  let defss = insertSigs sigs' $ stratify deffvs
 
-  let fvs   = S.unions $ map snd deffvs 
+  let fvs   = S.unions $ map snd deffvs
 
-  cont (HDecls () defss) level' localnames' (S.fromList $ M.elems currnames) fvs localOpTable   
+  cont (HDecls () defss) level' localnames' (S.fromList $ M.elems currnames) fvs localOpTable
   where
     insertSigs :: [(SrcSpan, Name, LTy 'Renaming)] -> [[LDecl 'Renaming]] -> [[LDecl 'Renaming]]
     insertSigs _sigs [] = [] -- sigs must be []
@@ -338,7 +342,7 @@ renameLocalDeclsWork level' localnames currnames (Decls _ decls) cont = do
       in ([Loc loc (DSig n t) | (loc, n, t) <- sigs1] ++ defs) : insertSigs sigs2 defss
 
     definedInDefs (_, n, _) defs = n `elem` [ nm | Loc _ (DDef nm _) <- defs ]
-    
+
     stratify :: [(LDecl 'Renaming, FreeVars)] -> [[LDecl 'Renaming]]
     stratify deffvs = map unSCC (G.stronglyConnComp graph)
       where
@@ -347,29 +351,29 @@ renameLocalDeclsWork level' localnames currnames (Decls _ decls) cont = do
 
         graph = [ (decl, n, S.toList fv) | (decl@(Loc _ (DDef n _)), fv) <- deffvs ]
 
-    checkEqualLengths :: [[a]] -> Bool 
-    checkEqualLengths pss = 
+    checkEqualLengths :: [[a]] -> Bool
+    checkEqualLengths pss =
       let rs = map length pss
-      in and $ zipWith (==) rs (tail rs) 
+      in and $ zipWith (==) rs (tail rs)
 
 
 hasRev :: Pat p -> Bool
-hasRev (PVar _) = False
-hasRev (PREV _)  = True 
+hasRev (PVar _)    = False
+hasRev (PREV _)    = True
 hasRev (PCon _ ps) = any (hasRev . unLoc) ps
-hasRev (PWild _) = False
-hasRev (PBang p) = hasRev (unLoc p)
+hasRev (PWild _)   = False
+hasRev (PBang p)   = hasRev (unLoc p)
 
 hasWith :: Clause p -> Bool
 hasWith (Clause _ _ (Just _)) = True
-hasWith _                     = False 
-    
+hasWith _                     = False
 
-renameLocalDecls :: Int -> LocalNames -> Decls 'Parsing (LDecl 'Parsing) 
-                    -> (Decls 'Renaming (LDecl 'Renaming) -> Int -> LocalNames -> BoundVars -> FreeVars -> OpTable -> Renaming r)
+
+renameLocalDecls :: DBLevel -> LocalNames -> Decls 'Parsing (LDecl 'Parsing)
+                    -> (Decls 'Renaming (LDecl 'Renaming) -> DBLevel -> LocalNames -> BoundVars -> FreeVars -> OpTable -> Renaming r)
                     -> Renaming r
-renameLocalDecls _ _ (HDecls v _) _ = absurd v                     
-renameLocalDecls level localnames ds@(Decls _ decls) cont = do 
+renameLocalDecls _ _ (HDecls v _) _ = absurd v
+renameLocalDecls level localnames ds@(Decls _ decls) cont = do
   let defs = [ (loc, unBare n, pcs)  | Loc loc (DDef n pcs) <- decls ]
   let ns  = [ n | (_, n, _) <- defs ]
   let ns' = zipWith Alpha [level..(level + length ns - 1)] ns
@@ -377,7 +381,7 @@ renameLocalDecls level localnames ds@(Decls _ decls) cont = do
 
   -- current level names:
   -- NB: sig and fixity declarations are allowed only for current level names.
-  let currnames = foldr (uncurry M.insert) M.empty $ zip ns ns' 
+  let currnames = foldr (uncurry M.insert) M.empty $ zip ns ns'
   renameLocalDeclsWork level' localnames currnames ds cont
 
 
@@ -385,7 +389,7 @@ renameTopDecls ::
   ModuleName -> Decls 'Parsing (Loc (TopDecl 'Parsing))
   -> Renaming (Decls 'Renaming (Loc (Decl 'Renaming)),
                [Loc (Name, [Name], [Loc (CDecl 'Renaming)])],
-               [Loc (Name, [Name], LTy 'Renaming)], 
+               [Loc (Name, [Name], LTy 'Renaming)],
                BoundVars,
                OpTable)
 renameTopDecls _ (HDecls v _) = absurd v
@@ -393,17 +397,17 @@ renameTopDecls currentModule (Decls _ topdecls) = do
   let decls = [ Loc loc d | Loc loc (DDecl d) <- topdecls ]
   let defs = [ (loc, unBare n, pcs)  | Loc loc (DDef n pcs) <- decls ]
 
-  let dataDecls = [ (loc, unBare n, map unBare ns, cds) | 
+  let dataDecls = [ (loc, unBare n, map unBare ns, cds) |
                     Loc loc (DData n ns cds) <- topdecls ]
   let typeDecls = [ (loc, unBare n, map unBare ns, ty) | Loc loc (DType n ns ty) <- topdecls ]
-  
+
   let ns  = [ n | (_, n, _) <- defs ]
-  let names = ns 
+  let names = ns
               ++ [ n | (_, n, _, _) <- dataDecls ]
               ++ [ unBare n | (_, _, _, cds) <- dataDecls, Loc _ (CDecl n _) <- cds ]
               ++ [ n | (_, n, _, _) <- typeDecls ]
-  -- FIXME: check there is no overlaps in names. 
-  
+  -- FIXME: check there is no overlaps in names.
+
   let toOrig n = Original currentModule n (Bare n)
   let nameTbl =
         M.fromListWith S.union $
@@ -415,9 +419,9 @@ renameTopDecls currentModule (Decls _ topdecls) = do
 
   let currnames = foldr (uncurry M.insert) M.empty $ zip ns ns'
 
-                  
+
   local (\rnEnv -> rnEnv { rnNameTable = M.unionWith S.union nameTbl (rnNameTable rnEnv) }) $ do
-    typeDecls' <- forM typeDecls $ \(loc, n, tyns, ty) -> do 
+    typeDecls' <- forM typeDecls $ \(loc, n, tyns, ty) -> do
       let tyns' = zipWith Alpha [0..] tyns
       ty' <- renameTy (length tyns) (M.fromList $ zip tyns tyns') ty
       return $ Loc loc (toOrig n, tyns', ty')
@@ -425,11 +429,11 @@ renameTopDecls currentModule (Decls _ topdecls) = do
     dataDecls' <- forM dataDecls $ \(loc, n, tyns, cdecls) -> do
       let tyns' = zipWith Alpha [0..] tyns
       let nm = M.fromList $ zip tyns tyns'
-      cdecls' <- forM cdecls $ \(Loc cloc (CDecl c tys)) -> do 
+      cdecls' <- forM cdecls $ \(Loc cloc (CDecl c tys)) -> do
         tys' <- mapM (renameTy (length tyns) nm) tys
         return $ Loc cloc (CDecl (toOrig $ unBare c) tys')
       return $ Loc loc (toOrig n, tyns', cdecls')
-    
+
     renameLocalDeclsWork level' M.empty currnames (Decls () decls) $ \ds' _ _ _boundVars _ opTable ->
       return (ds',
               dataDecls',
@@ -439,24 +443,24 @@ renameTopDecls currentModule (Decls _ topdecls) = do
 
   -- where
   --   mapDecls f (Decls i ds)   = Decls  i (map f ds)
-  --   mapDecls f (HDecls i dss) = HDecls i (map (map f) dss) 
-  
+  --   mapDecls f (HDecls i dss) = HDecls i (map (map f) dss)
 
-renameTy :: Int -> LocalNames -> LTy 'Parsing -> Renaming (LTy 'Renaming)
-renameTy level localnames lty = go level localnames lty (\lty' _ _ -> return lty') 
+
+renameTy :: DBLevel -> LocalNames -> LTy 'Parsing -> Renaming (LTy 'Renaming)
+renameTy level localnames lty = go level localnames lty (\lty' _ _ -> return lty')
   where
-    go lv nm (Loc loc ty) k = go' lv nm loc ty $ \ty' lv' nm' -> k (Loc loc ty') lv' nm' 
+    go lv nm (Loc loc ty) k = go' lv nm loc ty $ \ty' lv' nm' -> k (Loc loc ty') lv' nm'
 
-    gos lv nm [] k = k [] lv nm 
+    gos lv nm [] k = k [] lv nm
     gos lv nm (t:ts) k =
       go lv nm t $ \t' lv' nm' ->
                      gos lv' nm' ts $ \ts' lv'' nm'' ->
-                                        k (t':ts') lv'' nm'' 
-    
-    go' lv nm loc (TVar x) k = do 
+                                        k (t':ts') lv'' nm''
+
+    go' lv nm loc (TVar x) k = do
       let bn = unBare x
       case M.lookup bn nm of
-        Just n  -> k (TVar n) lv nm 
+        Just n  -> k (TVar n) lv nm
         Nothing -> throwError (loc, text "Unbound type variable:" <+> ppr x)
 
     go' lv nm loc (TCon c ts) k = do
@@ -468,7 +472,7 @@ renameTy level localnames lty = go level localnames lty (\lty' _ _ -> return lty
       let bn = unBare x
       let x'  = Alpha lv bn
       let nm' = M.insert bn x' nm
-      go (lv+1) nm' t $ \t' lv'' nm'' -> k (TForall x' t') lv'' nm'' 
+      go (lv+1) nm' t $ \t' lv'' nm'' -> k (TForall x' t') lv'' nm''
 
     go' lv nm _loc (TMult m) k = k (TMult m) lv nm
     go' lv nm _loc (TQual cs t) k =
@@ -483,39 +487,103 @@ renameTy level localnames lty = go level localnames lty (\lty' _ _ -> return lty
     goC lv nm (MSub ts1 ts2) k =
       gos lv  nm  ts1 $ \ts1' lv1 nm1 ->
       gos lv1 nm1 ts2 $ \ts2' lv2 nm2 ->
-      k (MSub ts1' ts2') lv2 nm2 
-      
+      k (MSub ts1' ts2') lv2 nm2
 
-        
 
-renamePats :: Int -> LocalNames -> BoundVars -> [LPat 'Parsing] 
-              -> ([LPat 'Renaming] -> Int -> LocalNames -> BoundVars -> Renaming r) -> Renaming r
-renamePats level localnames bvs [] k = k [] level localnames bvs 
-renamePats level localnames bvs (p:ps) k =
-  renamePat level localnames bvs p $ \p' lv' nm' bvs' ->
-   renamePats lv' nm' bvs' ps $ \ps' lv'' nm'' bvs''  -> k (p' : ps') lv'' nm'' bvs''
 
-renamePat :: Int -> LocalNames -> BoundVars -> LPat 'Parsing
-             -> (LPat 'Renaming -> Int -> LocalNames -> BoundVars -> Renaming r) -> Renaming r
-renamePat level localnames boundVars (Loc loc pat) cont = go pat $ \p' lv nm bvs -> cont (Loc loc p') lv nm bvs
+{- |
+'renamePats' renames variable as DFS manner, but renaming of patterns under REV is done
+after renaming of other part. For example,
+
+   A x (rev y) z  -> A 0 (rev 2) 1
+
+-}
+
+type ToBeFilled a = State [LPat 'Renaming] a
+
+renamePats1 :: DBLevel -> LocalNames -> BoundVars -> [LPat 'Parsing]
+               -> (ToBeFilled [LPat 'Renaming] -> [LPat 'Parsing] ->
+                   DBLevel -> LocalNames -> BoundVars -> Renaming r) -> Renaming r
+renamePats1 level localnames boundVars z cont =
+  case z of
+    []   -> cont (pure []) [] level localnames boundVars
+    p:ps ->
+      renamePat1  level  localnames  boundVars  p  $ \p'  qp  level'  localnames'  boundVars' ->
+      renamePats1 level' localnames' boundVars' ps $ \ps' qps level'' localnames'' boundVars'' ->
+      cont ((:) <$> p' <*> ps') (qp ++ qps) level'' localnames'' boundVars''
+
+
+renamePat1 :: DBLevel -> LocalNames -> BoundVars -> LPat 'Parsing
+              -> (ToBeFilled (LPat 'Renaming) -> [LPat 'Parsing] ->
+                  DBLevel -> LocalNames -> BoundVars -> Renaming r) -> Renaming r
+
+renamePat1 level localnames boundVars (Loc loc pat) cont =
+  go pat $ \p' qs level' localnames' boundVars' -> cont (Loc loc <$> p') qs level' localnames' boundVars'
   where
-    go (PVar x) k = 
+    go (PVar x) k =
       let bn = unBare x
-          n' = Alpha level bn 
+          n' = Alpha level bn
           nm' = M.insert bn n' localnames
-      in k (PVar n') (level + 1) nm' (S.insert n' boundVars)
+      in k (pure $ PVar n') [] (level + 1) nm' (S.insert n' boundVars)
+
+    go (PWild _) k =
+      let n'  = Alpha level (User "_")
+      in k (pure $ PWild n') [] (level + 1) localnames boundVars
+
     go (PCon c ps) k = do
       c' <- resolveImportedName loc c
-      renamePats level localnames boundVars ps $ \ps' level' localnames' bvs' ->
-        k (PCon c' ps') level' localnames' bvs' 
-    go (PBang p) k = 
-      renamePat level localnames boundVars p $ \p' level' localnames' bvs' ->
-        k (PBang p') level' localnames' bvs'
-    go (PREV p) k = 
-      renamePat level localnames boundVars p $ \p' level' localnames' bvs' ->
-        k (PREV p') level' localnames' bvs' 
+      renamePats1 level localnames boundVars ps $ \ps' queue level' localnames' boundVars' ->
+        k (PCon c' <$> ps') queue level' localnames' boundVars'
+    go (PBang p) k =
+      renamePat1 level localnames boundVars p $ \p' queue level' localnames' boundVars' ->
+        k (PBang <$> p') queue level' localnames' boundVars'
+    go (PREV p) k =
+      k (PREV <$> fillLater) [p] level localnames boundVars
 
-    go (PWild _) k = do
-      let n'  = Alpha level (User "_")
-      k (PWild n') (level + 1) localnames boundVars 
-        
+    fillLater = do
+      n:ns <- get
+      put ns
+      return n
+
+renamePats :: DBLevel -> LocalNames -> BoundVars -> [LPat 'Parsing]
+              -> ([LPat 'Renaming] -> DBLevel -> LocalNames -> BoundVars -> Renaming r) -> Renaming r
+renamePats level localnames boundVars [] k =
+  k [] level localnames boundVars
+renamePats level localnames boundVars ps k =
+  renamePats1 level  localnames  boundVars  ps $ \ps' qs level1 localnames1 boundVars1 ->
+  renamePats  level1 localnames1 boundVars1 qs $ \qs' level2 localnames2 boundVars2 ->
+  k (evalState ps' qs') level2 localnames2 boundVars2
+
+-- renamePats level localnames bvs [] k = k [] level localnames bvs
+-- renamePats level localnames bvs (p:ps) k =
+--   renamePat level localnames bvs p $ \p' lv' nm' bvs' ->
+--    renamePats lv' nm' bvs' ps $ \ps' lv'' nm'' bvs''  -> k (p' : ps') lv'' nm'' bvs''
+
+renamePat :: DBLevel -> LocalNames -> BoundVars -> LPat 'Parsing
+             -> (LPat 'Renaming -> DBLevel -> LocalNames -> BoundVars -> Renaming r) -> Renaming r
+renamePat level localnames boundVars p k =
+  renamePat1 level  localnames  boundVars  p  $ \p' qs level1 localnames1 boundVars1 ->
+  renamePats level1 localnames1 boundVars1 qs $ \qs'   level2 localnames2 boundVars2 ->
+  k (evalState p' qs') level2 localnames2 boundVars2
+-- renamePat level localnames boundVars (Loc loc pat) cont = go pat $ \p' lv nm bvs -> cont (Loc loc p') lv nm bvs
+--   where
+--     go (PVar x) k =
+--       let bn = unBare x
+--           n' = Alpha level bn
+--           nm' = M.insert bn n' localnames
+--       in k (PVar n') (level + 1) nm' (S.insert n' boundVars)
+--     go (PCon c ps) k = do
+--       c' <- resolveImportedName loc c
+--       renamePats level localnames boundVars ps $ \ps' level' localnames' bvs' ->
+--         k (PCon c' ps') level' localnames' bvs'
+--     go (PBang p) k =
+--       renamePat level localnames boundVars p $ \p' level' localnames' bvs' ->
+--         k (PBang p') level' localnames' bvs'
+--     go (PREV p) k =
+--       renamePat level localnames boundVars p $ \p' level' localnames' bvs' ->
+--         k (PREV p') level' localnames' bvs'
+
+--     go (PWild _) k = do
+--       let n'  = Alpha level (User "_")
+--       k (PWild n') (level + 1) localnames boundVars
+
