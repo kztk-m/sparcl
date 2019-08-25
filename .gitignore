@@ -3,7 +3,7 @@
 *.prof
 *.profiterole.html
 *.profiterole.txt
-.stack.yaml.lock
+stack.yaml.lock
 t.out
 .sparcl
 *~
