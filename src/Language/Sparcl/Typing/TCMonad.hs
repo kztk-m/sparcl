@@ -1,74 +1,74 @@
 {-# LANGUAGE ConstraintKinds #-}
-{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TupleSections   #-}
 
 module Language.Sparcl.Typing.TCMonad where
 
-import qualified Data.Map as M
-import Data.Map (Map)
-import Data.Map.Merge.Lazy as M 
+import           Data.Map                       (Map)
+import qualified Data.Map                       as M
+import           Data.Map.Merge.Lazy            as M
 
-import qualified Data.Sequence as Seq 
-import Data.Sequence (Seq)
+import           Data.Sequence                  (Seq)
+import qualified Data.Sequence                  as Seq
 
-import Control.Monad.Reader
--- import Control.Monad.Except 
+import           Control.Monad.Reader
+-- import Control.Monad.Except
 -- import Control.Exception (evaluate, Exception, throw, catch)
-import Control.Monad.Catch 
+import           Control.Monad.Catch
 
-import Data.IORef
-import Data.Foldable (toList)
+import           Data.Foldable                  (toList)
+import           Data.IORef
 
-import Language.Sparcl.Name
-import Language.Sparcl.Typing.Type 
-import Language.Sparcl.Multiplicity
-import Language.Sparcl.Pass
-import Language.Sparcl.SrcLoc
-import Language.Sparcl.Exception 
-import Language.Sparcl.Pretty hiding ((<$>))
-import qualified Language.Sparcl.Pretty as D 
-import qualified Language.Sparcl.Surface.Syntax as S 
+import           Language.Sparcl.Exception
+import           Language.Sparcl.Multiplicity
+import           Language.Sparcl.Name
+import           Language.Sparcl.Pass
+import           Language.Sparcl.Pretty         hiding ((<$>))
+import qualified Language.Sparcl.Pretty         as D
+import           Language.Sparcl.SrcLoc
+import qualified Language.Sparcl.Surface.Syntax as S
+import           Language.Sparcl.Typing.Type
 
-import qualified Language.Sparcl.Class as C
+import qualified Language.Sparcl.Class          as C
 
-import Language.Sparcl.DebugPrint 
+import           Language.Sparcl.DebugPrint
 
-data AbortTyping = AbortTyping 
+data AbortTyping = AbortTyping
   deriving Show
-instance Exception AbortTyping 
+instance Exception AbortTyping
 
 
 data WhenChecking = CheckingEquality    Ty Ty
                   | CheckingConstraint  [TyConstraint]
                   | CheckingMoreGeneral Ty Ty
-                  | OtherContext        Doc 
-                  | CheckingNone 
-  
+                  | OtherContext        Doc
+                  | CheckingNone
+
 
 data TypeError = TypeError (Maybe SrcSpan) [S.LExp 'Renaming] WhenChecking ErrorDetail
 
 data ErrorDetail
-  = UnMatchTy  Ty Ty 
+  = UnMatchTy  Ty Ty
 --  | UnMatchTyD Ty Ty Ty Ty -- inferred and expected
   | OccurrenceCheck MetaTyVar Ty
   | MultipleUse Name
   | NoUse       Name
-  | Undefined   Name 
-  | Other       D.Doc 
-  
+  | Undefined   Name
+  | Other       D.Doc
+
 
 instance Pretty TypeError where
-  ppr (TypeError l exprs ctxt doc) = nest 2 $ 
+  ppr (TypeError l exprs ctxt doc) = nest 2 $
      -- D.bold (D.text "[TYPE ERROR]") D.<+> D.nest 2
     D.bold (maybe (D.text "<*unknown place*>") ppr l <> text ":" <+> D.red (text "type error"))
-    <> line 
+    <> line
     <> pprDetail doc
     <> pprWhenChecking ctxt
     <> (if null exprs then empty else item (group $ pprContexts (drop (length exprs - 3) exprs)))
     where
-      item d = text "-" <+> align d <> line 
-      
+      item d = text "-" <+> align d <> line
+
       pprWhenChecking (CheckingEquality ty1 ty2) =
-        D.line <> 
+        D.line <>
         item (D.text "when checking the following types are equivalent:"
               D.<> D.nest 2 (line <> vsep [ hsep[text "Inferred:", align $ ppr ty1],
                                             hsep[text "Expected:", align $ ppr ty2] ]))
@@ -78,7 +78,7 @@ instance Pretty TypeError where
         item (D.text "when checking the inferred type is more general than the expected."
               D.<> D.nest 2 (line <> vsep [ hsep[text "Inferred:", align $ ppr ty1],
                                             hsep[text "Expected:", align $ ppr ty2] ]))
-        
+
       pprWhenChecking (CheckingConstraint cs) =
         D.line <>
         item (D.text "when checking constraints:"
@@ -88,23 +88,23 @@ instance Pretty TypeError where
         D.line <>
         item (D.text "when checking" <+> d)
 
-      pprWhenChecking CheckingNone = D.empty 
+      pprWhenChecking CheckingNone = D.empty
 
 
       pprDetail = item . go
-        where 
-          go (UnMatchTy ty1 ty2) = 
+        where
+          go (UnMatchTy ty1 ty2) =
             D.text "Types do not match:"
             D.<+> D.align (ppr ty1) D.<+> D.text "/=" D.<+> D.align (ppr ty2)
 
       -- pprDetail (UnMatchTyD ty1 ty2 ty1' ty2') =
-      --   D.text "Types do not match" D.<> D.nest 2 
-      --    ( D.line D.<> D.nest 2 (D.sep [D.text "Expected:", D.align (ppr ty1) ]) D.<> 
+      --   D.text "Types do not match" D.<> D.nest 2
+      --    ( D.line D.<> D.nest 2 (D.sep [D.text "Expected:", D.align (ppr ty1) ]) D.<>
       --      D.line D.<> D.nest 2 (D.sep [D.text "Inferred:", D.align (ppr ty2) ]) )
       --   D.<$> D.text "More precisely, the following types do not match."
       --   <> D.nest 2 (line <> D.align (ppr ty1') D.<+> D.text "/=" D.<+> D.align (ppr ty2'))
 
-          go (OccurrenceCheck mv ty) = 
+          go (OccurrenceCheck mv ty) =
             D.text "Cannot construct an infinite type:"
             D.<$> D.hsep[ ppr mv, D.text "=", D.align (ppr ty) ]
 
@@ -116,24 +116,24 @@ instance Pretty TypeError where
 
           go (Undefined v) =
             D.hsep [ D.text "Unbound variable", ppr v ]
-        
-          go (Other d) = d         
-        
+
+          go (Other d) = d
+
       pprContexts []     = D.empty
       pprContexts [e]    = pprContext e
       pprContexts (e:es) = pprContext e D.<$> pprContexts es
 
       pprContext e =
-        D.text "In:" D.<+> ppr (location e) 
+        D.text "In:" D.<+> ppr (location e)
         D.<> D.nest 2 (D.line D.<> ppr e)
 
-  
+
 
 -- A typing environment just holds type information.  This reflects
 -- our principle; multiplicites are synthesized instead of checked.
 type TyEnv = Map Name Ty
 
-dummyName :: Name 
+dummyName :: Name
 dummyName = Original (ModuleName "") (User "") (Bare (User ""))
 
 -- A usage environment gathers how many times a variable is used.
@@ -144,66 +144,56 @@ dummyName = Original (ModuleName "") (User "") (Bare (User ""))
 type UseMap = Map Name Multiplication
 
 data Multiplication = Multiply Multiplication Multiplication
-                    | MSingle Mul 
+                    | MSingle Mul
 
 instance MultiplicityLike Multiplication where
-  one   = MSingle one 
+  one   = MSingle one
   omega = MSingle omega
-  fromMultiplicity = MSingle . fromMultiplicity 
+  fromMultiplicity = MSingle . fromMultiplicity
 
 instance Lub Multiplication where
   lub (MSingle (MulConst Omega)) _ = MSingle (MulConst Omega)
   lub (MSingle (MulConst One))   t = t
   lub _ (MSingle (MulConst Omega)) = MSingle (MulConst Omega)
   lub t (MSingle (MulConst One))   = t
-  lub t1 t2 = Multiply t1 t2
+  lub t1 t2                        = Multiply t1 t2
 
 ty2mult :: MonadTypeCheck m => MultTy -> m Multiplication
-ty2mult = zonkType >=> go 
+ty2mult = zonkType >=> go
     where
       go (TyMult t)  = return $ MSingle (MulConst t)
       go (TyMetaV t) = return $ MSingle (MulVar t)
       go _           = do
         reportError $ Other $ text "Expected multiplicity"
         m <- newMetaTyVar
-        return $ MSingle (MulVar m) 
+        return $ MSingle (MulVar m)
 
-data Mul = MulConst Multiplicity | MulVar MetaTyVar 
+data Mul = MulConst Multiplicity | MulVar MetaTyVar
 
 instance MultiplicityLike Mul where
   one   = MulConst One
   omega = MulConst Omega
-  fromMultiplicity = MulConst 
+  fromMultiplicity = MulConst
 
 
 m2ty :: Multiplication -> [Ty]
 m2ty ms = case go ms [] of
             Nothing -> [omega]
-            Just v  -> v 
+            Just v  -> v
   where
     go :: Multiplication -> [Ty] -> Maybe [Ty]
     go (Multiply t1 t2) r = go t1 =<< go t2 r
     go (MSingle m) r =
       case m of
-        MulConst Omega -> Nothing 
+        MulConst Omega -> Nothing
         MulConst One   -> return r
         MulVar   t     -> return (TyMetaV t : r)
-        
-        
--- (Multiply t1 t2) = mult t1 t2
---   where
---     mult [TyMult Omega] _ = TyMult Omega 
---     mult []             t = t
---     mult 
-    
--- m2ty MUnit            = [one]
--- m2ty (MSingle t)      = [t] 
 
 singletonUseMap :: Name -> UseMap
-singletonUseMap n = M.singleton n one 
+singletonUseMap n = M.singleton n one
 
 lookupUseMap :: Name -> UseMap -> Maybe Multiplication
-lookupUseMap = M.lookup 
+lookupUseMap = M.lookup
 
 multiplyUseMap :: UseMap -> UseMap -> UseMap
 multiplyUseMap = M.merge (M.mapMissing $ \_ _ -> MSingle (MulConst Omega))
@@ -214,28 +204,28 @@ mergeUseMap :: UseMap -> UseMap -> UseMap
 mergeUseMap = M.unionWith (\_ _ -> MSingle $ MulConst Omega)
 
 raiseUse :: Multiplication -> UseMap -> UseMap
-raiseUse m = fmap (lub m) 
+raiseUse m = fmap (lub m)
 
-emptyUseMap :: UseMap 
+emptyUseMap :: UseMap
 emptyUseMap = M.empty
 
 deleteUseMap :: Name -> UseMap -> UseMap
-deleteUseMap = M.delete 
+deleteUseMap = M.delete
 
--- the following information is used. The information is kept globally. 
+-- the following information is used. The information is kept globally.
 data TypingContext =
   TypingContext { tcRefMvCount :: !(IORef Int),
                   tcRefSvCount :: !(IORef Int),
                   tcTcLevel    :: TcLevel,
-                  tcConstraint :: !(IORef [TyConstraint]), 
+                  tcConstraint :: !(IORef [TyConstraint]),
                   tcTyEnv      :: TyEnv,    -- Current typing environment
                   tcSyn        :: SynTable, -- Current type synonym table
                   tcContexts   :: [S.LExp 'Renaming], -- parent expressions
                   tcLoc        :: Maybe SrcSpan,  -- focused part
                   tcChecking   :: WhenChecking,
-                  tcDebugLevel :: !Int, 
+                  tcDebugLevel :: !Int,
                   tcRefErrors  :: !(IORef (Seq TypeError))
-                               -- Type errors are accumulated for better error messages 
+                               -- Type errors are accumulated for better error messages
                   }
 
 data KeyTC
@@ -246,39 +236,39 @@ initTypingContext = do
   r1 <- newIORef 0
   r2 <- newIORef 0
   r  <- newIORef Seq.empty
-  rc <- newIORef [] 
+  rc <- newIORef []
   return TypingContext { tcRefMvCount = r1,
                          tcRefSvCount = r2,
-                         tcTcLevel    = 0 , 
+                         tcTcLevel    = 0 ,
                          tcRefErrors  = r ,
-                         tcConstraint = rc, 
-                         tcLoc        = Nothing, 
+                         tcConstraint = rc,
+                         tcLoc        = Nothing,
                          tcContexts   = [],
                          tcChecking   = CheckingNone,
-                         tcDebugLevel = 0, 
+                         tcDebugLevel = 0,
                          tcTyEnv      = M.empty,
                          tcSyn        = M.empty }
 
--- This function must be called before each session of type checking. 
+-- This function must be called before each session of type checking.
 refreshTC :: TypingContext -> IO TypingContext
 refreshTC tc = do
   r <- newIORef Seq.empty
-  rc <- newIORef [] 
+  rc <- newIORef []
   return $ tc { tcTyEnv     = M.empty,
                 tcSyn       = M.empty,
                 tcLoc       = Nothing,
                 tcConstraint = rc,
                 tcRefErrors = r,
-                tcChecking  = CheckingNone, 
-                tcContexts  = [] } 
+                tcChecking  = CheckingNone,
+                tcContexts  = [] }
 
-setEnvs :: TypingContext -> TypeTable -> SynTable -> TypingContext 
+setEnvs :: TypingContext -> TypeTable -> SynTable -> TypingContext
 setEnvs tc tenv syn =
   tc { tcTyEnv = tenv,
        tcSyn   = syn }
 
 setDebugLevel :: TypingContext -> Int -> TypingContext
-setDebugLevel tc lv = tc { tcDebugLevel = lv } 
+setDebugLevel tc lv = tc { tcDebugLevel = lv }
 
 
 type MonadTypeCheck m =
@@ -288,24 +278,28 @@ type MonadTypeCheck m =
    MonadCatch m)
 
 
+-- | A concrete instance of 'MonadTypeCheck'
+--
+--   Currently, @ask (key \@KeyDebugLevel)@ always returns @0@.
 newtype SimpleTC a = SimpleTC (ReaderT TypingContext IO a)
   deriving (Functor, Applicative, Monad, MonadIO, MonadThrow, MonadCatch)
 
 runSimpleTC :: TypingContext -> SimpleTC a -> IO a
-runSimpleTC tc (SimpleTC m) = runReaderT m tc 
+runSimpleTC tc (SimpleTC m) = runReaderT m tc
 
 instance C.Has KeyDebugLevel Int SimpleTC where
   ask _ = return 0
 
 instance C.Has KeyTC TypingContext SimpleTC where
-  ask _ = SimpleTC $ ReaderT $ \tc -> return tc 
+  ask _ = SimpleTC $ ReaderT $ \tc -> return tc
 
 instance C.Local KeyTC TypingContext SimpleTC where
-  local _ f (SimpleTC m) = SimpleTC $ local f m 
+  local _ f (SimpleTC m) = SimpleTC $ local f m
 
 runTC :: MonadTypeCheck m => m a -> m a
 runTC m = do
-  res  <- m `catch` (\(_ :: AbortTyping) -> return undefined)
+  !res <- m `catch` (\(_ :: AbortTyping) -> do
+                        return undefined)
   tc   <- C.ask (C.key @KeyTC)
   errs <- liftIO $ readIORef (tcRefErrors tc)
   if not (Seq.null errs)
@@ -463,103 +457,103 @@ readConstraint = do
   csRef <- C.asks (C.key @KeyTC) tcConstraint
   liftIO $ readIORef csRef
 
-addConstraint :: MonadTypeCheck m => [TyConstraint] -> m () 
+addConstraint :: MonadTypeCheck m => [TyConstraint] -> m ()
 addConstraint cs = do
   csRef <- C.asks (C.key @KeyTC) tcConstraint
-  liftIO $ modifyIORef csRef (cs ++) 
+  liftIO $ modifyIORef csRef (cs ++)
 
-setConstraint :: MonadTypeCheck m => [TyConstraint] -> m () 
+setConstraint :: MonadTypeCheck m => [TyConstraint] -> m ()
 setConstraint cs = do
   csRef <- C.asks (C.key @KeyTC) tcConstraint
   liftIO $ writeIORef csRef cs
-    
-  
-askType :: MonadTypeCheck m => SrcSpan -> Name -> m Ty 
+
+
+askType :: MonadTypeCheck m => SrcSpan -> Name -> m Ty
 askType l n
-  | Just k <- checkNameTuple n = 
+  | Just k <- checkNameTuple n =
       return $ tupleConTy k
-  | otherwise = do        
+  | otherwise = do
       tyEnv <- C.asks (C.key @KeyTC) tcTyEnv
       case M.lookup n tyEnv of
-        Just ty -> do 
+        Just ty -> do
           ty' <- zonkType ty
           debugPrint 4 $ ppr n <+> text ":" <+> ppr ty'
-          return ty' 
-        Nothing -> do 
+          return ty'
+        Nothing -> do
           atLoc l (reportError $ Undefined n)
           arbitraryTy
 
-newMetaTyVar :: MonadTypeCheck m => m MetaTyVar 
+newMetaTyVar :: MonadTypeCheck m => m MetaTyVar
 newMetaTyVar = do
   cref <- C.asks (C.key @KeyTC) tcRefMvCount
-  lv   <- C.asks (C.key @KeyTC) tcTcLevel 
+  lv   <- C.asks (C.key @KeyTC) tcTcLevel
   cnt <- liftIO $ atomicModifyIORef' cref $ \cnt -> (cnt + 1, cnt)
   ref <- liftIO $ newIORef Nothing
-  lref <- liftIO $ newIORef lv 
-  return $ MetaTyVar cnt ref lref  
+  lref <- liftIO $ newIORef lv
+  return $ MetaTyVar cnt ref lref
 
 readTyVar :: MonadTypeCheck m => MetaTyVar -> m (Maybe Ty)
-readTyVar (MetaTyVar _ ref _) = 
-  liftIO $ readIORef ref 
+readTyVar (MetaTyVar _ ref _) =
+  liftIO $ readIORef ref
 
-writeTyVar :: MonadTypeCheck m => MetaTyVar -> Ty -> m () 
-writeTyVar (MetaTyVar _ ref _) ty = 
-  liftIO $ writeIORef ref (Just ty) 
+writeTyVar :: MonadTypeCheck m => MetaTyVar -> Ty -> m ()
+writeTyVar (MetaTyVar _ ref _) ty =
+  liftIO $ writeIORef ref (Just ty)
 
 
-newSkolemTyVar :: MonadTypeCheck m => TyVar -> m TyVar 
+newSkolemTyVar :: MonadTypeCheck m => TyVar -> m TyVar
 newSkolemTyVar ty = do
   cref <- C.asks (C.key @KeyTC) tcRefSvCount
   cnt <- liftIO $ atomicModifyIORef' cref $ \cnt -> (cnt + 1, cnt)
-  return $ SkolemTv ty cnt 
+  return $ SkolemTv ty cnt
 
 
-resolveSyn :: MonadTypeCheck m => Ty -> m Ty 
+resolveSyn :: MonadTypeCheck m => Ty -> m Ty
 resolveSyn ty = do
   synMap <- C.asks (C.key @KeyTC) tcSyn
-  go synMap ty 
+  go synMap ty
     where
-      goQ synMap (TyQual cs t) = 
+      goQ synMap (TyQual cs t) =
         TyQual <$> mapM (goC synMap) cs <*> go synMap t
 
       -- goC synMap (MEqMax t1 t2 t3) =
-      --   MEqMax <$> go synMap t1 <*> go synMap t2 <*> go synMap t3 
+      --   MEqMax <$> go synMap t1 <*> go synMap t2 <*> go synMap t3
 
       goC synMap (MSub ts1 ts2) =
-        MSub <$> go synMap ts1 <*> traverse (go synMap) ts2 
-      
+        MSub <$> go synMap ts1 <*> traverse (go synMap) ts2
+
       go _synMap (TyVar x) = return (TyVar x)
       go synMap (TyForAll ns t) =
         TyForAll ns <$> goQ synMap t
-      go _synMap (TyMetaV m) = return (TyMetaV m)      
+      go _synMap (TyMetaV m) = return (TyMetaV m)
       go synMap (TySyn origTy actualTy) =
         TySyn origTy <$> go synMap actualTy
-      go synMap orig@(TyCon c ts) = 
+      go synMap orig@(TyCon c ts) =
         case M.lookup c synMap of
           Nothing ->
-            TyCon c <$> mapM (go synMap) ts 
+            TyCon c <$> mapM (go synMap) ts
           Just (ns, tyBody)
-            | length ns == length ts -> 
+            | length ns == length ts ->
               TySyn orig <$> go synMap (substTy (zip ns ts) tyBody)
-          Just _ -> do 
-            reportError $ Other $ D.hsep [ D.text "Type synonym", D.dquotes (ppr c), D.text "must be fully-applied." ] 
+          Just _ -> do
+            reportError $ Other $ D.hsep [ D.text "Type synonym", D.dquotes (ppr c), D.text "must be fully-applied." ]
             abortTyping
-      go _ (TyMult m) = return $ TyMult m 
+      go _ (TyMult m) = return $ TyMult m
 
-  -- withVar x ty mult = 
-  --   local (\tc -> tc { tcTyEnv = M.insert x (ty, mult) (tcTyEnv tc) }) 
+  -- withVar x ty mult =
+  --   local (\tc -> tc { tcTyEnv = M.insert x (ty, mult) (tcTyEnv tc) })
 
-pushLevel :: MonadTypeCheck m => m a -> m a 
+pushLevel :: MonadTypeCheck m => m a -> m a
 pushLevel =
   C.local (C.key @KeyTC) (\tc -> tc { tcTcLevel = succ (tcTcLevel tc) })
 
-withVar :: MonadTypeCheck m => Name -> Ty -> m a -> m a 
+withVar :: MonadTypeCheck m => Name -> Ty -> m a -> m a
 withVar x ty =
   C.local (C.key @KeyTC) (\tc -> tc { tcTyEnv = M.insert x ty (tcTyEnv tc) })
 
 withSyn :: MonadTypeCheck m => Name -> ([TyVar], Ty) -> m r -> m r
-withSyn tv v = 
-  C.local (C.key @KeyTC) (\tc -> tc { tcSyn = M.insert tv v (tcSyn tc) }) 
+withSyn tv v =
+  C.local (C.key @KeyTC) (\tc -> tc { tcSyn = M.insert tv v (tcSyn tc) })
 
   -- getMetaTyVarsInEnv = do
   --   tyEnv <- asks tcTyEnv
@@ -569,31 +563,31 @@ withSyn tv v =
 
 
 newMetaTy :: MonadTypeCheck m => m Ty
-newMetaTy = TyMetaV <$> newMetaTyVar 
+newMetaTy = TyMetaV <$> newMetaTyVar
 
 -- withVars :: MonadTypeCheck m => [ (Name, Ty, MultTy) ] -> m r -> m r
 -- withVars ns m = foldr (\(n,t,mult) -> withVar n t mult) m ns
 
 -- withMultVar :: MonadTypeCheck m => MultTy -> m r -> m r
--- withMultVar mult = withVar dummyName mult mult 
+-- withMultVar mult = withVar dummyName mult mult
 
 -- withMultVars :: MonadTypeCheck m => [MultTy] -> m r -> m r
--- withMultVars ms m = foldr withMultVar m ms 
+-- withMultVars ms m = foldr withMultVar m ms
 
 withVars :: MonadTypeCheck m => [ (Name, Ty) ] -> m r -> m r
-withVars ns m = foldr (\(n,t) -> withVar n t) m ns 
+withVars ns m = foldr (\(n,t) -> withVar n t) m ns
 
 -- withUnrestrictedVars :: MonadTypeCheck m => [ (Name, Ty) ] -> m r -> m r
 -- withUnrestrictedVars = withVars . map (\(n,t) -> (n, t, TyMult Omega))
 
 withSyns :: MonadTypeCheck m => [ (Name, ([TyVar], Ty)) ] -> m r -> m  r
-withSyns xs m = foldr (uncurry withSyn) m xs  
+withSyns xs m = foldr (uncurry withSyn) m xs
 
 zonkMetaTyVar :: MonadTypeCheck m => MetaTyVar -> m Ty
-zonkMetaTyVar mv = {- trace "zonk!" $ -} do 
-  res <- readTyVar mv 
+zonkMetaTyVar mv = {- trace "zonk!" $ -} do
+  res <- readTyVar mv
   case res of
-    Nothing -> return (TyMetaV mv) 
+    Nothing -> return (TyMetaV mv)
     Just ty -> do
       ty' <- zonkType ty
       writeTyVar mv ty'
@@ -607,37 +601,37 @@ zonkType (TyForAll ns t) =
   TyForAll ns <$> zonkTypeQ t
 zonkType (TyMetaV m) = zonkMetaTyVar m
 zonkType (TySyn origTy ty) =
-  TySyn <$> zonkType origTy <*> zonkType ty 
-zonkType (TyMult m) = return (TyMult m) 
+  TySyn <$> zonkType origTy <*> zonkType ty
+zonkType (TyMult m) = return (TyMult m)
 
 zonkTypeQ :: MonadTypeCheck m => QualTy -> m QualTy
 zonkTypeQ (TyQual cs t) = TyQual <$> traverse zonkTypeC cs <*> zonkType t
 
 zonkTypeC :: MonadTypeCheck m => TyConstraint -> m TyConstraint
-zonkTypeC (MSub t1 ts2) = MSub <$> zonkType t1 <*> traverse zonkType ts2 
+zonkTypeC (MSub t1 ts2) = MSub <$> zonkType t1 <*> traverse zonkType ts2
 
 zonkTypeError :: MonadTypeCheck m => TypeError -> m TypeError
 zonkTypeError (TypeError loc es wc res) = do
   wc'  <- zonkWhenChecking wc
   res' <- zonkErrorDetail  res
-  return $ TypeError loc es wc' res' 
+  return $ TypeError loc es wc' res'
 
 zonkWhenChecking :: MonadTypeCheck m => WhenChecking -> m WhenChecking
-zonkWhenChecking (CheckingEquality t1 t2) = 
+zonkWhenChecking (CheckingEquality t1 t2) =
   CheckingEquality <$> zonkType t1 <*> zonkType t2
 zonkWhenChecking (CheckingMoreGeneral t1 t2) =
-  CheckingMoreGeneral <$> zonkType t1 <*> zonkType t2 
+  CheckingMoreGeneral <$> zonkType t1 <*> zonkType t2
 zonkWhenChecking (CheckingConstraint cs) =
   CheckingConstraint <$> traverse zonkTypeC cs
-zonkWhenChecking (OtherContext d) = return (OtherContext d)   
+zonkWhenChecking (OtherContext d) = return (OtherContext d)
 zonkWhenChecking CheckingNone = return CheckingNone
 
 zonkErrorDetail :: MonadTypeCheck m => ErrorDetail -> m ErrorDetail
 zonkErrorDetail (UnMatchTy t1 t2) = UnMatchTy <$> zonkType t1 <*> zonkType t2
 zonkErrorDetail (OccurrenceCheck tv ty) =
   OccurrenceCheck tv <$> zonkType ty
-zonkErrorDetail res = pure res   
-  
+zonkErrorDetail res = pure res
+
 
 freeTyVars :: MonadTypeCheck m => [Ty] -> m [TyVar]
 freeTyVars types = do
@@ -646,7 +640,7 @@ freeTyVars types = do
     where
       go ts r = foldr (goT []) r ts
 
-      goT :: [TyVar] -> Ty -> [TyVar] -> [TyVar] 
+      goT :: [TyVar] -> Ty -> [TyVar] -> [TyVar]
       goT bound (TyVar t) r
         | t `elem` bound = r
         | t `elem` r     = r
@@ -655,15 +649,15 @@ freeTyVars types = do
         foldr (goT bound) r ts
       goT bound (TyForAll bs t) r = goQ (bs ++ bound) t r
       goT _bound (TyMetaV _) r = r
-      goT bound (TySyn ty _) r = goT bound ty r 
-      goT _bound (TyMult _) r = r 
+      goT bound (TySyn ty _) r = goT bound ty r
+      goT _bound (TyMult _) r = r
 
-      goQ :: [TyVar] -> QualTy -> [TyVar] -> [TyVar] 
+      goQ :: [TyVar] -> QualTy -> [TyVar] -> [TyVar]
       goQ bound (TyQual cs t) r = foldr (goC bound) (goT bound t r) cs
 
       goC :: [TyVar] -> TyConstraint -> [TyVar] -> [TyVar]
-      goC bound (MSub t1 ts2) r = goT bound t1 (foldr (goT bound) r ts2) 
---       goC bound (MEqMax t1 t2 t3) r = goT bound t1 $ goT bound t2 $ goT bound t3 r 
+      goC bound (MSub t1 ts2) r = goT bound t1 (foldr (goT bound) r ts2)
+--       goC bound (MEqMax t1 t2 t3) r = goT bound t1 $ goT bound t2 $ goT bound t3 r
 
 
 unify :: MonadTypeCheck m => MonoTy -> MonoTy -> m ()
@@ -679,48 +673,48 @@ unifyWork (TyVar x1) (TyVar x2)       | x1 == x2 = return ()
 unifyWork (TyMetaV mv1) (TyMetaV mv2) | mv1 == mv2 = return ()
 unifyWork (TyMetaV mv) ty = unifyMetaTyVar mv ty
 unifyWork ty (TyMetaV mv) = unifyMetaTyVar mv ty
-unifyWork (TyCon c ts) (TyCon c' ts') | c == c' = do 
+unifyWork (TyCon c ts) (TyCon c' ts') | c == c' = do
                                           when (length ts /= length ts') $
                                             reportError $ Other $ D.hsep [D.text "Type construtor", ppr c, D.text "has different number of arguments."]
                                           zipWithM_ unifyWork ts ts'
-unifyWork (TyMult m) (TyMult m') | m == m' = return ()                                           
+unifyWork (TyMult m) (TyMult m') | m == m' = return ()
 unifyWork ty1 ty2 = do
   ty1' <- zonkType ty1
   ty2' <- zonkType ty2
-  reportError $ UnMatchTy ty1' ty2' 
+  reportError $ UnMatchTy ty1' ty2'
 
-unifyMetaTyVar :: MonadTypeCheck m => MetaTyVar -> MonoTy -> m () 
-unifyMetaTyVar mv ty2 = do 
+unifyMetaTyVar :: MonadTypeCheck m => MetaTyVar -> MonoTy -> m ()
+unifyMetaTyVar mv ty2 = do
   res <- readTyVar mv
   case res of
     Just ty -> unify ty ty2
     Nothing ->
-      unifyUnboundMetaTyVar mv ty2 
+      unifyUnboundMetaTyVar mv ty2
 
 unifyUnboundMetaTyVar :: MonadTypeCheck m => MetaTyVar -> MonoTy -> m ()
-unifyUnboundMetaTyVar mv (TyMetaV mv2) = do 
+unifyUnboundMetaTyVar mv (TyMetaV mv2) = do
   res <- readTyVar mv2
   lv  <- readTcLevelMv mv
-  lv2 <- readTcLevelMv mv2 
+  lv2 <- readTcLevelMv mv2
   case res of
     Nothing   ->
       if | mv == mv2 -> return ()
          | lv < lv2 ->
-             writeTyVar mv2 (TyMetaV mv) 
-         | otherwise -> 
-           writeTyVar mv (TyMetaV mv2) 
-    Just ty2' -> unifyUnboundMetaTyVar mv ty2' 
-unifyUnboundMetaTyVar mv ty2 = do 
+             writeTyVar mv2 (TyMetaV mv)
+         | otherwise ->
+           writeTyVar mv (TyMetaV mv2)
+    Just ty2' -> unifyUnboundMetaTyVar mv ty2'
+unifyUnboundMetaTyVar mv ty2 = do
   ty2' <- zonkType ty2
   let mvs = metaTyVars [ty2']
-  if mv `elem` mvs 
+  if mv `elem` mvs
     then do
       reportError $ OccurrenceCheck mv ty2'
-      -- We abort typing when occurrence check fails; otherwise, zonkType can diverge. 
-      abortTyping 
+      -- We abort typing when occurrence check fails; otherwise, zonkType can diverge.
+      abortTyping
     else do
       lvl <- readTcLevelMv mv
-      ty2'LevelAdjusted <- capLevel lvl ty2' 
+      ty2'LevelAdjusted <- capLevel lvl ty2'
       writeTyVar mv ty2'LevelAdjusted
 
-        
+
