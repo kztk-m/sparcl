@@ -34,7 +34,7 @@ import qualified Language.Sparcl.Surface.Syntax as S
 import           Language.Sparcl.Pretty         as D hiding ((<$>))
 
 -- import Data.Maybe (isNothing)
-import           Data.List                      ((\\))
+import           Data.List                      (partition, (\\))
 
 -- import Control.Exception (evaluate)
 -- import Debug.Trace
@@ -333,8 +333,8 @@ simplifyConstraints :: MonadTypeCheck m => [TyConstraint] -> m [TyConstraint]
 simplifyConstraints constrs = whenChecking (CheckingConstraint constrs) $ go constrs >>= removeRedundantConstraint
   where
     go cs = do
-      cs' <- propagateConstantsToFixedpoint cs
-      --  liftIO $ putStrLn $ ("CP: " ++ show (hsep [ppr xs, text "-->>", ppr ys]))
+      csZonked <- mapM zonkTypeC cs
+      cs' <- propagateConstantsToFixedpoint csZonked
       isEffective <- loopToEquiv cs'
       if length cs' < length cs || isEffective
         then go cs'
@@ -382,7 +382,9 @@ loopToEquiv constraints = do
       equate xs >> return True
 
     equate []       = error "Cannot happen."
-    equate (ty:tys) = forM_ tys $ \ty' -> unify ty ty'
+    equate (ty:tys) = do
+      debugPrint 2 $ text "Equating" <+> ppr (ty:tys)
+      forM_ tys $ \ty' -> unify ty ty'
 
     makeSCC :: [TyConstraint] -> m [G.SCC Ty]
     makeSCC xs = G.stronglyConnComp . map (\(k,vs) -> (k,k,vs)) . M.toList <$> makeLeMap xs
@@ -396,11 +398,16 @@ loopToEquiv constraints = do
         []   -> do
           unify t1 (TyMult One)
           return t
-        [t2] ->
+        [t2] | all noTyVar [t1, t2] ->
           return $ M.insertWith (++) t1 [t2] t
         _    ->
           -- keep t
           return t
+
+    noTyVar (TyVar _)   = False
+    noTyVar (TyMult _)  = True
+    noTyVar (TyMetaV _) = True
+    noTyVar _           = error "Cannot happen."
 
       -- MEqMax t1' t2' t3' <- zonkTypeC c
       -- return $ M.insertWith (++) t2' [t1'] $ M.insertWith (++) t3' [t1'] t
@@ -682,13 +689,24 @@ generalizeTy ty_ um = do
                     lv <- readTcLevelMv m
                     return $ lv > tcLevel) (metaTyVarsQ [qty] \\ umapVars)
 
+  -- We qualifiy constraints that refer to generalizable variables
+  -- 6.1.4 Constant and locally-constant overloading
+  let (csI, csO) = partition (`refersTo` generalizable) cs'
+  let qty' = TyQual csI ty
 
-  polyTy <- quantify generalizable qty
-  debugPrint 2 $ text "Gen" <> brackets (text $ show tcLevel) <> text ":" <+> align (group (ppr qty) <> line <> text "-->" <> line <> group (ppr polyTy))
 
-  setConstraint []
+  polyTy <- quantify generalizable qty'
+  debugPrint 2 $ text "Gen" <> brackets (text $ show tcLevel) <> text ":" <+>
+    align (vsep [ text "Generalizable" <+> ppr generalizable,
+                  group (align (group (ppr qty) <> line <> text "-->" <> line <> group (ppr polyTy))) ])
+
+  setConstraint csO
 
   return polyTy
+  where
+    refersTo :: TyConstraint -> [MetaTyVar] -> Bool
+    refersTo (MSub m ms) vs = any (`elem` vs) $ metaTyVars (m:ms)
+
 
 inferPolyTy :: MonadTypeCheck m => Bool -> LExp 'Renaming -> m (LExp 'TypeCheck, PolyTy, UseMap)
 inferPolyTy isMultipleUse expr = do
@@ -699,28 +717,6 @@ inferPolyTy isMultipleUse expr = do
   let umapM = if isMultipleUse then raiseUse omega umap else umap
 
   polyTy <- generalizeTy ty umapM
-
-  -- cs' <- simplifyConstraints cs -- (cs ++ csM)
-
-  -- -- TODO: We conjecture that this splitConstraint is superfluous, as algorithm cannot yield constraints only on outsides.
-  -- (csI, csO) <- splitConstraints cs'
-  -- -- liftIO $ print $ blue $ "csO (in inferPoly): " <+> ppr csO
-
-
-  -- ty' <- zonkTypeQ (TyQual csI ty)
-
-  -- -- envMetaVars <- getMetaTyVarsInEnv
-  -- tcLevel <- askCurrentTcLevel
-
-  -- -- We cannot generalize variables in umap
-  -- -- umapVars <- metaTyVars <$> mapM zonkMetaTyVar [ x | MulVar x <-  M.elems umapM ]
-  -- umapVars <- metaTyVars <$> mapM zonkType [ t | m <- M.elems umapM , t <- m2ty m ]
-
-  -- let mvs = metaTyVarsQ [ty']
-  -- let generalizable = filter (\m -> metaLevel m >= tcLevel) mvs \\ umapVars
-  -- polyTy <- quantify generalizable ty'
-
-  -- -- liftIO $ print $ red $ text "[inferPolyTy]" <+> ppr ty' <+> text "--->"  <+> ppr polyTy
 
   return (expr', polyTy, umapM)
 
@@ -832,67 +828,66 @@ inferMutual decls = do
   let defs = [ (loc, n, pcs) | Loc loc (DDef n pcs) <- decls ]
   let sigMap = M.fromList [ (n, ty2ty t) | Loc _ (DSig n t) <- decls ]
 
-  tys <- pushLevel $ mapM (\n -> case M.lookup n sigMap of
-                              Just t  -> return t
-                              Nothing -> newMetaTy) ns
+  -- save current constraint at the point
+  csOrig <- readConstraint
+  setConstraint []
 
-  (nts0, umap) <- fmap gatherU $ withVars (zip ns tys) $ forM defs $ \(loc, n, pcs) -> pushLevel $ do
-    ty  <- newMetaTy
-    qs  <- mapM (const newMetaTy) [1..numPatterns pcs]
-    (pcs', umap) <- gatherAltUC =<< mapM (flip (checkTyPC loc qs) ty) pcs
-    tyE <- askType loc n -- type of n in the environment
 
-    unless (M.member n sigMap) $
-      -- Defer unification if a declaration comes with a signature because
-      -- the signature can be a polytype while unification targets monotypes.
+  (nts0, umap) <- pushLevel $ do
+    tys <- forM ns (\n -> case M.lookup n sigMap of
+                            Just t  -> return t
+                            Nothing -> newMetaTy)
+    (nts0, umap) <- fmap gatherU $ withVars (zip ns tys) $ forM defs $ \(loc, n, pcs) -> do
+      -- body's type
+      ty <- newMetaTy
+      -- argument's multiplicity
+      qs <- mapM (const newMetaTy) [1..numPatterns pcs]
 
-      -- ty' <- zonkType ty
-      -- tyE' <- zonkType tyE
-      -- liftIO $ putStrLn $ show $ hsep [ text "Inf.:", ppr ty']
-      -- liftIO $ putStrLn $ show $ hsep [ text "Exp.:", ppr tyE']
-      atLoc loc $ tryUnify ty tyE
+      (pcs', umap) <- gatherAltUC =<< mapM (flip (checkTyPC loc qs) ty) pcs
 
-    -- (umapM, csM) <- raiseUse (TyMult Omega) umap
-    let umapM = raiseUse omega umap
+      -- type of n in the environment
+      tyE <- askType loc n
 
-    -- do ty' <- zonkType ty
-    --    liftIO $ print $ blue $ text "CS:" <+> ppr cs'
-    --    liftIO $ print $ blue $ text "CSO:" <+> ppr csO
-    --    liftIO $ print $ blue $ ppr n <+> text ":" <+> ppr (TyQual csI ty')
-    cs <- readConstraint
-    setConstraint []
+      unless (M.member n sigMap) $
+        -- unify the body type and returned type
+        atLoc loc $ tryUnify ty tyE
 
-    return ((n, loc, ty, cs, pcs'), umapM)
+      -- cut the current constraint
+      cs <- readConstraint
+      setConstraint []
 
-  -- envMetaVars <- getMetaTyVarsInEnv
+      return ((n, loc, ty, cs, pcs'), raiseUse omega umap)
+
+    return (nts0, umap)
 
   nts1 <- forM nts0 $ \(n, loc, ty, cs, pcs') -> do
+    csO <- readConstraint
+    -- Assuming that the current constraint is empty
     setConstraint cs
 
+    -- NB: No type variables exacpe in the useMap so using emptyUseMap is OK.
     polyTy <- generalizeTy ty emptyUseMap
 
-
---     -- NB: splitConstraints must be done outside of this mutual definition..
-
---     -- TODO: We conjecture that this splitConstraint is superfluous, as algorithm cannot yield constraints only on outsides.
---     (csI, csO) <- splitConstraints cs'
--- --    liftIO $ print $ blue $ "csO (in inferMutual): " <+> ppr csO
-
---     let qt = TyQual csI ty
-
---     tt <- zonkTypeQ qt
---     let mvs = metaTyVarsQ [tt]
--- --    liftIO $ print $ red $ "Finding a polytype of " <+> ppr n
---     polyTy <- quantify (filter (\m -> metaLevel m >= tcLevel) mvs) tt
-
-    case M.lookup n sigMap of
-      Nothing    -> return ((n, loc, polyTy, pcs'))
+    res <- case M.lookup n sigMap of
+      Nothing    ->
+        return (n, loc, polyTy, pcs')
       Just sigTy -> do
-        whenChecking (CheckingMoreGeneral polyTy sigTy) $ checkMoreGeneral loc polyTy sigTy
-        return ((n, loc, sigTy, pcs'))
+        -- if a function comes with a signature, we check that its inferred type is more polymorphic than
+        -- the signature
+        tryCheckMoreGeneral loc polyTy sigTy
+        return (n, loc, sigTy, pcs')
+
+    do cs' <- readConstraint
+       setConstraint (csO ++ cs')
+    return res
+
 
   let decls' = [ Loc loc (DDef (n, ty) pcs') | (n, loc, ty, pcs') <- nts1 ]
   let binds' = [ (n, ty) | (n, _, ty, _) <- nts1 ]
+
+  -- restore the original constraint
+  do cs' <- readConstraint
+     setConstraint (csOrig ++ cs')
 
   return (decls', binds', umap)
     where
@@ -953,9 +948,12 @@ skolemize (TyForAll tvs ty) = do
 skolemize ty = return ([], TyQual [] ty)
 
 tryCheckMoreGeneral :: MonadTypeCheck m => SrcSpan -> Ty -> Ty -> m ()
-tryCheckMoreGeneral loc ty1 ty2 =
+tryCheckMoreGeneral loc ty1 ty2 = -- do
+  -- cl <- currentLevel
+  -- debugPrint 2 $ text "tryCheckMoreGeneral is called" <+> brackets (ppr cl) <+> text "to check" </>
+  --                ppr ty1 <+> text "<=" <+> ppr ty2
   -- liftIO $ print $ red $ group $ text "Checking" <+> align (ppr ty1 <+>  text "is more general than" <> line <> ppr ty2)
-  whenChecking (CheckingMoreGeneral ty1 ty2) $ checkMoreGeneral loc ty1 ty2
+  whenChecking (CheckingMoreGeneral ty1 ty2) $ pushLevel $ checkMoreGeneral loc ty1 ty2
 
 -- todo: delay implication checking until
 
@@ -964,6 +962,9 @@ checkMoreGeneral loc polyTy1 polyTy2@(TyForAll _ _) = do
   -- liftIO $ print $ hsep [ text "Signature:", ppr polyTy2 ]
   -- liftIO $ print $ hsep [ text "Inferred: ", ppr polyTy1 ]
   (skolemTyVars, ty2) <- skolemize polyTy2
+
+  -- cl <- currentLevel
+  -- debugPrint 2 $ text "check starts" <+> brackets (ppr cl)
 
   -- liftIO $ print $ hsep [ text "Skolemized sig:", ppr ty2 ]
 
@@ -983,8 +984,8 @@ checkMoreGeneral loc polyTy1 ty = checkMoreGeneral2 loc polyTy1 (TyQual [] ty)
 checkMoreGeneral2 :: MonadTypeCheck m => SrcSpan -> Ty -> QualTy -> m ()
 checkMoreGeneral2 loc polyTy1@(TyForAll _ _) ty2 = do
 
-  -- it could be possible that the function is called
-  -- polyTy that can contain meta type variables.
+  -- -- it could be possible that the function is called
+  -- -- polyTy that can contain meta type variables.
   let origVars = metaTyVars [polyTy1]
 
   TyQual cs ty1 <- instantiateQ polyTy1
@@ -997,66 +998,127 @@ checkMoreGeneral3 loc origVars (TyQual cs1 ty1) (TyQual cs2 ty2) = atLoc loc $ d
   atLoc loc $ unify ty1 ty2
 
   -- liftIO $ print $ red $ group $ text "Checking mono type" <+> align (ppr (TyQual cs1 ty1) <+>  text "is more general than" <> line <> ppr (TyQual cs2 ty2))
+  checkImplicationD origVars cs2 cs1
 
 
-  cs1' <- simplifyConstraints =<< mapM zonkTypeC cs1
-  cs2' <- simplifyConstraints =<< mapM zonkTypeC cs2
+--   cs1' <- simplifyConstraints =<< mapM zonkTypeC cs1
+--   cs2' <- simplifyConstraints =<< mapM zonkTypeC cs2
+
+--   let cs1'' = filter (not . (`elem` cs2')) cs1'
+
+--   let undetermined = metaTyVarsC (cs1'' ++ cs2') \\ origVars
+--   -- let props = foldr (\a rs ->
+--   --                     [ ((a,True):xs, SAT.var (MV a) .&&. r) | (xs,r) <- rs ]
+--   --                     ++ [ ((a, False):xs, neg (SAT.var (MV a)) .&&. r) | (xs,r) <- rs])
+--   --                  [([], toFormula cs2' .&&. SAT.neg (toFormula cs1''))]
+--   --                  undetermined
+
+--   -- To check exists origVars. forall `undetermined`. neg (cs2 => cs1'') holds
+--   -- i.e.,
+--   let prop = foldr (\a cnf ->
+--                       SAT.elim (MV a) True  cnf
+--                       .&&. SAT.elim (MV a) False cnf)
+--                    (toFormula cs2' .&&. SAT.neg (toFormula cs1''))
+--                    undetermined
+
+--   debugPrint 2 $ nest 2 $
+--     text "Implicating Check:" <> line <>
+--     vcat [text "Wanted:" <+> ppr cs1'',
+--           text "Given: " <+> ppr cs2',
+--           text "EVars: " <+> ppr undetermined,
+--           text "Prop:  " <+> ppr prop]
+
+--   case cs1'' of
+--     [] -> return ()
+--     _  ->
+--       case SAT.sat prop of
+--         Nothing -> return ()
+--         Just bs ->
+-- --          liftIO $ print $ red $ text "SAT."
+--           reportError $ Other $ D.group $
+--             vcat [ hsep [pprC cs2', text "does not imply", pprC cs1']
+--                    <> (if null undetermined then empty
+--                        else line <> text "with any choice of" <+> ppr undetermined),
+--                    nest 2 (vcat [ text "a concrete counter example:",
+--                                   vcat (map pprS bs) ]) ]
+--       -- let results = map (\(xs,p) -> (xs, SAT.sat p)) props
+--       -- if any (isNothing . snd) results
+--       --   then return ()
+--       --   else do
+--       --   reportError $ Other $ D.group $
+--       --        hsep [pprC cs2', text "does not imply", pprC cs1' ]
+--       --        <> (if null undetermined then empty
+--       --            else line <> text "with any choice of" <+> ppr undetermined)
+--       --        <> vcat (map pprRes results)
+--   where
+--     -- pprRes (xs, ~(Just bs)) =
+--     --   vcat [ text "for" <+> align (hsep (map pprS xs)),
+--     --          text "we have a counter example:",
+--     --          text "  " <> align (vcat (map pprS bs)) ]
+--     pprS (x, b) = ppr x <+> text "=" <+> text (if b then "Omega" else "One")
+--     pprC = parens . hsep . punctuate comma . map ppr
+--       -- liftIO $ print $ hsep [ red (text "[TODO : Implement SAT-based check]"),
+--       --                         parens $ hsep $ punctuate comma $ map ppr cs2', text  "||-" ,
+--       --                         parens $ hsep $ punctuate comma $ map ppr cs1' ]
+
+
+checkImplicationD :: MonadTypeCheck m => [MetaTyVar] -> [TyConstraint] -> [TyConstraint] -> m ()
+checkImplicationD origVars csGiven csWanted = do
+  cs1' <- simplifyConstraints =<< mapM zonkTypeC csWanted
+  cs2' <- simplifyConstraints =<< mapM zonkTypeC csGiven
 
   let cs1'' = filter (not . (`elem` cs2')) cs1'
 
   let undetermined = metaTyVarsC (cs1'' ++ cs2') \\ origVars
-  -- let props = foldr (\a rs ->
-  --                     [ ((a,True):xs, SAT.var (MV a) .&&. r) | (xs,r) <- rs ]
-  --                     ++ [ ((a, False):xs, neg (SAT.var (MV a)) .&&. r) | (xs,r) <- rs])
-  --                  [([], toFormula cs2' .&&. SAT.neg (toFormula cs1''))]
-  --                  undetermined
+  -- undetermined <- filterM (\mv -> readTcLevelMv mv >>= \i -> return (i >= cLevel)) $ metaTyVarsC (cs1''++cs2')
 
-  -- To check exists origVars. forall `undetermined`. neg (cs2 => cs1'') holds
-  -- i.e.,
-  let prop = foldr (\a cnf ->
-                      SAT.elim (MV a) True  cnf
-                      .&&. SAT.elim (MV a) False cnf)
-                   (toFormula cs2' .&&. SAT.neg (toFormula cs1''))
-                   undetermined
+  let cs1''' = eliminateExistential undetermined cs1''
 
-  debugPrint 2 $ text "Given: " <+> ppr cs1''
-  debugPrint 2 $ text "Wanted:" <+> ppr cs2'
-  debugPrint 2 $ text "EVars: " <+> ppr undetermined
-  debugPrint 2 $ text "Prop:  " <+> ppr prop
-
-  case cs1'' of
-    [] -> return ()
-    _  ->
-      case SAT.sat prop of
-        Nothing -> return ()
-        Just bs ->
---          liftIO $ print $ red $ text "SAT."
-          reportError $ Other $ D.group $
-            vcat [ hsep [pprC cs2', text "does not imply", pprC cs1']
-                   <> (if null undetermined then empty
-                       else line <> text "with any choice of" <+> ppr undetermined),
-                   nest 2 (vcat [ text "a concrete counter example:",
-                                  vcat (map pprS bs) ]) ]
-      -- let results = map (\(xs,p) -> (xs, SAT.sat p)) props
-      -- if any (isNothing . snd) results
-      --   then return ()
-      --   else do
-      --   reportError $ Other $ D.group $
-      --        hsep [pprC cs2', text "does not imply", pprC cs1' ]
-      --        <> (if null undetermined then empty
-      --            else line <> text "with any choice of" <+> ppr undetermined)
-      --        <> vcat (map pprRes results)
+  check undetermined cs2' cs1'''
   where
-    -- pprRes (xs, ~(Just bs)) =
-    --   vcat [ text "for" <+> align (hsep (map pprS xs)),
-    --          text "we have a counter example:",
-    --          text "  " <> align (vcat (map pprS bs)) ]
+    -- NB: The type signature matters here.
+    check :: MonadTypeCheck m => [MetaTyVar] -> [TyConstraint] -> [TyConstraint] -> m ()
+    check undetermined given wanted = do
+      g <- simplifyConstraints =<< mapM zonkTypeC given
+      w <- simplifyConstraints =<< mapM zonkTypeC wanted
+
+      -- We skip the trivial case.
+      unless (null w) $ do
+        cLevel <- currentLevel
+        lv <- lvToCheck g w
+
+        if lv == cLevel
+          then do -- We are ready for checking
+
+          let prop = toFormula g .&&. SAT.neg (toFormula w)
+          debugPrint 2 $ nest 2 $
+            text "Implicating Check:" <> brackets (ppr cLevel) <> line <>
+            vcat [text "Wanted:" <+> ppr w,
+                  text "Given: " <+> ppr g,
+                  text "EVars: " <+> ppr undetermined,
+                  text "Prop:  " <+> ppr prop]
+
+          case SAT.sat prop of
+            Nothing -> return ()
+            Just bs ->
+              reportError $ Other $ D.group $
+              vcat [ hsep [pprC csGiven, text "does not imply", pprC csWanted]
+                     <> (if null undetermined then empty
+                         else line <> text "with any choice of" <+> ppr undetermined),
+                     nest 2 (vcat [ text "a concrete counter example:",
+                                    vcat (map pprS bs) ]) ]
+          else do -- We are not ready to check the implication as there are undetermined variables.
+          defer $ SuspendedCheck (check undetermined g w)
+
+
+    -- freeTyVarsC cs = concat <$> mapM (\(MSub m ms) -> freeTyVars (m:ms)) cs
+
+
+    lvToCheck :: MonadTypeCheck m => [TyConstraint] -> [TyConstraint] -> m TcLevel
+    lvToCheck cs1 cs2 = csTcLevel (cs1 ++ cs2)
+
     pprS (x, b) = ppr x <+> text "=" <+> text (if b then "Omega" else "One")
     pprC = parens . hsep . punctuate comma . map ppr
-      -- liftIO $ print $ hsep [ red (text "[TODO : Implement SAT-based check]"),
-      --                         parens $ hsep $ punctuate comma $ map ppr cs2', text  "||-" ,
-      --                         parens $ hsep $ punctuate comma $ map ppr cs1' ]
-
 
 
 data VV = MV MetaTyVar | SV TyVar
@@ -1155,13 +1217,13 @@ eliminateInvisible mvs (TyQual cs t) =
   let visibleVars = metaTyVars [t]
       invisibles  = mvs \\ visibleVars
       cs' = eliminateExistential invisibles cs
-  in (visibleVars, TyQual cs' t)
+  in (mvs \\ invisibles, TyQual cs' t)
 
 
 
 quantify :: MonadTypeCheck m => [MetaTyVar] -> QualTy -> m PolyTy
 quantify mvs0 ty0 = do
-  liftIO $ print $ red $ text "Simplification:" <+> align (group (ppr ty0) <> line <> text "is simplified to" <> line <> group (ppr ty))
+  -- debugPrint 2 $ text "Simpl:" <+> align (group (ppr (mvs0, ty0)) <> line <> text "-->" <> line <> group (ppr (mvs, ty)))
   -- liftIO $ print $ red $ "Generalization:" <+> ppr (zip mvs newBinders)
 
   forM_ (zip mvs newBinders) $

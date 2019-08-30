@@ -10,37 +10,71 @@ data Either a b = Left a | Right b
 def either left right (Left a)  = left a 
          | left right (Right b) = right b
 
+sig fst : (a, b) -> a 
 def fst (a,_) = a
+
+sig snd : (a, b) -> b 
 def snd (_,b) = b 
 
+sig curry : (p <= q, p <= r) => ((a, b) # p -> c) -> a # q -> b # r -> c
 def curry f x y = f (x,y)
+
+sig uncurry : (p <= r, q <= r) => (a # p -> b # q -> c) -> (a, b) # r -> c 
 def uncurry f (x,y) = f x y 
 
+sig ($) : p <= r => (a # p -> b) # q -> a # r -> b
 def ($) f x = f x 
+
 def (.) f g = \x -> f (g x)
+
+def flip f x y = f y x 
+
+def flipflip = flip . flip 
+
+def dot8  = (.) (.) (.) (.) (.) (.) (.) (.) 
+def dot12 = (.) (.) (.) (.) (.) (.) (.) (.) (.) (.) (.) (.) 
 
 fixity $ 0 right
 fixity . 90 right
 
 data List a = Nil | Cons a (List a) 
 
+sig map : (p <= q) => (a # p -> b) -> List a # q -> List b 
 def map f Nil        = Nil  
       | f (Cons a x) = Cons (f a) (map f x) 
 
+def mapByfoldr f = foldr (Cons . f) Nil
+
+def filter p Nil = Nil 
+         | p (Cons a x) = case p a of 
+           | True -> Cons a (filter p x)
+           | False -> filter p x
+           end 
+
+def filterByfoldr p = flip foldr Nil $ (\a -> case p a of 
+                                          | True -> Cons a 
+                                          | False -> \x -> x
+                                          end)
+
+sig foldr : (q <= r, p <= s, q <= s) => (a # p -> b # q -> b) -> b # r -> List a # s -> b 
 def foldr f e Nil        = e
         | f e (Cons a x) = f a (foldr f e x) 
 
+sig foldl : (q <= r, p <= s, q <= s) => (b # q -> a # p -> b) -> b # r -> List a # s -> b 
 def foldl f e Nil        = e
-        | f e (Cons a x) = foldl f (f a e) x 
+        | f e (Cons a x) = foldl f (f e a) x 
 
+sig reverse : List a # p -> List a 
 def reverse xs = rv xs Nil
-  where
+      where
     def rv Nil         ys = ys 
          | (Cons x xs) ys = rv xs (Cons x ys) 
   end
 
+sig tail : List a -> List a 
 def tail (Cons a x) = x 
 
+sig const : a # p -> b -> a
 def const a _ = a 
 
 def dupList dupElem lst = case lst of 
@@ -75,3 +109,15 @@ def out (MkF f) = f
 -- sig myfix : ((a # p -> b) -> (a # p -> b)) -> a # p -> b 
 def myfix f a = (\x a -> f (out x x) a) (MkF (\x a -> f (out x x) a)) a
 
+
+data Nat = Z | S Nat 
+
+def addCps Z     y k = k y
+      |    (S x) y k = addCps x y (\r -> k (S r))
+
+def add x y = addCps x y (\x -> x) 
+
+sig f : a # p -> a 
+def f = 
+    let def id x = x 
+    in id id id id id id id id id id id id id id id id id 

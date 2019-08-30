@@ -25,6 +25,7 @@ import qualified System.Console.Haskeline        as HL
 import           System.Directory                (getCurrentDirectory,
                                                   getHomeDirectory)
 import qualified System.FilePath                 as FP ((</>))
+import           System.IO                       (stdout)
 import qualified Text.PrettyPrint.ANSI.Leijen    as D
 
 import           Language.Sparcl.Class
@@ -378,6 +379,12 @@ resetModule = do
 
 
 
+reportTypeInfo :: ModuleInfo Value -> REPL ()
+reportTypeInfo m = do
+  liftIO $ displayIO stdout $ renderPretty 0.9 100 $
+    vcat [vcat $ map (\(n, t) -> fillBreak 8 (ppr n <+> text ":") <+> align (ppr t)) (M.toList $ miTypeTable m),
+          text "Ok." ]
+    <> line
 
 
 procLoad :: String -> REPL ()
@@ -395,6 +402,7 @@ procLoad fp = do
       Just m -> do
         resetModule
         setModule m
+        reportTypeInfo m
         waitCommand
 
   where
@@ -418,7 +426,7 @@ procReload = do
   lastLoad <- Rd.asks confLastLoad
   case lastLoad of
     Nothing -> do
-      liftIO $ putStrLn "Command :load has not been performed yet. Do nothing."
+      liftIO $ putStrLn "Command :load has not been performed yet. Nothing happened."
       waitCommand
     Just fp -> procLoad fp
 

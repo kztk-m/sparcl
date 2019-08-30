@@ -3,20 +3,20 @@
 
 module Language.Sparcl.Typing.TCMonad where
 
+import           Data.List                      (foldl')
 import           Data.Map                       (Map)
 import qualified Data.Map                       as M
 import           Data.Map.Merge.Lazy            as M
-
 import           Data.Sequence                  (Seq)
 import qualified Data.Sequence                  as Seq
+
+import           Data.Foldable                  (toList)
+import           Data.IORef
 
 import           Control.Monad.Reader
 -- import Control.Monad.Except
 -- import Control.Exception (evaluate, Exception, throw, catch)
 import           Control.Monad.Catch
-
-import           Data.Foldable                  (toList)
-import           Data.IORef
 
 import           Language.Sparcl.Exception
 import           Language.Sparcl.Multiplicity
@@ -212,6 +212,11 @@ emptyUseMap = M.empty
 deleteUseMap :: Name -> UseMap -> UseMap
 deleteUseMap = M.delete
 
+type TypeErrorContext = ([S.LExp 'Renaming], WhenChecking)
+
+data SuspendedCheck =
+  SuspendedCheck { scCheck    :: forall m. MonadTypeCheck m => m () }
+
 -- the following information is used. The information is kept globally.
 data TypingContext =
   TypingContext { tcRefMvCount :: !(IORef Int),
@@ -224,7 +229,8 @@ data TypingContext =
                   tcLoc        :: Maybe SrcSpan,  -- focused part
                   tcChecking   :: WhenChecking,
                   tcDebugLevel :: !Int,
-                  tcRefErrors  :: !(IORef (Seq TypeError))
+                  tcRefErrors  :: !(IORef (Seq TypeError)),
+                  tcDeferredIC :: !(IORef [(TypeErrorContext, SuspendedCheck)])
                                -- Type errors are accumulated for better error messages
                   }
 
@@ -237,6 +243,7 @@ initTypingContext = do
   r2 <- newIORef 0
   r  <- newIORef Seq.empty
   rc <- newIORef []
+  ric <- newIORef []
   return TypingContext { tcRefMvCount = r1,
                          tcRefSvCount = r2,
                          tcTcLevel    = 0 ,
@@ -247,20 +254,23 @@ initTypingContext = do
                          tcChecking   = CheckingNone,
                          tcDebugLevel = 0,
                          tcTyEnv      = M.empty,
-                         tcSyn        = M.empty }
+                         tcSyn        = M.empty,
+                         tcDeferredIC = ric }
 
 -- This function must be called before each session of type checking.
 refreshTC :: TypingContext -> IO TypingContext
 refreshTC tc = do
   r <- newIORef Seq.empty
   rc <- newIORef []
+  ric <- newIORef []
   return $ tc { tcTyEnv     = M.empty,
                 tcSyn       = M.empty,
                 tcLoc       = Nothing,
                 tcConstraint = rc,
                 tcRefErrors = r,
                 tcChecking  = CheckingNone,
-                tcContexts  = [] }
+                tcContexts  = [],
+                tcDeferredIC = ric}
 
 setEnvs :: TypingContext -> TypeTable -> SynTable -> TypingContext
 setEnvs tc tenv syn =
@@ -298,7 +308,7 @@ instance C.Local KeyTC TypingContext SimpleTC where
 
 runTC :: MonadTypeCheck m => m a -> m a
 runTC m = do
-  !res <- m `catch` (\(_ :: AbortTyping) -> do
+  res <- m `catch` (\(_ :: AbortTyping) -> do
                         return undefined)
   tc   <- C.ask (C.key @KeyTC)
   errs <- liftIO $ readIORef (tcRefErrors tc)
@@ -340,6 +350,18 @@ whenChecking ::  MonadTypeCheck m => WhenChecking -> m a -> m a
 whenChecking t =
   C.local (C.key @KeyTC) (\tc -> tc { tcChecking = t })
 
+whatIsChecking :: MonadTypeCheck m => m WhenChecking
+whatIsChecking = C.asks (C.key @KeyTC) tcChecking
+
+restoreTypeErrorContext :: MonadTypeCheck m => TypeErrorContext -> m r -> m r
+restoreTypeErrorContext (exps, wc) m =
+  C.local (C.key @KeyTC) (\tc -> tc { tcContexts = exps, tcChecking = wc }) m
+
+currentTypeErrorContext :: MonadTypeCheck m => m TypeErrorContext
+currentTypeErrorContext = do
+  wc <- C.asks (C.key @KeyTC) tcChecking
+  es <- C.asks (C.key @KeyTC) tcContexts
+  return (es, wc)
 
 atLoc :: MonadTypeCheck m => SrcSpan -> m a -> m a
 atLoc NoLoc = id
@@ -406,6 +428,12 @@ newSkolemTyVar ty = do
   cnt <- liftIO $ atomicModifyIORef' cref $ \cnt -> (cnt + 1, cnt)
   return $ SkolemTv ty cnt
 
+defer :: MonadTypeCheck m => SuspendedCheck -> m ()
+defer sc = do
+  ref <- C.asks (C.key @KeyTC) tcDeferredIC
+  tec <- currentTypeErrorContext
+  liftIO $ modifyIORef ref $ ((tec, sc):)
+
 
 resolveSyn :: MonadTypeCheck m => Ty -> m Ty
 resolveSyn ty = do
@@ -442,9 +470,33 @@ resolveSyn ty = do
   -- withVar x ty mult =
   --   local (\tc -> tc { tcTyEnv = M.insert x (ty, mult) (tcTyEnv tc) })
 
+currentLevel :: MonadTypeCheck m => m TcLevel
+currentLevel = do
+  C.asks (C.key @KeyTC) tcTcLevel
+
 pushLevel :: MonadTypeCheck m => m a -> m a
-pushLevel =
-  C.local (C.key @KeyTC) (\tc -> tc { tcTcLevel = succ (tcTcLevel tc) })
+pushLevel m = do
+  -- perform computation.
+  res <- C.local (C.key @KeyTC) (\tc -> tc { tcTcLevel = succ (tcTcLevel tc) }) m
+
+
+  tref <- C.asks (C.key @KeyTC) tcDeferredIC
+  -- deferred
+  deferred <- liftIO $ readIORef tref
+
+  procDeferred deferred
+
+  return res
+  where
+    procDeferred []            = return ()
+    procDeferred ((tyc, q):qs) = do
+      restoreTypeErrorContext tyc $ scCheck q
+      procDeferred qs
+
+
+
+
+
 
 withVar :: MonadTypeCheck m => Name -> Ty -> m a -> m a
 withVar x ty =
@@ -615,5 +667,36 @@ unifyUnboundMetaTyVar mv ty2 = do
       lvl <- readTcLevelMv mv
       ty2'LevelAdjusted <- capLevel lvl ty2'
       writeTyVar mv ty2'LevelAdjusted
+
+
+{-# INLINE minimum' #-}
+{-# SPECIALIZE INLINE minimum' :: [TcLevel] -> TcLevel #-}
+minimum' :: (Ord a, Bounded a) => [a] -> a
+minimum' = foldl' min maxBound
+
+csTcLevel :: MonadTypeCheck m => [TyConstraint] -> m TcLevel
+csTcLevel cs = minimum' <$> traverse cTcLevel cs
+
+tyTcLevel  :: MonadTypeCheck m => Ty -> m TcLevel
+qtyTcLevel :: MonadTypeCheck m => QualTy -> m TcLevel
+cTcLevel   :: MonadTypeCheck m => TyConstraint -> m TcLevel
+
+tyTcLevel = zonkType >=> tyTcLevelWork
+qtyTcLevel = zonkTypeQ >=> qtyTcLevelWork
+cTcLevel = zonkTypeC >=> cTcLevelWork
+
+tyTcLevelWork  :: MonadTypeCheck m => Ty -> m TcLevel
+tyTcLevelWork (TyMetaV mv)     = liftIO $ readTcLevelMv mv
+tyTcLevelWork (TyVar _)        = return maxBound
+tyTcLevelWork (TyCon _ ts)     = minimum' <$> mapM tyTcLevelWork ts
+tyTcLevelWork (TySyn _ t)      = tyTcLevelWork t
+tyTcLevelWork (TyMult _)       = return maxBound
+tyTcLevelWork (TyForAll _ qty) = qtyTcLevelWork qty
+
+qtyTcLevelWork :: MonadTypeCheck m => QualTy -> m TcLevel
+qtyTcLevelWork (TyQual cs t) = min <$> (minimum' <$> mapM cTcLevel cs) <*> tyTcLevel t
+
+cTcLevelWork   :: MonadTypeCheck m => TyConstraint -> m TcLevel
+cTcLevelWork (MSub t ts) = min <$> tyTcLevelWork t <*> (minimum' <$> traverse tyTcLevelWork ts)
 
 

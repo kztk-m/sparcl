@@ -1,19 +1,13 @@
--- It is intentional that this program causes a type error.
+def const a b = a
 
-data Nat = Z | S Nat 
- 
-sig add : Nat -o rev Nat -o rev Nat 
-def add Z     y = y 
-      | (S x) y = rev S (add x y)
+def h f k = f (\x -> k x)
+    
+def h2 f k = 
+    let sig hh : Int
+        def hh = f (\x -> k x) 
+    in  hh
 
--- sig isZ : !Nat -o Bool
-def isZ Z = True
-      | _  = False 
-
-def eq (rev Z)     (rev Z)     = rev Z with isZ 
-     | (rev (S x)) (rev (S y)) = rev S (eq x y) 
-
-sig mul : Nat -> rev Nat -o rev Nat 
-def mul _ (rev Z)   = rev Z with isZ 
-      | z (rev S y) = add z (mul z (eq y y)) 
-
+def h3 f k = 
+    let sig hh : Int
+        def hh = f (\x -> k x) 
+    in (f (\x -> const 1 x), hh) 
