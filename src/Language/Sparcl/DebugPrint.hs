@@ -4,18 +4,18 @@ module Language.Sparcl.DebugPrint
     KeyDebugLevel,
   ) where
 
-import           Language.Sparcl.Class
+import           Control.Monad          (when)
 import           Control.Monad.IO.Class
-import           Control.Monad (when)
-import           System.IO (stderr)
-import           Language.Sparcl.Pretty          hiding ((<$>))
+import           Language.Sparcl.Class
+import           Language.Sparcl.Pretty hiding ((<$>))
+import           System.IO              (stderr)
 
-data KeyDebugLevel 
+data KeyDebugLevel
 
 debugPrint :: (Has KeyDebugLevel Int m, MonadIO m) => Int -> Doc -> m ()
-debugPrint n s = do 
+debugPrint n s = do
   vlevel      <- ask (key @KeyDebugLevel)
-  when (vlevel >= n) $ 
-    liftIO $ displayIO stderr $ renderPretty 0.8 80 $
-      dullcyan $ text ("[DEBUG " ++ show n ++ "]") <+> align s <> line
-    
+  when (vlevel >= n) $
+    liftIO $ displayIO stderr $ renderPretty 0.9 120 $
+      dullcyan $ text ("[D" ++ show n ++ "]") <+> align s <> line
+
