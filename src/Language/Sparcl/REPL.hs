@@ -4,58 +4,45 @@
 
 module Language.Sparcl.REPL where
 
+import           Control.DeepSeq
+import           Control.Exception               (IOException, SomeException,
+                                                  evaluate)
+import           Control.Monad                   (join, liftM2)
+import           Control.Monad.Catch
+import           Control.Monad.IO.Class
+import qualified Control.Monad.Reader            as Rd
+import           Control.Monad.Trans             (MonadTrans, lift)
+import           Data.Char                       (isSpace)
+import           Data.IORef
+import           Data.List                       (isPrefixOf)
+import qualified Data.Map                        as M
+import           Data.Maybe                      (fromMaybe)
+import qualified Data.Set                        as S
+import           Data.Time.Clock                 (getCurrentTime)
+import qualified Language.Haskell.Interpreter    as Hint
+import qualified Language.Haskell.TH             as TH
+import qualified System.Console.Haskeline        as HL
+import           System.Directory                (getCurrentDirectory,
+                                                  getHomeDirectory)
+import qualified System.FilePath                 as FP ((</>))
+import qualified Text.PrettyPrint.ANSI.Leijen    as D
+
+import           Language.Sparcl.Class
+import           Language.Sparcl.Command
 import           Language.Sparcl.Core.Syntax
+import           Language.Sparcl.DebugPrint
+import           Language.Sparcl.Desugar
 import           Language.Sparcl.Eval
 import           Language.Sparcl.Exception
 import           Language.Sparcl.Module
+import           Language.Sparcl.Pretty          hiding ((<$>))
 import           Language.Sparcl.Renaming        (NameTable, OpTable, renameExp,
                                                   runRenaming)
+import           Language.Sparcl.Surface.Parsing
 import           Language.Sparcl.Typing.TCMonad
 import           Language.Sparcl.Typing.Type
 import           Language.Sparcl.Typing.Typing
 import           Language.Sparcl.Value
-
-import           Language.Sparcl.Class
-import           Language.Sparcl.Desugar
-
-import           Language.Sparcl.Command
-import           Language.Sparcl.Surface.Parsing
-
-import qualified System.Console.Haskeline        as HL
-
-import           Control.Monad                   (join, liftM2)
-import           Control.Monad.IO.Class
-import qualified Control.Monad.Reader            as Rd
-import           Control.Monad.Trans             (MonadTrans, lift)
-import           Data.IORef
-
-import           Control.DeepSeq
-
-import qualified Data.Map                        as M
-import qualified Data.Set                        as S
-
-import           Language.Sparcl.Pretty          hiding ((<$>))
-import qualified Text.PrettyPrint.ANSI.Leijen    as D
-
-import           Data.List                       (isPrefixOf)
-
-import           Data.Char                       (isSpace)
-
-import           Data.Maybe                      (fromMaybe)
-
-import           Control.Exception               (IOException, SomeException,
-                                                  evaluate)
-import           Control.Monad.Catch
-
-import           System.Directory                (getCurrentDirectory,
-                                                  getHomeDirectory)
-import qualified System.FilePath                 as FP ((</>))
-
-import           Data.Time.Clock                 (getCurrentTime)
-import qualified Language.Haskell.Interpreter    as Hint
-import qualified Language.Haskell.TH             as TH
-
-import           Language.Sparcl.DebugPrint
 
 -- import Data.Coerce
 
