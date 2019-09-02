@@ -38,17 +38,17 @@ def q6 = bwd exp0
 def qm = 1 + 2 * 3 + 4 * 5 
 def incL = lift (\x -> x + 1) (\x -> x - 1)
 
-{-
-We need some check of conformance C ||- D when 
-we add type signatures, we know that this is decidable 
-and at least in NP. 
--}
-sig comp : forall p q r u a b c. 
-           (u ~ p * r) => 
-           (b # p -> c) # q -> 
-           (a # r -> b) # p -> 
-           a # u -> c
-def comp f g x = f (g x)
+-- {-
+-- We need some check of conformance C ||- D when 
+-- we add type signatures, we know that this is decidable 
+-- and at least in NP. 
+-- -}
+-- sig comp : forall p q r u a b c. 
+--            (u ~ p * r) => 
+--            (b # p -> c) # q -> 
+--            (a # r -> b) # p -> 
+--            a # u -> c
+-- def comp f g x = f (g x)
 
 -- More general type for comp
 sig comp1 : 

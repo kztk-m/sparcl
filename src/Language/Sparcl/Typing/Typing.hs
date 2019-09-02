@@ -37,7 +37,7 @@ import           Language.Sparcl.Pretty         as D hiding ((<$>))
 import           Data.List                      (partition, (\\))
 
 -- import Control.Exception (evaluate)
--- import Debug.Trace
+import           Debug.Trace
 
 
 -- TODO: Implement kind checking
@@ -328,9 +328,11 @@ checkPatTyWork isUnderRev (Loc loc pat) pmult patTy = do
       --       (PBang (Loc _ (PVar x')), ubind, lbind) <- go (PBang (noLoc $ PVar x))
       --       return (PWild x', ubind, lbind)
 
+simplifyConstraintsNoRed :: MonadTypeCheck m => [TyConstraint] -> m [TyConstraint]
+simplifyConstraintsNoRed cs = removeRedundantConstraint =<< simplifyConstraints cs
 
 simplifyConstraints :: MonadTypeCheck m => [TyConstraint] -> m [TyConstraint]
-simplifyConstraints constrs = whenChecking (CheckingConstraint constrs) $ go constrs >>= removeRedundantConstraint
+simplifyConstraints constrs = whenChecking (CheckingConstraint constrs) $ go constrs
   where
     go cs = do
       csZonked <- mapM zonkTypeC cs
@@ -344,7 +346,13 @@ simplifyConstraints constrs = whenChecking (CheckingConstraint constrs) $ go con
 checkImplication :: [TyConstraint] -> [TyConstraint] -> Bool
 checkImplication given wanted =
   let prop = toFormula given .&&. SAT.neg (toFormula wanted)
-  in case SAT.sat prop of
+  in trace (show $ vcat [ text "Checking",
+                          ppr given,
+                          text "implies",
+                          ppr wanted,
+                          "by Solving",
+                          ppr prop]) $
+     case SAT.sat prop of
        Just _  -> False
        Nothing -> True
 
@@ -675,7 +683,7 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
 generalizeTy :: MonadTypeCheck m => MonoTy -> UseMap -> m PolyTy
 generalizeTy ty_ um = do
   cs  <- readConstraint
-  cs' <- simplifyConstraints cs
+  cs' <- simplifyConstraintsNoRed cs
 
   ty <- zonkType ty_
 
@@ -1079,16 +1087,21 @@ checkImplicationD origVars csGiven csWanted = do
     -- NB: The type signature matters here.
     check :: MonadTypeCheck m => [MetaTyVar] -> [TyConstraint] -> [TyConstraint] -> m ()
     check undetermined given wanted = do
-      g <- simplifyConstraints =<< mapM zonkTypeC given
-      w <- simplifyConstraints =<< mapM zonkTypeC wanted
+      -- g <- simplifyConstraints =<< mapM zonkTypeC given
+      -- w <- simplifyConstraints =<< mapM zonkTypeC wanted
+
+      g0 <- mapM zonkTypeC given
+      w0 <- mapM zonkTypeC wanted
 
       -- We skip the trivial case.
-      unless (null w) $ do
+      unless (null w0) $ do
         cLevel <- currentLevel
-        lv <- lvToCheck g w
+        lv <- lvToCheck g0 w0
 
-        if lv == cLevel
+        if lv == cLevel || lv == maxBound
           then do -- We are ready for checking
+          g <- simplifyConstraints g0
+          w <- simplifyConstraints w0
 
           let prop = toFormula g .&&. SAT.neg (toFormula w)
           debugPrint 2 $ nest 2 $
@@ -1108,7 +1121,8 @@ checkImplicationD origVars csGiven csWanted = do
                      nest 2 (vcat [ text "a concrete counter example:",
                                     vcat (map pprS bs) ]) ]
           else do -- We are not ready to check the implication as there are undetermined variables.
-          defer $ SuspendedCheck (check undetermined g w)
+          debugPrint 4 $ red $ text "Check:" <+> ppr g0 <+> text "=>" <+> ppr w0 <+> text "is deferred" <+> ppr cLevel <+> text "-->" <+> ppr lv
+          defer $ SuspendedCheck (check undetermined g0 w0)
 
 
     -- freeTyVarsC cs = concat <$> mapM (\(MSub m ms) -> freeTyVars (m:ms)) cs

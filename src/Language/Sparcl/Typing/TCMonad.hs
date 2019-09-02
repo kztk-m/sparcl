@@ -484,6 +484,8 @@ pushLevel m = do
   -- deferred
   deferred <- liftIO $ readIORef tref
 
+  debugPrint 4 $ red $ text "#deferred checks:" <+> (ppr $ length deferred)
+
   procDeferred deferred
 
   return res
