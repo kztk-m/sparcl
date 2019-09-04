@@ -83,3 +83,13 @@ def comps =
         def h = comp1 : (forall a b c. (b -> c) -o (a -> b) -> a -> c)
     in 
     ()
+
+def test f x y = test f 1 (f x y)
+
+sig dupNat : Nat -o (Nat, Nat) 
+def dupNat Z     = (Z, Z) 
+    |      (S x) = 
+     case dupNat x of 
+     | (s, t) -> (S s, S t)
+    end 
+
