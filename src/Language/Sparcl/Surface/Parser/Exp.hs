@@ -1,41 +1,42 @@
 module Language.Sparcl.Surface.Parser.Exp where
 
-import Language.Sparcl.Surface.Syntax hiding (whereClause)
-import Language.Sparcl.Multiplicity
-import Language.Sparcl.SrcLoc
-import Language.Sparcl.Name
-import Language.Sparcl.Pass
-import Language.Sparcl.Literal
+import           Language.Sparcl.Literal
+import           Language.Sparcl.Multiplicity
+import           Language.Sparcl.Name
+import           Language.Sparcl.Pass
+import           Language.Sparcl.SrcLoc
+import           Language.Sparcl.Surface.Syntax        hiding (whereClause)
 
-import qualified Text.Megaparsec.Char.Lexer as L
-import qualified Text.Megaparsec.Char as P
-import qualified Text.Megaparsec as P 
+import qualified Text.Megaparsec                       as P
+import qualified Text.Megaparsec.Char                  as P
+import qualified Text.Megaparsec.Char.Lexer            as L
 
-import Language.Sparcl.Surface.Parser.Helper
-import Language.Sparcl.Surface.Parser.Id
+import           Language.Sparcl.Surface.Parser.Helper
+import           Language.Sparcl.Surface.Parser.Id
 
-import Text.Megaparsec ((<|>))
+import           Text.Megaparsec                       ((<|>))
 
-import Control.Monad 
+import           Control.Monad
 
-import Data.Maybe (fromMaybe)
-import qualified Data.Set as Set
+import           Data.List                             ((\\))
+import           Data.Maybe                            (fromMaybe)
+
 
 -- import Language.Sparcl.Pretty (ppr)
 
-import Control.Arrow (left) 
+import           Control.Arrow                         (left)
 
 full :: P m a -> P m a
-full p = sp *> p <* P.eof 
+full p = sp *> p <* P.eof
 
 parseExp :: String -> Either String (LExp 'Parsing)
-parseExp = left P.parseErrorPretty . P.runParser (full expr) "<unknown source>" 
+parseExp = left P.parseErrorPretty . P.runParser (full expr) "<unknown source>"
 
 parseExp' :: FilePath -> String -> Either String (LExp 'Parsing)
 parseExp' fp = left P.parseErrorPretty . P.runParser (full expr) fp
 
 parseModule :: FilePath -> String -> Either String (Module 'Parsing)
-parseModule fp = left P.parseErrorPretty . P.runParser (full modul) fp 
+parseModule fp = left P.parseErrorPretty . P.runParser (full modul) fp
 
 parseDecl :: String -> Either String (Decls 'Parsing (Loc (TopDecl 'Parsing)))
 parseDecl = left P.parseErrorPretty . P.runParser (full topDecls) "<unknown source>"
@@ -46,7 +47,7 @@ parseDecl = left P.parseErrorPretty . P.runParser (full topDecls) "<unknown sour
 --   res <- P.runParserT p "<unknown source>" s
 --   case res of
 --     Left err -> error (P.parseErrorPretty err)
---     Right r  -> return r 
+--     Right r  -> return r
 
 
 {-
@@ -57,9 +58,9 @@ E ::= \ P1 ... Pn -> E
 
 -}
 expr :: Monad m => P m (LExp 'Parsing)
-expr = getSrcLoc >>= \startLoc -> 
+expr = getSrcLoc >>= \startLoc ->
   (do void lambda
-      ps <- P.some simplePat 
+      ps <- P.some simplePat
       void rightArrow
       e <- expr
       return $ Loc (startLoc <> location e) $ Abs ps e )
@@ -72,18 +73,18 @@ expr = getSrcLoc >>= \startLoc ->
   <|>
   (do void $ keyword "case"
       e0   <- expr
-      void $ keyword "of" 
+      void $ keyword "of"
       alts <- alternatives
       void $ keyword "end"
-      endLoc <- getSrcLoc 
+      endLoc <- getSrcLoc
       return $ Loc (startLoc <> endLoc) $ Case e0 alts)
   <|>
   (do void $ keyword "revdo"
-      as <- assignment `P.endBy` semicolon 
+      as <- assignment `P.endBy` semicolon
       void $ keyword "in"
       e <- expr
       return $ Loc (startLoc <> location e) $ RDO as e)
-  <|> 
+  <|>
   (do e <- opExpr
       m <- P.optional (symbol ":" *> typeExpr)
       case m of
@@ -99,7 +100,7 @@ assignment = do
   return (p, e)
 
 simplePat :: Monad m => P m (LPat 'Parsing)
-simplePat = loc $ 
+simplePat = loc $
   conPat
   <|> varPat
   <|> (unLoc <$> tuplePat)
@@ -109,27 +110,27 @@ simplePat = loc $
       c <- L.lexeme sp qconName
       return $ PCon c []
 
-    varPat = 
+    varPat =
       PVar <$> L.lexeme sp varName
-    
+
     wildPat = do
       void $ symbol "_"
       return (PWild () :: Pat 'Parsing)
 
 tuplePat :: Monad m => P m (LPat 'Parsing)
-tuplePat = mkTuplePat <$> 
+tuplePat = mkTuplePat <$>
   parens (pat `P.sepBy` comma)
-  
+
 pat :: Monad m => P m (LPat 'Parsing)
 pat = do
   s <- getSrcLoc
   m <- P.optional (keyword "rev")
-  p <- appPat 
+  p <- appPat
   case m of
     Just _  -> return $ Loc (s <> location p) $ PREV p
-    Nothing -> return p 
+    Nothing -> return p
 
-appPat :: Monad m => P m (LPat 'Parsing)   
+appPat :: Monad m => P m (LPat 'Parsing)
 appPat =
   P.try (loc $ do
             c <- qconName
@@ -137,41 +138,42 @@ appPat =
             ps <- P.some simplePat
             return $ PCon c ps)
   <|>
-  simplePat 
+  simplePat
 
 introForAll :: LTy 'Parsing -> LTy 'Parsing
 introForAll ty =
-  let freeVars = goL Set.empty ty Set.empty
+  let freeVars = freeTyVars ty
   in foldr (\x -> Loc (location ty) . TForall x) ty freeVars
-  where
-    list _ [] = id
-    list f (x:xs) = f x . list f xs
+  -- where
+  --   list _ []     = id
+  --   list f (x:xs) = f x . list f xs
 
-    goL xs = go xs . unLoc 
+  --   goL xs = go xs . unLoc
 
-    goC xs (MSub   t1 t2)    = list (goL xs) t1 . list (goL xs) t2 
+  --   goC xs (MSub   t1 t2)    = list (goL xs) t1 . list (goL xs) t2
+  --   goC xs (MEq    t1 t2)
 
-    go xs (TVar x) | x `Set.member` xs = id
-                   | otherwise         = Set.insert x 
-    go xs (TForall x t) = goL (Set.insert x xs) t
-    go xs (TQual cs t)  = list (goC xs) cs . goL xs t
+  --   go xs (TVar x) | x `Set.member` xs = id
+  --                  | otherwise         = Set.insert x
+  --   go xs (TForall x t) = goL (Set.insert x xs) t
+  --   go xs (TQual cs t)  = list (goC xs) cs . goL xs t
 
-    go xs (TCon _ ts) = list (goL xs) ts
-    go _  (TMult _)   = id
+  --   go xs (TCon _ ts) = list (goL xs) ts
+  --   go _  (TMult _)   = id
 
-    
 
-  
+
+
 typeExpr :: Monad m => P m (LTy 'Parsing)
 typeExpr = do
   ef    <- P.optional (symForAll *> P.many (varName <* sp) <* symbol ".")
-  mid   <- getSrcLoc 
+  mid   <- getSrcLoc
   ctxt  <- P.optional $ P.try (constraint <* dRightArrow)
   ty    <- arrTy
   return $ maybe id foralls ef $ maybe id (\cs -> Loc (mid <> location ty) . TQual cs) ctxt ty
     where
       foralls [] r     = r
-      foralls (x:xs) r = Loc (location r) $ TForall x (foralls xs r) 
+      foralls (x:xs) r = Loc (location r) $ TForall x (foralls xs r)
 
 constraint :: Monad m => P m [TConstraint 'Parsing]
 constraint =
@@ -191,13 +193,13 @@ singleConstraint = do
       void symbolTyEq
       ms2 <- multiplicities
       return [MSub ms1 ms2, MSub ms2 ms1]
-      
+
     multiplicities =
-      multiplicity `P.sepBy` symbolMult 
-      
-  
-  -- m1 <- multiplicity 
-  -- maxConstraint m1 <|> subConstraint m1 
+      multiplicity `P.sepBy` symbolMult
+
+
+  -- m1 <- multiplicity
+  -- maxConstraint m1 <|> subConstraint m1
   --   where
   --     maxConstraint m1 = do
   --       void symbolTyEq
@@ -209,9 +211,9 @@ singleConstraint = do
   --     subConstraint m1 = do
   --       void symbolTyLE
   --       m2 <- multiplicity
-  --       return [MSub m1 m2] 
+  --       return [MSub m1 m2]
 
-    -- TODO: move them to Helper.hs with appropriate naming. 
+    -- TODO: move them to Helper.hs with appropriate naming.
     symbolTyLE = symbol "<=" <|> symbol "≦"
     symbolTyEq = symbol "~" <|> symbol "≡"
     symbolMult = symbol "*" <|> symbol "↑"
@@ -219,16 +221,16 @@ singleConstraint = do
 
 arrTy :: Monad m => P m (LTy 'Parsing)
 arrTy =
-  -- Essentially, this implements foldr by foldl. 
+  -- Essentially, this implements foldr by foldl.
   (\t fs -> foldl (.) (\c -> c t) fs id)
   <$> appTy <*> P.many ((\f x c z -> f z (c x)) <$> arr <*> appTy)
   where
-    mkArr m e1 e2 = Loc (location e1 <> location e2) $ TCon (BuiltIn nameTyArr) [m, e1, e2] 
-    arr = 
+    mkArr m e1 e2 = Loc (location e1 <> location e2) $ TCon (BuiltIn nameTyArr) [m, e1, e2]
+    arr =
       (do void rightArrow
           pure $ \e1 e2 -> mkArr (noLoc $ TMult Omega) e1 e2)
       <|>
-      (do void lollipop 
+      (do void lollipop
           pure $ \e1 e2 -> mkArr (noLoc $ TMult One) e1 e2)
       <|>
       (do void $ symbol "#"
@@ -246,16 +248,16 @@ appTy =
       ts <- P.some simpleTy
       return $ Loc (l <> mconcat (map location ts)) $ TCon c ts
 
-    revTy = loc $ do      
+    revTy = loc $ do
       void $ keyword "rev"
       ty <- simpleTy
       return $ TCon (BuiltIn nameTyRev) [ty]
 
 simpleTy :: Monad m => P m (LTy 'Parsing)
-simpleTy = getSrcLoc >>= \start -> 
+simpleTy = getSrcLoc >>= \start ->
   conTy start <|> varTy start <|> tupleTy
   where
-    conTy start = do      
+    conTy start = do
       c <- qconName
       end <- getSrcLoc
       sp
@@ -264,46 +266,46 @@ simpleTy = getSrcLoc >>= \start ->
     varTy start = do
       x <- varName
       end <- getSrcLoc
-      sp      
+      sp
       return $ Loc (start <> end) $ TVar x
 
 tupleTy :: Monad m => P m (LTy 'Parsing)
 tupleTy =
-  mkTupleTy <$> 
-  parens (typeExpr `P.sepBy` comma) 
+  mkTupleTy <$>
+  parens (typeExpr `P.sepBy` comma)
 
-mkTupleTy :: [LTy 'Parsing] -> LTy 'Parsing 
+mkTupleTy :: [LTy 'Parsing] -> LTy 'Parsing
 mkTupleTy [t] = t
 mkTupleTy ts  = Loc (mconcat $ map location ts) $
-                TCon (BuiltIn $ nameTyTuple $ length ts) ts   
-    
+                TCon (BuiltIn $ nameTyTuple $ length ts) ts
+
 multiplicity :: Monad m => P m (LTy 'Parsing)
-multiplicity = loc (symOne <|> symOmega <|> var) <* sp 
+multiplicity = loc (symOne <|> symOmega <|> var) <* sp
   where
     symOne   = TMult One <$ (symbol "1" <|> symbol "One")
     symOmega = TMult Omega <$ (symbol "ω" <|> symbol "Omega" <|> symbol "Many")
-    var   = TVar  <$> varName 
+    var   = TVar  <$> varName
 
 
 modul :: Monad m => P m (Module 'Parsing)
 modul = do
   modDecl <- P.optional $ do
-    void $ keyword "module" 
+    void $ keyword "module"
     m  <- L.lexeme sp moduleName
     es <- exportList
     void $ keyword "where"
-    return (m, es) 
+    return (m, es)
   is <- importList
   ds <- topDecls
   let (m', es') = fromMaybe (ModuleName "Main", Nothing) modDecl
   return $ Module m' es' is ds
 
 exportList :: Monad m => P m (Maybe [Export 'Parsing])
-exportList = 
+exportList =
   P.optional $ parens (surfaceName `P.sepEndBy` comma)
 
 
-surfaceName :: Monad m => P m (Loc SurfaceName)   
+surfaceName :: Monad m => P m (Loc SurfaceName)
 surfaceName = loc (P.try qconName <|> qvarName)
 
 importList :: Monad m => P m [Import 'Parsing]
@@ -315,7 +317,7 @@ singleImport = do
   Import <$> L.lexeme sp moduleName <*> impNames
   where
     impNames = P.optional (parens surfaceName `P.sepEndBy` comma)
-  
+
 topDecls :: Monad m => P m (Decls 'Parsing (Loc (TopDecl 'Parsing)))
 topDecls = Decls () <$> P.many topDecl
 
@@ -325,32 +327,46 @@ topDecl = typeDecl <|> dataDecl <|> (fmap DDecl <$> localDecl)
     tyLHS = do
       c <- L.lexeme sp conName
       xs <- P.many (L.lexeme sp varName)
-      void $ symbol "=" 
-      return (c, xs) 
-    
+      void $ symbol "="
+      return (c, xs)
+
     dataDecl = loc $ do
       void $ keyword "data"
-      (c, xs) <- tyLHS 
-      DData c xs <$> cdecl `P.sepBy1` symbol "|"
+      (c, xs) <- tyLHS
+      DData c xs <$> (P.try cdecl <|> gadtCDecl c xs) `P.sepBy1` symbol "|"
+
+    gadtCDecl tc xs = do
+      start <- getSrcLoc
+      c <- conName <* sp
+      void $ symbol ":"
+      ty <- arrTy
+      let (args, ret) = decomposeArrTy ty
+      targs       <- maybe (fail $ "A return type of GADT-style definition must be the headed by the type constructor.") return $ decomposeTyCon tc ret
+      let ftv = (freeTyVars args ++ freeTyVars targs) \\ xs
+      let l = start <> mconcat (map location targs)
+      return $ Loc l $ GeneralC c ftv (zipWith TyEq [noLoc $ TVar x | x <- xs] targs) args
+
+
+
 
     typeDecl = loc $ do
       void $ keyword "type"
-      (c, xs) <- tyLHS 
+      (c, xs) <- tyLHS
       DType c xs <$> typeExpr
 
     cdecl = do
-      start <- getSrcLoc 
+      start <- getSrcLoc
       c  <- conName <* sp
       ts <- P.many simpleTy
-      return $ Loc (start <> mconcat (map location ts)) $ CDecl c ts
+      return $ Loc (start <> mconcat (map location ts)) $ NormalC c ts
 
 localDecls :: Monad m => P m (Decls 'Parsing (LDecl 'Parsing))
-localDecls = Decls () <$> P.many localDecl 
+localDecls = Decls () <$> P.many localDecl
 
-localDecl :: Monad m => P m (LDecl 'Parsing) 
+localDecl :: Monad m => P m (LDecl 'Parsing)
 localDecl = defDecl <|> sigDecl <|> fixityDecl
 
-defDecl :: Monad m => P m (LDecl 'Parsing) 
+defDecl :: Monad m => P m (LDecl 'Parsing)
 defDecl = do
   start <- getSrcLoc
   void $ keyword "def"
@@ -365,51 +381,51 @@ defDecl = do
         location e <> locationDecls ws <> maybe mempty location e'
 
       locationDecls (Decls _ ds)   = mconcat $ map location ds
-      locationDecls (HDecls _ dss) = mconcat $ map (mconcat . map location) dss 
-  
+      locationDecls (HDecls _ dss) = mconcat $ map (mconcat . map location) dss
+
 defBody :: Monad m => P m ([LPat 'Parsing], Clause 'Parsing)
 defBody = do
   ps <- P.many simplePat
   void $ symbol "="
   c <- clause
-  return (ps, c) 
+  return (ps, c)
 
 sigDecl :: Monad m => P m (LDecl 'Parsing)
 sigDecl = do
   start <- getSrcLoc
-  void $ keyword "sig" 
+  void $ keyword "sig"
   x <- varOpName
   sp
-  void $ symbol ":" 
+  void $ symbol ":"
   t <- introForAll <$> typeExpr
   return (Loc (start <> location t) $ DSig x t)
 
 fixityDecl :: Monad m => P m (LDecl 'Parsing)
 fixityDecl = do
   start <- getSrcLoc
-  void $ keyword "fixity" 
-  o <- op <* sp 
-  n <- L.decimal <* sp 
+  void $ keyword "fixity"
+  o <- op <* sp
+  n <- L.decimal <* sp
   a <- fromMaybe N <$> P.optional assoc
-  end <- getSrcLoc 
+  end <- getSrcLoc
   return $ Loc (start <> end) $ DFixity o (Prec n) a
   where
     assoc =
       (keyword "left" >> return L)
       <|>
       (keyword "right" >> return R)
-      
+
 
 
 opExpr :: Monad m => P m (LExp 'Parsing)
 opExpr =
-  foldl (\a f -> f a)  <$> 
+  foldl (\a f -> f a)  <$>
   appExpr <*> P.many ((\o e2 e1 -> lop o e1 e2) <$> (qop <* sp) <*> appExpr)
   where
-    lop o e1 e2 = Loc (location e1 <> location e2) $ Op o e1 e2 
-      
+    lop o e1 e2 = Loc (location e1 <> location e2) $ Op o e1 e2
 
-appExpr :: Monad m => P m (LExp 'Parsing) 
+
+appExpr :: Monad m => P m (LExp 'Parsing)
 appExpr =
   (\(f:fs) -> foldl lapp f fs) <$> P.some (withLoc simpleExpr)
 
@@ -419,24 +435,24 @@ lapp e1 e2 = Loc (location e1 <> location e2) $ App e1 e2
 
 simpleExpr :: Monad m => SrcSpan -> P m (LExp 'Parsing)
 simpleExpr startLoc =
-  literal 
-  <|> pinExpr 
-  <|> liftExpr 
+  literal
+  <|> pinExpr
+  <|> liftExpr
   <|> unliftExpr
   <|> P.try rconExpr
   <|> conExpr
   <|> varExpr
-  <|> tupleExpr 
+  <|> tupleExpr
   where
     withEnd t = do
       endLoc <- getSrcLoc
-      return $ Loc (startLoc <> endLoc) t 
+      return $ Loc (startLoc <> endLoc) t
 
     withEndSp t = do
       endLoc <- getSrcLoc
       sp
       return $ Loc (startLoc <> endLoc) t
-    
+
     pinExpr = do
       void $ keyword "pin"
       withEnd RPin
@@ -469,15 +485,15 @@ tupleExpr = do
   case p of
     Just _  -> pure $ mkTupleExpR es
     Nothing -> pure $ mkTupleExp  es
-    
+
 
 
 mkTuplePat :: [Loc (Pat 'Parsing)] -> Loc (Pat 'Parsing)
 mkTuplePat [p] = p
 mkTuplePat ps  = Loc (mconcat $ map location ps) $
-                 PCon (BuiltIn $ nameTuple $ length ps) ps 
+                 PCon (BuiltIn $ nameTuple $ length ps) ps
 
-  
+
 mkTupleExp :: [Loc (Exp 'Parsing)] -> Loc (Exp 'Parsing)
 mkTupleExp [e] = Loc (location e) $ Parens e
 mkTupleExp es =
@@ -487,34 +503,34 @@ mkTupleExpR :: [Loc (Exp 'Parsing)] -> Loc (Exp 'Parsing)
 mkTupleExpR [e] = Loc (location e) $ Parens e
 mkTupleExpR es =
   foldl lapp (noLoc $ RCon $ BuiltIn $ nameTuple (length es)) es
-      
-    
-literal :: Monad m => P m (LExp 'Parsing) 
-literal = loc $ fmap Lit $ 
+
+
+literal :: Monad m => P m (LExp 'Parsing)
+literal = loc $ fmap Lit $
   intLit
   <|> charLit
   where
-    -- TODO: Add rationals 
-    intLit = LitInt <$> (L.decimal <* sp) 
+    -- TODO: Add rationals
+    intLit = LitInt <$> (L.decimal <* sp)
     charLit = fmap LitChar $ do
       void $ P.char '\''
       c <- L.charLiteral
       void $ P.char '\''
-      void sp 
-      return c 
-    
-      
+      void sp
+      return c
+
+
 
 alternatives :: Monad m => P m [ (LPat 'Parsing, Clause 'Parsing) ]
 alternatives = do
   void $ P.optional (symbol "|")
-  alt `P.sepBy` symbol "|" 
-  
+  alt `P.sepBy` symbol "|"
 
-alt :: Monad m => P m (LPat 'Parsing, Clause 'Parsing)    
+
+alt :: Monad m => P m (LPat 'Parsing, Clause 'Parsing)
 alt = do
   p <- pat
-  void rightArrow 
+  void rightArrow
   c <- clause
   return (p, c)
 
@@ -526,19 +542,19 @@ clause = do
   return $ Clause e d w
 
 withExpr :: Monad m => P m (LExp 'Parsing)
-withExpr = keyword "with" >> expr 
+withExpr = keyword "with" >> expr
 
 
 whereClause :: Monad m => P m (Decls 'Parsing (LDecl 'Parsing))
-whereClause = do 
+whereClause = do
   r <- P.optional $ do void $ keyword "where"
                        ds <- localDecls
                        void $ keyword "end"
                        return ds
   case r of
     Just ds -> return ds
-    Nothing -> return $ Decls () [] 
-          
+    Nothing -> return $ Decls () []
+
 
 
 

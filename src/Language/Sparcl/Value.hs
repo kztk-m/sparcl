@@ -13,7 +13,6 @@ import           Language.Sparcl.Name
 
 
 data Value = VCon Name [Value]
-           | VBang Value
            | VLit Literal
            | VFun (Value -> Eval Value)
            | VRes (Heap -> Eval Value) (Value -> Eval Heap)
@@ -25,7 +24,6 @@ type Env = M.Map Name Value
 
 instance NFData Value where
   rnf (VCon c vs) = rnf (c, vs)
-  rnf (VBang v)   = rnf v
   rnf (VLit l)    = rnf l
   rnf (VFun _)    = ()
   rnf (VRes _ _)  = ()
@@ -36,8 +34,6 @@ instance Pretty Value where
   pprPrec k (VCon c vs) = parensIf (k > 9) $
     ppr c D.<+> D.hsep [ pprPrec 10 v | v <- vs ]
 
-  pprPrec k (VBang e) = parensIf (k > 9) $
-    D.text "!" D.<+> pprPrec 9 e
   pprPrec _ (VLit l) = ppr l
   pprPrec _ (VFun _) = D.text "<function>"
   pprPrec _ (VRes _ _) = D.text "<reversible computation>"

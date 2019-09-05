@@ -4,21 +4,51 @@ module Language.Sparcl.Typing.Type where
 
 import qualified Data.Map                     as M
 
+import           Language.Sparcl.FreeTyVars
 import           Language.Sparcl.Multiplicity
 import           Language.Sparcl.Name
 import           Language.Sparcl.Pretty       as D hiding ((<$>))
 import qualified Language.Sparcl.Pretty       as D
 
+import           Control.Monad.IO.Class       (MonadIO (..))
 import           Data.IORef
 import           Data.Maybe                   (fromMaybe)
-
-import           Control.Monad.IO.Class       (MonadIO (..))
-
+import           Data.Semigroup               (Endo (..))
 import           System.IO.Unsafe
 
+{- |
+
+Used for generalization. Increases when it encounters a part for which
+a polytype is required. Type variables retain the level when they are
+introduced, and unification replaces the the level with the mininum.
+For example, unification
+
+@
+   a[3] |-> b[2] -> c[1]
+@
+
+changes the level of a to 1.
+
+In generalization, a type checker only generalize variables that are
+more than the current level.
+
+-}
 newtype TcLevel = TcLevel Int
   deriving (Eq, Ord, Enum, Num, Bounded)
   deriving newtype (Show, Pretty)
+
+
+{- |
+
+Used for implication checking. Increases when implication happens.  If
+a type checker runs in level n, unification of smaller-leveled
+variables is prohibited.
+
+-}
+newtype IcLevel = IcLevel Int
+  deriving (Eq, Ord, Enum, Num, Bounded)
+  deriving newtype (Show, Pretty)
+
 
 data Ty = TyCon   Name [Ty]       -- ^ Type constructor
         | TyVar   TyVar           -- ^ Type variable
@@ -27,6 +57,39 @@ data Ty = TyCon   Name [Ty]       -- ^ Type constructor
         | TySyn   Ty Ty           -- ^ type synonym (@TySym o u@ means @u@ but @o@ will be used for error messages)
         | TyMult  Multiplicity    -- ^ 1 or ω
          deriving (Eq, Ord, Show)
+
+{- |
+
+We have a specfical treatment for constructor types, as this the only point
+we introduce existential variables.
+
+In it's use there is not difference between universal and existential variables---they are treated as
+ordinary types.
+
+In pattern matching, their behaviors are different. Universal variables are replaced with
+unification variables, but existential varibles are replaced with skolemized variables.
+
+Skolemized variables cannot escape in the resulting type, and use map.
+
+-}
+data ConTy = ConTy [TyVar]        -- universal variables
+                   [TyVar]        -- existential variables
+                   [TyConstraint] -- constraints
+                   [(Ty, Ty)]     -- constructor's arugument types (a pair of a type and a multipliticy)
+                   Ty             -- constructor's return types
+
+instance Pretty ConTy where
+  ppr (ConTy xs ys q args ty) =
+    let hd d = if null (xs ++ ys) then d
+               else hsep [ text "forall", hsep (map ppr xs ++ map ppr ys) <> text "." ] <> align d
+        ql d = if null q then d
+               else sep [ parens (hsep $ punctuate comma $ map ppr q) <+> text "=>", d ]
+    in hd $ ql $ foldr (\(a,m) r -> pprPrec 1 a <+> text "#" <+> ppr m <+> text "->" <+> r) (ppr ty) args
+
+conTy2Ty :: ConTy -> Ty
+conTy2Ty (ConTy xs ys q argTy retTy) =
+  let t = foldr (\(s,m) r -> TyCon nameTyArr [m, s, r]) retTy argTy
+  in TyForAll (xs ++ ys) (TyQual q t)
 
 instance MultiplicityLike Ty where
   one   = TyMult One
@@ -37,28 +100,49 @@ data QualTy = TyQual [TyConstraint] BodyTy
   deriving (Eq, Ord, Show)
 
 data TyConstraint = MSub Ty [Ty]
+                  | TyEq Ty Ty
   deriving (Eq, Ord, Show)
 
 data TyVar = BoundTv  Name
-           | SkolemTv TyVar Int -- used only for checking of which type is more general.
+           | SkolemTv TyVar Int IcLevel
+             -- used for checking of which type is more general.
   deriving Show
 
 instance Eq TyVar where
-  BoundTv n == BoundTv m = n == m
-  SkolemTv _ i == SkolemTv _ j = i == j
+  BoundTv  n   == BoundTv  m   = n == m
+  SkolemTv _ i _ == SkolemTv _ j _ = i == j
   _ == _ = False
 
 instance Ord TyVar where
   BoundTv n <= BoundTv m = n <= m
   BoundTv _ <= _         = True
-  SkolemTv _ _ <= BoundTv _  = False
-  SkolemTv _ i <= SkolemTv _ j = i <= j
+  SkolemTv _ _ _ <= BoundTv _  = False
+  SkolemTv _ i _ <= SkolemTv _ j _ = i <= j
 
 
 instance Pretty TyVar where
-  ppr (BoundTv n)    = ppr n
-  ppr (SkolemTv n i) = ppr n D.<> D.text "@" D.<> D.int i
+  ppr (BoundTv n)       = ppr n
+  ppr (SkolemTv n i lv) = ppr n D.<> D.text "@" D.<> D.int i D.<> ppr lv
 
+
+instance FreeTyVars Ty TyVar where
+  -- Assumption: the input is already zonked.
+  foldMapVars f b (TyCon _ ts)    = foldMapVars f b ts
+  foldMapVars f _ (TyVar x)       = f x
+  foldMapVars _ _ (TyMetaV _)     = mempty
+  foldMapVars f b (TyForAll xs t) =
+    flip (foldr b) xs $ foldMapVars f b t
+  foldMapVars _ _ (TyMult _) = mempty
+  foldMapVars f b (TySyn _ t) = foldMapVars f b t
+
+instance FreeTyVars QualTy TyVar where
+  -- Assumption: the input is already zonked.
+  foldMapVars f b (TyQual q t) = foldMapVars f b (q, t)
+
+instance FreeTyVars TyConstraint TyVar where
+  -- Assumption: the input is already zonked.
+  foldMapVars f b (MSub t1 ts2) = foldMapVars f b t1 <> foldMapVars f b ts2
+  foldMapVars f b (TyEq t1 t2)  = foldMapVars f b t1 <> foldMapVars f b t2
 
 readTcLevelMv :: MonadIO m => MetaTyVar -> m TcLevel
 readTcLevelMv mv = liftIO $ readIORef (metaTcLevelRef mv)
@@ -73,7 +157,8 @@ capLevel n = go
 
     goQ (TyQual cs t) = TyQual <$> traverse goC cs <*> go t
 
-    goC (MSub t ts) = MSub <$> go t <*> traverse go ts
+    goC (MSub t ts)  = MSub <$> go t <*> traverse go ts
+    goC (TyEq t1 t2) = TyEq <$> go t1 <*> go t2
 
     go (TyCon c ts) = TyCon c <$> traverse go ts
     go (TyVar x)    = return $ TyVar x
@@ -136,26 +221,29 @@ instance Pretty TyConstraint where
 
       pprMs' x []     = ppr x
       pprMs' x (y:ys) = ppr x <+> text "*" <+> pprMs' y ys
+  ppr (TyEq t1 t2) = ppr t1 <+> text "~" <+> ppr t2
 
-
-data MetaTyVar = MetaTyVar { metaID :: !Int, metaRef :: !TyRef, metaTcLevelRef ::  !(IORef TcLevel)}
+-- | Unification variables
+data MetaTyVar = MetaTyVar { metaID         :: !Int,
+                             metaRef        :: !TyRef,
+                             metaTcLevelRef :: !(IORef TcLevel),
+                             metaIcLevel    :: !IcLevel}
 
 type TyRef = IORef (Maybe MonoTy)
 
 instance Pretty MetaTyVar where
-  ppr (MetaTyVar i _ r) =
+  ppr (MetaTyVar i _ r ic) =
     let l = unsafePerformIO (readIORef r)
-    in D.text $ "_" ++ show i ++ "[" ++ show l ++ "]"
+    in D.text $ "_" ++ show i ++ "[" ++ show l ++ "|" ++ show ic ++ "]"
 
 instance Show MetaTyVar where
   show = prettyShow
 
 instance Eq MetaTyVar where
-  -- MetaTyVar i _ == MetaTyVar j _ = i == j
-  MetaTyVar _ i _ == MetaTyVar _ j _ = i == j
+  mv1 == mv2 = metaRef mv1 == metaRef mv2
 
 instance Ord MetaTyVar where
-  MetaTyVar i _ _ <= MetaTyVar j _ _ = i <= j
+  mv1 <= mv2 = metaID mv1 <= metaID mv2
 
 type BodyTy = MonoTy  -- forall body. only consider rank 1
 type PolyTy = Ty      -- polymorphic types
@@ -179,28 +267,36 @@ substTyQ :: [ (TyVar, Ty) ] -> QualTy -> QualTy
 substTyQ tbl' (TyQual cs t) = TyQual (map (substTyC tbl') cs) (substTy tbl' t)
 
 substTyC :: [ (TyVar, Ty) ] -> TyConstraint -> TyConstraint
-substTyC tbl' (MSub t1 ts2)  = MSub (substTy tbl' t1) (map (substTy tbl') ts2)
+substTyC tbl' (MSub t1 ts2) = MSub (substTy tbl' t1) (map (substTy tbl') ts2)
+substTyC tbl' (TyEq t1 t2)  = TyEq (substTy tbl' t1) (substTy tbl' t2)
 
-metaTyVars :: [Ty] -> [MetaTyVar]
-metaTyVarsQ :: [QualTy] -> [MetaTyVar]
-metaTyVarsC :: [TyConstraint] -> [MetaTyVar]
 
-(metaTyVars, metaTyVarsQ, metaTyVarsC) =
-  (flip (apps goTy) [], flip (apps goQ) [], flip (apps goC) [])
-  where
-    apps _f []     r = r
-    apps f  (t:ts) r = f t (apps f ts r)
+class MetaTyVars t where
+  metaTyVarsGen :: Monoid n => (MetaTyVar -> n) -> t -> n
 
-    goTy (TyCon _ ts)   r = apps goTy ts r
-    goTy (TyForAll _ t) r = goQ t r
-    goTy (TySyn _ t)    r = goTy t r
-    goTy (TyMetaV m)    r = if m `elem` r then r else m:r
-    goTy _              r = r
+instance MetaTyVars t => MetaTyVars [t] where
+  metaTyVarsGen f ts = mconcat $ map (metaTyVarsGen f) ts
 
-    goQ (TyQual cs t) r = apps goC cs $ goTy t r
+instance (MetaTyVars s, MetaTyVars t) => MetaTyVars (s, t) where
+  {-# INLINE metaTyVarsGen #-}
+  metaTyVarsGen f (s, t) = metaTyVarsGen f s <> metaTyVarsGen f t
 
-    goC :: TyConstraint -> [MetaTyVar] -> [MetaTyVar]
-    goC (MSub ts1 ts2) r = goTy ts1 $ apps goTy ts2 r
+instance MetaTyVars Ty where
+  metaTyVarsGen f (TyCon _ ts)   = metaTyVarsGen f ts
+  metaTyVarsGen f (TySyn _ t)    = metaTyVarsGen f t
+  metaTyVarsGen f (TyForAll _ t) = metaTyVarsGen f t
+  metaTyVarsGen f (TyMetaV mv)   = f mv
+  metaTyVarsGen _ _              = mempty
+
+instance MetaTyVars QualTy where
+  metaTyVarsGen f (TyQual q t) = metaTyVarsGen f (q, t)
+
+instance MetaTyVars TyConstraint where
+  metaTyVarsGen f (MSub ms1 ms2) = metaTyVarsGen f (ms1, ms2)
+  metaTyVarsGen f (TyEq t1 t2)   = metaTyVarsGen f (t1, t2)
+
+metaTyVars :: MetaTyVars t => t -> [MetaTyVar]
+metaTyVars t = appEndo (metaTyVarsGen (\x -> Endo (x:)) t) []
 
 bangTy :: Ty -> Ty
 bangTy ty = TyCon nameTyBang [ty]
@@ -246,5 +342,6 @@ tyarr :: MultTy -> Ty -> Ty -> Ty
 tyarr m a b = TyCon nameTyArr [m, a, b]
 
 
-type TypeTable = M.Map Name Ty
-type SynTable  = M.Map Name ([TyVar], Ty)
+type TypeTable  = M.Map Name Ty
+type CTypeTable = M.Map Name ConTy
+type SynTable   = M.Map Name ([TyVar], Ty)

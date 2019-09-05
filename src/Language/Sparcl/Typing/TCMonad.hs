@@ -10,6 +10,8 @@ import           Data.Map.Merge.Lazy            as M
 import           Data.Sequence                  (Seq)
 import qualified Data.Sequence                  as Seq
 
+import           Data.Semigroup                 (Min (..))
+
 import           Data.Foldable                  (toList)
 import           Data.IORef
 
@@ -48,11 +50,12 @@ data TypeError = TypeError (Maybe SrcSpan) [S.LExp 'Renaming] WhenChecking Error
 
 data ErrorDetail
   = UnMatchTy  Ty Ty
---  | UnMatchTyD Ty Ty Ty Ty -- inferred and expected
   | OccurrenceCheck MetaTyVar Ty
   | MultipleUse Name
   | NoUse       Name
   | Undefined   Name
+  | Untouchable MetaTyVar Ty
+  | ImplicationCheckFail [TyConstraint] [TyConstraint]
   | Other       D.Doc
 
 
@@ -115,7 +118,16 @@ instance Pretty TypeError where
             D.hsep [ D.text "Variable", ppr v, D.text "must be used at once." ]
 
           go (Undefined v) =
-            D.hsep [ D.text "Unbound variable", ppr v ]
+            D.hsep [ D.text "Unbound", ppr v ]
+
+          -- TODO: Show what guards the unifnication
+          go (Untouchable mv ty) =
+            D.vcat [ D.text "Cannot unify" <+> ppr mv <+> text "with" <+> ppr ty,
+                     D.text "because variable" <+> ppr mv <+> text "is untouchable" ]
+          go (ImplicationCheckFail cs cs') =
+            D.vcat [ D.text "Cannot deduce" <+> ppr cs'
+                   , D.text "under" <+> ppr cs ]
+
 
           go (Other d) = d
 
@@ -131,7 +143,8 @@ instance Pretty TypeError where
 
 -- A typing environment just holds type information.  This reflects
 -- our principle; multiplicites are synthesized instead of checked.
-type TyEnv = Map Name Ty
+type TyEnv  = Map Name Ty
+type ConEnv = Map Name ConTy
 
 dummyName :: Name
 dummyName = Original (ModuleName "") (User "") (Bare (User ""))
@@ -212,6 +225,14 @@ emptyUseMap = M.empty
 deleteUseMap :: Name -> UseMap -> UseMap
 deleteUseMap = M.delete
 
+
+data InferredConstraint
+  = ICNormal  TyConstraint
+  | ICGuarded [TyConstraint]       -- Given
+              [InferredConstraint] -- Wanted
+
+
+
 type TypeErrorContext = ([S.LExp 'Renaming], WhenChecking)
 
 data SuspendedCheck =
@@ -222,8 +243,10 @@ data TypingContext =
   TypingContext { tcRefMvCount :: !(IORef Int),
                   tcRefSvCount :: !(IORef Int),
                   tcTcLevel    :: TcLevel,
-                  tcConstraint :: !(IORef [TyConstraint]),
+                  tcIcLevel    :: IcLevel,
+                  tcConstraint :: !(IORef [InferredConstraint]),
                   tcTyEnv      :: TyEnv,    -- Current typing environment
+                  tcConEnv     :: ConEnv,
                   tcSyn        :: SynTable, -- Current type synonym table
                   tcContexts   :: [S.LExp 'Renaming], -- parent expressions
                   tcLoc        :: Maybe SrcSpan,  -- focused part
@@ -246,6 +269,7 @@ initTypingContext = do
   ric <- newIORef []
   return TypingContext { tcRefMvCount = r1,
                          tcRefSvCount = r2,
+                         tcIcLevel = 0,
                          tcTcLevel    = 0 ,
                          tcRefErrors  = r ,
                          tcConstraint = rc,
@@ -253,6 +277,7 @@ initTypingContext = do
                          tcContexts   = [],
                          tcChecking   = CheckingNone,
                          tcDebugLevel = 0,
+                         tcConEnv = M.empty,
                          tcTyEnv      = M.empty,
                          tcSyn        = M.empty,
                          tcDeferredIC = ric }
@@ -264,6 +289,7 @@ refreshTC tc = do
   rc <- newIORef []
   ric <- newIORef []
   return $ tc { tcTyEnv     = M.empty,
+                tcConEnv    = M.empty,
                 tcSyn       = M.empty,
                 tcLoc       = Nothing,
                 tcConstraint = rc,
@@ -272,9 +298,10 @@ refreshTC tc = do
                 tcContexts  = [],
                 tcDeferredIC = ric}
 
-setEnvs :: TypingContext -> TypeTable -> SynTable -> TypingContext
-setEnvs tc tenv syn =
-  tc { tcTyEnv = tenv,
+setEnvs :: TypingContext -> ConEnv -> TypeTable -> SynTable -> TypingContext
+setEnvs tc kenv tenv syn =
+  tc { tcConEnv = kenv,
+       tcTyEnv = tenv,
        tcSyn   = syn }
 
 setDebugLevel :: TypingContext -> Int -> TypingContext
@@ -283,7 +310,7 @@ setDebugLevel tc lv = tc { tcDebugLevel = lv }
 
 type MonadTypeCheck m =
   (C.Has KeyDebugLevel Int m,
-   C.Local KeyTC         TypingContext m,
+   C.Local KeyTC TypingContext m,
    MonadIO m,
    MonadCatch m)
 
@@ -320,18 +347,20 @@ runTC m = do
     return res
 
 
-runTCWith :: MonadTypeCheck m => TypeTable -> SynTable -> m a -> m a
-runTCWith tytbl syntbl m = do
+runTCWith :: MonadTypeCheck m => CTypeTable -> TypeTable -> SynTable -> m a -> m a
+runTCWith ctbl tytbl syntbl m = do
   tc <- C.ask (C.key @KeyTC)
   tc' <- liftIO $ refreshTC tc
-  C.local (C.key @KeyTC) (\_ -> setEnvs tc' tytbl syntbl) $ runTC m
+  C.local (C.key @KeyTC) (\_ -> setEnvs tc' ctbl tytbl syntbl) $ runTC m
 
 
-tupleConTy :: Int -> Ty
+tupleConTy :: Int -> ConTy
 tupleConTy n =
   let tvs = map BoundTv [ Alpha i (User $ 't':show i) | i <- [1..n] ]
       tys = map TyVar tvs
-  in TyForAll tvs $ TyQual [] $ foldr (-@) (tupleTy tys) tys
+  in -- ConTy tvs [] [] $ foldr (-@) (tupleTy tys) tys
+    ConTy tvs [] [] [ (t , one) | t <- tys ] (tupleTy tys)
+--  in TyForAll tvs $ TyQual [] $ foldr (-@) (tupleTy tys) tys
 
 arbitraryTy :: MonadTypeCheck m => m Ty
 arbitraryTy = TyMetaV <$> newMetaTyVar
@@ -373,7 +402,7 @@ atExp e = C.local (C.key @KeyTC) (\tc -> tc { tcContexts = e : tcContexts tc })
 askCurrentTcLevel :: MonadTypeCheck m => m TcLevel
 askCurrentTcLevel = C.asks (C.key @KeyTC) tcTcLevel
 
-readConstraint :: MonadTypeCheck m => m [TyConstraint]
+readConstraint :: MonadTypeCheck m => m [InferredConstraint]
 readConstraint = do
   csRef <- C.asks (C.key @KeyTC) tcConstraint
   liftIO $ readIORef csRef
@@ -381,24 +410,56 @@ readConstraint = do
 addConstraint :: MonadTypeCheck m => [TyConstraint] -> m ()
 addConstraint cs = do
   csRef <- C.asks (C.key @KeyTC) tcConstraint
-  liftIO $ modifyIORef csRef (cs ++)
+  liftIO $ modifyIORef csRef (map ICNormal cs ++)
 
-setConstraint :: MonadTypeCheck m => [TyConstraint] -> m ()
+addImpConstraint :: MonadTypeCheck m => [TyConstraint] -> [InferredConstraint] -> m ()
+addImpConstraint cs ics = do
+  csRef <- C.asks (C.key @KeyTC) tcConstraint
+  liftIO $ modifyIORef csRef (ICGuarded cs ics :)
+
+
+setConstraint :: MonadTypeCheck m => [InferredConstraint] -> m ()
 setConstraint cs = do
   csRef <- C.asks (C.key @KeyTC) tcConstraint
   liftIO $ writeIORef csRef cs
 
+gatherConstraint :: MonadTypeCheck m => m a -> m (a, [InferredConstraint])
+gatherConstraint m = do
+  csPrev <- readConstraint
+  setConstraint []
+  res <- m
+  cs <- readConstraint
+  setConstraint csPrev
+  return (res, cs)
+
+askConTypeMaybe :: MonadTypeCheck m => Name -> m (Maybe ConTy)
+askConTypeMaybe n
+  | Just k <- checkNameTuple n =
+      return $ Just (tupleConTy k)
+  | otherwise = do
+      conEnv <- C.asks (C.key @KeyTC) tcConEnv
+      return (M.lookup n conEnv)
+
+askConType :: MonadTypeCheck m => SrcSpan -> Name -> m ConTy
+askConType loc n = do
+  res <- askConTypeMaybe n
+  case res of
+    Just cty -> return cty
+    Nothing  -> do
+      atLoc loc (reportError $ Undefined n)
+      abortTyping
 
 askType :: MonadTypeCheck m => SrcSpan -> Name -> m Ty
-askType l n
-  | Just k <- checkNameTuple n =
-      return $ tupleConTy k
-  | otherwise = do
+askType l n = do
+  res <- askConTypeMaybe n
+  case res of
+    Just cty -> return (conTy2Ty cty)
+    Nothing  -> do
       tyEnv <- C.asks (C.key @KeyTC) tcTyEnv
       case M.lookup n tyEnv of
         Just ty -> do
           ty' <- zonkType ty
-          debugPrint 4 $ ppr n <+> text ":" <+> ppr ty'
+          -- debugPrint 4 $ ppr n <+> text ":" <+> ppr ty'
           return ty'
         Nothing -> do
           atLoc l (reportError $ Undefined n)
@@ -408,25 +469,27 @@ newMetaTyVar :: MonadTypeCheck m => m MetaTyVar
 newMetaTyVar = do
   cref <- C.asks (C.key @KeyTC) tcRefMvCount
   lv   <- C.asks (C.key @KeyTC) tcTcLevel
+  ilv  <- C.asks (C.key @KeyTC) tcIcLevel
   cnt <- liftIO $ atomicModifyIORef' cref $ \cnt -> (cnt + 1, cnt)
   ref <- liftIO $ newIORef Nothing
   lref <- liftIO $ newIORef lv
-  return $ MetaTyVar cnt ref lref
+  return $ MetaTyVar cnt ref lref ilv
 
 readTyVar :: MonadTypeCheck m => MetaTyVar -> m (Maybe Ty)
-readTyVar (MetaTyVar _ ref _) =
-  liftIO $ readIORef ref
+readTyVar mv =
+  liftIO $ readIORef (metaRef mv)
 
 writeTyVar :: MonadTypeCheck m => MetaTyVar -> Ty -> m ()
-writeTyVar (MetaTyVar _ ref _) ty =
-  liftIO $ writeIORef ref (Just ty)
+writeTyVar mv ty =
+  liftIO $ writeIORef (metaRef mv) (Just ty)
 
 
 newSkolemTyVar :: MonadTypeCheck m => TyVar -> m TyVar
 newSkolemTyVar ty = do
   cref <- C.asks (C.key @KeyTC) tcRefSvCount
+  ilv  <- C.asks (C.key @KeyTC) tcIcLevel
   cnt <- liftIO $ atomicModifyIORef' cref $ \cnt -> (cnt + 1, cnt)
-  return $ SkolemTv ty cnt
+  return $ SkolemTv ty cnt ilv
 
 defer :: MonadTypeCheck m => SuspendedCheck -> m ()
 defer sc = do
@@ -448,6 +511,8 @@ resolveSyn ty = do
 
       goC synMap (MSub ts1 ts2) =
         MSub <$> go synMap ts1 <*> traverse (go synMap) ts2
+      goC synMap (TyEq t1 t2) =
+        TyEq <$> go synMap t1 <*> go synMap t2
 
       go _synMap (TyVar x) = return (TyVar x)
       go synMap (TyForAll ns t) =
@@ -496,9 +561,9 @@ pushLevel m = do
       procDeferred qs
 
 
-
-
-
+pushICLevel :: MonadTypeCheck m => m a -> m a
+pushICLevel = do
+  C.local (C.key @KeyTC) $ \tc -> tc { tcIcLevel = succ (tcIcLevel tc) }
 
 withVar :: MonadTypeCheck m => Name -> Ty -> m a -> m a
 withVar x ty =
@@ -508,30 +573,19 @@ withSyn :: MonadTypeCheck m => Name -> ([TyVar], Ty) -> m r -> m r
 withSyn tv v =
   C.local (C.key @KeyTC) (\tc -> tc { tcSyn = M.insert tv v (tcSyn tc) })
 
-  -- getMetaTyVarsInEnv = do
-  --   tyEnv <- asks tcTyEnv
-  --   let ts = concatMap (\(t,m) -> [t,m]) $ M.elems tyEnv
-  --   ts' <- mapM zonkType ts
-  --   return $ metaTyVars ts' -- (ts ++ multEnv)
+withCon :: MonadTypeCheck m => Name -> ConTy -> m a -> m a
+withCon c ty =
+  C.local (C.key @KeyTC) (\tc -> tc { tcConEnv = M.insert c ty (tcConEnv tc) })
 
 
 newMetaTy :: MonadTypeCheck m => m Ty
 newMetaTy = TyMetaV <$> newMetaTyVar
 
--- withVars :: MonadTypeCheck m => [ (Name, Ty, MultTy) ] -> m r -> m r
--- withVars ns m = foldr (\(n,t,mult) -> withVar n t mult) m ns
-
--- withMultVar :: MonadTypeCheck m => MultTy -> m r -> m r
--- withMultVar mult = withVar dummyName mult mult
-
--- withMultVars :: MonadTypeCheck m => [MultTy] -> m r -> m r
--- withMultVars ms m = foldr withMultVar m ms
-
 withVars :: MonadTypeCheck m => [ (Name, Ty) ] -> m r -> m r
-withVars ns m = foldr (\(n,t) -> withVar n t) m ns
+withVars ns m = foldr (uncurry withVar) m ns
 
--- withUnrestrictedVars :: MonadTypeCheck m => [ (Name, Ty) ] -> m r -> m r
--- withUnrestrictedVars = withVars . map (\(n,t) -> (n, t, TyMult Omega))
+withCons :: MonadTypeCheck m => [ (Name, ConTy) ] -> m r -> m r
+withCons ns m = foldr (uncurry withCon) m ns
 
 withSyns :: MonadTypeCheck m => [ (Name, ([TyVar], Ty)) ] -> m r -> m  r
 withSyns xs m = foldr (uncurry withSyn) m xs
@@ -562,6 +616,7 @@ zonkTypeQ (TyQual cs t) = TyQual <$> traverse zonkTypeC cs <*> zonkType t
 
 zonkTypeC :: MonadTypeCheck m => TyConstraint -> m TyConstraint
 zonkTypeC (MSub t1 ts2) = MSub <$> zonkType t1 <*> traverse zonkType ts2
+zonkTypeC (TyEq t1 t2)  = TyEq <$> zonkType t1 <*> zonkType t2
 
 zonkTypeError :: MonadTypeCheck m => TypeError -> m TypeError
 zonkTypeError (TypeError loc es wc res) = do
@@ -586,33 +641,6 @@ zonkErrorDetail (OccurrenceCheck tv ty) =
 zonkErrorDetail res = pure res
 
 
-freeTyVars :: MonadTypeCheck m => [Ty] -> m [TyVar]
-freeTyVars types = do
-  ts' <- mapM zonkType types
-  return $ go ts' []
-    where
-      go ts r = foldr (goT []) r ts
-
-      goT :: [TyVar] -> Ty -> [TyVar] -> [TyVar]
-      goT bound (TyVar t) r
-        | t `elem` bound = r
-        | t `elem` r     = r
-        | otherwise      = t : r
-      goT bound (TyCon _ ts) r =
-        foldr (goT bound) r ts
-      goT bound (TyForAll bs t) r = goQ (bs ++ bound) t r
-      goT _bound (TyMetaV _) r = r
-      goT bound (TySyn ty _) r = goT bound ty r
-      goT _bound (TyMult _) r = r
-
-      goQ :: [TyVar] -> QualTy -> [TyVar] -> [TyVar]
-      goQ bound (TyQual cs t) r = foldr (goC bound) (goT bound t r) cs
-
-      goC :: [TyVar] -> TyConstraint -> [TyVar] -> [TyVar]
-      goC bound (MSub t1 ts2) r = goT bound t1 (foldr (goT bound) r ts2)
---       goC bound (MEqMax t1 t2 t3) r = goT bound t1 $ goT bound t2 $ goT bound t3 r
-
-
 unify :: MonadTypeCheck m => MonoTy -> MonoTy -> m ()
 unify ty1 ty2 = do
   ty1' <- resolveSyn ty1
@@ -623,6 +651,7 @@ unifyWork :: MonadTypeCheck m => MonoTy -> MonoTy -> m ()
 unifyWork (TySyn _ t1) t2 = unifyWork t1 t2
 unifyWork t1 (TySyn _ t2) = unifyWork t1 t2
 unifyWork (TyVar x1) (TyVar x2)       | x1 == x2 = return ()
+                                      | otherwise = addConstraint [TyEq (TyVar x1) (TyVar x2)]
 unifyWork (TyMetaV mv1) (TyMetaV mv2) | mv1 == mv2 = return ()
 unifyWork (TyMetaV mv) ty = unifyMetaTyVar mv ty
 unifyWork ty (TyMetaV mv) = unifyMetaTyVar mv ty
@@ -644,18 +673,33 @@ unifyMetaTyVar mv ty2 = do
     Nothing ->
       unifyUnboundMetaTyVar mv ty2
 
+shouldBeSwapped :: MonadTypeCheck m => MetaTyVar -> MetaTyVar -> m Bool
+shouldBeSwapped mv1 mv2 = do
+  lv1 <- readTcLevelMv mv1
+  lv2 <- readTcLevelMv mv2
+  return $ if | metaIcLevel mv1 < metaIcLevel mv2 ->
+                -- NB: mv1 := mv2 is possible a's IC-level is equivalent or greater to the current.
+                -- Thus, this swapping increases chance for the substitution to succeed.
+                True
+              | lv1 < lv2 ->
+                -- No technical reason, but we prioritise outer level variables to survive.
+                True
+              | otherwise ->
+                False
+
+
+
 unifyUnboundMetaTyVar :: MonadTypeCheck m => MetaTyVar -> MonoTy -> m ()
 unifyUnboundMetaTyVar mv (TyMetaV mv2) = do
   res <- readTyVar mv2
-  lv  <- readTcLevelMv mv
-  lv2 <- readTcLevelMv mv2
+  sw  <- shouldBeSwapped mv mv2
   case res of
     Nothing   ->
       if | mv == mv2 -> return ()
-         | lv < lv2 ->
-             writeTyVar mv2 (TyMetaV mv)
+         | sw ->
+             substituteUnif mv2 (TyMetaV mv)
          | otherwise ->
-           writeTyVar mv (TyMetaV mv2)
+             substituteUnif mv (TyMetaV mv2)
     Just ty2' -> unifyUnboundMetaTyVar mv ty2'
 unifyUnboundMetaTyVar mv ty2 = do
   ty2' <- zonkType ty2
@@ -666,39 +710,40 @@ unifyUnboundMetaTyVar mv ty2 = do
       -- We abort typing when occurrence check fails; otherwise, zonkType can diverge.
       abortTyping
     else do
-      lvl <- readTcLevelMv mv
-      ty2'LevelAdjusted <- capLevel lvl ty2'
-      writeTyVar mv ty2'LevelAdjusted
+      substituteUnif mv ty2'
 
+
+-- Assumption: ty is already zonked.
+substituteUnif :: MonadTypeCheck m => MetaTyVar -> MonoTy -> m ()
+-- TODO: Implement escape checking (substituting variables more than the current IC level should be desabled
+substituteUnif mv ty = do
+  cIcLevel <- C.asks (C.key @KeyTC) tcIcLevel
+  let mIcLevel = metaIcLevel mv
+  if mIcLevel > cIcLevel
+    then do
+    reportError $ Untouchable mv ty
+    else do
+    lvl <- readTcLevelMv mv
+    ty'Adjusted <- capLevel lvl ty
+    writeTyVar mv ty'Adjusted
 
 {-# INLINE minimum' #-}
 {-# SPECIALIZE INLINE minimum' :: [TcLevel] -> TcLevel #-}
 minimum' :: (Ord a, Bounded a) => [a] -> a
 minimum' = foldl' min maxBound
 
-csTcLevel :: MonadTypeCheck m => [TyConstraint] -> m TcLevel
-csTcLevel cs = minimum' <$> traverse cTcLevel cs
+newtype MM f a = MM { runMM :: f a }
 
-tyTcLevel  :: MonadTypeCheck m => Ty -> m TcLevel
-qtyTcLevel :: MonadTypeCheck m => QualTy -> m TcLevel
-cTcLevel   :: MonadTypeCheck m => TyConstraint -> m TcLevel
+instance (Applicative f , Monoid a) => Semigroup (MM f a) where
+  MM m1 <> MM m2 = MM $ (<>) <$> m1 <*> m2
 
-tyTcLevel = zonkType >=> tyTcLevelWork
-qtyTcLevel = zonkTypeQ >=> qtyTcLevelWork
-cTcLevel = zonkTypeC >=> cTcLevelWork
+instance (Applicative f , Monoid a) => Monoid (MM f a) where
+  mempty = MM $ pure mempty
 
-tyTcLevelWork  :: MonadTypeCheck m => Ty -> m TcLevel
-tyTcLevelWork (TyMetaV mv)     = liftIO $ readTcLevelMv mv
-tyTcLevelWork (TyVar _)        = return maxBound
-tyTcLevelWork (TyCon _ ts)     = minimum' <$> mapM tyTcLevelWork ts
-tyTcLevelWork (TySyn _ t)      = tyTcLevelWork t
-tyTcLevelWork (TyMult _)       = return maxBound
-tyTcLevelWork (TyForAll _ qty) = qtyTcLevelWork qty
+tcLevel :: (MonadTypeCheck m, MetaTyVars t) => t -> m TcLevel
+tcLevel t =
+  getMin <$> (runMM $ metaTyVarsGen (\mv -> MM $ Min <$> liftIO (readTcLevelMv mv)) t)
 
-qtyTcLevelWork :: MonadTypeCheck m => QualTy -> m TcLevel
-qtyTcLevelWork (TyQual cs t) = min <$> (minimum' <$> mapM cTcLevel cs) <*> tyTcLevel t
 
-cTcLevelWork   :: MonadTypeCheck m => TyConstraint -> m TcLevel
-cTcLevelWork (MSub t ts) = min <$> tyTcLevelWork t <*> (minimum' <$> traverse tyTcLevelWork ts)
 
 

@@ -29,7 +29,6 @@ data Exp n
   | App (Exp n) (Exp n)
   | Abs n (Exp n)
   | Con n [Exp n]
-  | Bang (Exp n)
   | Case (Exp n) [ (Pat n, Exp n) ]
   | Let  (Bind n) (Exp n)
   | Lift (Exp n) (Exp n)
@@ -41,20 +40,19 @@ data Exp n
 
 
 freeVars :: Ord n => Exp n -> [n]
-freeVars = Set.toList . ($ Set.empty) . go Set.empty 
+freeVars = Set.toList . ($ Set.empty) . go Set.empty
   where
     gather f = mconcat . map f -- foldr ((.) . f) id
-    
+
     go bound = \case
       Lit _ -> id
       Var x -> if x `Set.member` bound then
                  id
                else
                  Set.insert x
-      App e1 e2 -> go bound e1 . go bound e2 
+      App e1 e2 -> go bound e1 . go bound e2
       Abs n e -> go (Set.insert n bound) e
       Con _ es -> gather (go bound) es
-      Bang e      -> go bound e
       Case e alts -> go bound e . gather (goAlt bound) alts
       Let  bs e   -> let bound' = foldr (Set.insert . fst3) bound bs
                      in gather (go bound' . thd3) bs . go bound' e
@@ -63,17 +61,17 @@ freeVars = Set.toList . ($ Set.empty) . go Set.empty
 
       RCon _ es -> gather (go bound) es
       RCase e alts -> go bound e . gather (goRAlt bound) alts
-      RPin e1 e2 -> go bound e1 . go bound e2 
+      RPin e1 e2 -> go bound e1 . go bound e2
 
     goRAlt bound (p, e, e') =
-      go bound e' . go (foldr Set.insert bound $ freeVarsP p) e 
+      go bound e' . go (foldr Set.insert bound $ freeVarsP p) e
 
-    goAlt bound (p, e) = go (foldr Set.insert bound $ freeVarsP p) e 
+    goAlt bound (p, e) = go (foldr Set.insert bound $ freeVarsP p) e
 
 fst3 :: (a, b, c) -> a
 fst3 (a, _, _) = a
 thd3 :: (a, b, c) -> c
-thd3 (_, _, e) = e 
+thd3 (_, _, e) = e
 
 instance Pretty n => Pretty (Exp n) where
   pprPrec _ (Lit l) = ppr l
@@ -94,9 +92,6 @@ instance Pretty n => Pretty (Exp n) where
     ppr c <> align (parens $ hsep $ punctuate comma $ map (pprPrec 0) es)
     -- parensIf (k > 9) $
     -- ppr c D.<+> D.hsep (map (pprPrec 10) es)
-
-  pprPrec _ (Bang e) =
-    D.text "!" D.<> pprPrec 10 e
 
   pprPrec k (Case e ps) = parensIf (k > 0) $ D.group $ D.align $
     D.text "case" D.<+> pprPrec 0 e D.<+> D.text "of" D.<$>
@@ -135,7 +130,6 @@ instance Pretty n => Pretty (Exp n) where
 
 data Pat n = PVar n
            | PCon n [Pat n]
-           | PBang (Pat n)
   deriving Show
 
 instance Pretty n => Pretty (Pat n) where
@@ -144,20 +138,18 @@ instance Pretty n => Pretty (Pat n) where
   pprPrec _ (PCon c []) = ppr c
   pprPrec k (PCon c ps) = parensIf (k > 0) $
     ppr c D.<> align (parens $ D.hsep $ punctuate comma $ map (pprPrec 1) ps)
-  pprPrec _ (PBang p)   =
-    D.text "!" D.<> pprPrec 1 p
 
 freeVarsP :: Pat n -> [n]
 freeVarsP (PVar n)    = [n]
 freeVarsP (PCon _ ps) = concatMap freeVarsP ps
-freeVarsP (PBang p)   = freeVarsP p
+
 
 
 type Bind n = [ (n, Ty, Exp n) ]
 
 
 -- | Datatype declarations
-data DDecl n = DDecl n [TyVar] [(n, [Ty])]
+data DDecl n = DDecl n [TyVar] [(n, [n], [TyConstraint], [Ty])]
 
 -- | Type synonym declarations
 data TDecl n = TDecl n [TyVar] Ty

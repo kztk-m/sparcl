@@ -57,6 +57,7 @@ data Conf =
          confNameTable  :: IORef NameTable,
          confOpTable    :: IORef OpTable,
          confTypeTable  :: IORef TypeTable,
+         confConTable   :: IORef CTypeTable,
          confSynTable   :: IORef SynTable,
          confValueTable :: IORef ValueTable
        }
@@ -165,6 +166,15 @@ instance Modify KeyType TypeTable REPL where
   modify _ f = liftIO . flip modifyIORef f =<< Rd.asks confTypeTable
 
 
+instance Has KeyCon CTypeTable REPL where
+  ask _ = liftIO . readIORef =<< Rd.asks confConTable
+instance Local KeyCon CTypeTable REPL
+
+instance Modify KeyCon CTypeTable REPL where
+  modify _ f = liftIO . flip modifyIORef f =<< Rd.asks confConTable
+
+
+
 instance Has KeySyn SynTable REPL where
   ask _ = liftIO . readIORef =<< Rd.asks confSynTable
 
@@ -200,6 +210,7 @@ initConf = do
   refOt <- newIORef M.empty
   refSt <- newIORef M.empty
   refTt <- newIORef M.empty
+  refCt <- newIORef M.empty
   refVt <- newIORef M.empty
 
   return $ Conf { confSearchPath = ["."],
@@ -211,6 +222,7 @@ initConf = do
                   confNameTable  = refNt,
                   confOpTable    = refOt,
                   confTypeTable  = refTt,
+                  confConTable   = refCt,
                   confSynTable   = refSt,
                   confValueTable = refVt
                 }
@@ -344,6 +356,7 @@ setModule m = do
   modify (key @KeyName)  $ M.unionWith S.union (miNameTable m)
   modify (key @KeyOp)    $ M.union (miOpTable m)
   modify (key @KeyType)  $ M.union (miTypeTable m)
+  modify (key @KeyCon)   $ M.union (miConTable m)
   modify (key @KeySyn)   $ M.union (miSynTable m)
   modify (key @KeyValue) $ M.union (miValueTable m)
 
@@ -357,7 +370,8 @@ setModule m = do
     align (vcat [
               fillBreak 8 (text "names:")    <+> align (pprMap $ M.map S.toList $ miNameTable m),
               fillBreak 8 (text "ops:")      <+> align (pprMap $ miOpTable m),
-              fillBreak 8 (text "types")     <+> align (pprMap $ miTypeTable m),
+              fillBreak 8 (text "constructors:") <+> align (pprMap $ miConTable m),
+              fillBreak 8 (text "types:")     <+> align (pprMap $ miTypeTable m),
               fillBreak 8 (text "synonyms:") <+> align (pprMap $ miSynTable m) ,
               fillBreak 8 (text "values:")   <+> align (pprMap $ miValueTable m) ])
 
@@ -367,6 +381,7 @@ resetModule = do
   set (key @KeyName)  M.empty
   set (key @KeyOp)    M.empty
   set (key @KeyType)  M.empty
+  set (key @KeyCon)   M.empty
   set (key @KeySyn)   M.empty
   set (key @KeyValue) M.empty
 
@@ -463,6 +478,7 @@ readExp ::
    Has KeyOp   OpTable m,
    Local KeyTC   TypingContext m,
    Has KeyType  TypeTable m,
+   Has KeyCon   CTypeTable m,
    Has KeySyn   SynTable m,
    MonadIO m,
    MonadCatch m) => String -> m (Exp Name, Ty)
@@ -481,6 +497,7 @@ readExp str = do
   -- tinfo <- ask (key @KeyTC)
 
   typeTable <- ask (key @KeyType)
+  conTable  <- ask (key @KeyCon)
   synTable  <- ask (key @KeySyn)
 
   debugPrint 1 $ text "Type checking expression..."
@@ -488,7 +505,7 @@ readExp str = do
                                                 text "synenv:" <+> align (pprMap synTable) ])
 
   -- liftIO $ setEnvs tinfo typeTable synTable
-  (typedExp, ty) <- runTCWith typeTable synTable $ inferExp renamedExp
+  (typedExp, ty) <- runTCWith conTable typeTable synTable $ inferExp renamedExp
   debugPrint 1 $ text "Type checking Ok."
 
   debugPrint 1 $ text "Desugaring expression..."

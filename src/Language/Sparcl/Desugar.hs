@@ -74,9 +74,6 @@ desugarExp (Loc _ expr) = go expr
     -- go (S.Con (c,_ty) es) =
     --   C.Con c <$> mapM desugarExp es
 
-    go (S.Bang e) =
-      C.Bang <$> desugarExp e
-
     go (S.Case e alts) = do
       e'  <- desugarExp e
       rs' <- desugarAlts alts
@@ -148,7 +145,7 @@ makeTupleExpC es  = C.Con (nameTuple (length es)) es
 
 makeTuplePatS :: [S.LPat 'TypeCheck] -> S.LPat 'TypeCheck
 makeTuplePatS [p] = p
-makeTuplePatS ps  = noLoc (S.PCon (nameTuple len, tupleConTy len) ps)
+makeTuplePatS ps  = noLoc (S.PCon (nameTuple len, T.conTy2Ty $ tupleConTy len) ps)
   where
     len = length ps
 
@@ -216,8 +213,6 @@ punchHoleAffine n = conv . go
     go (C.Con c es) =
       fmap (C.Con c) <$> list (map go es)
 
-    go (C.Bang e) = (C.Bang .) <$> go e
-
     go (C.Case _ _) = More
     go (C.Let _ _) = More
     go (C.RCase _ _) = More
@@ -247,7 +242,7 @@ desugarRHS pcs = withNewNames len $ \ns -> do
 data CPat = CPHole
           | CPVar  Name
           | CPCon  Name [ CPat ]
-          | CPBang CPat
+--          | CPBang CPat
           deriving (Eq , Show)
 
 
@@ -256,10 +251,8 @@ instance Pretty CPat where
   pprPrec _ (CPVar n) = ppr n
   pprPrec _ (CPCon n []) = ppr n
   pprPrec k (CPCon n ps) = parensIf (k > 0) $ ppr n <+> hsep (map (pprPrec 1) ps)
-  pprPrec _ (CPBang p)   = text "!" <> pprPrec 1 p
+--  pprPrec _ (CPBang p)   = text "!" <> pprPrec 1 p
 
--- mergeCPat :: MonadDesugar m => CPat -> CPat -> m CPat
--- mergeCPat = do
 
 
 -- | 'separatePat' separate a unidirectional pattern from a pattern.
@@ -279,9 +272,9 @@ separatePat pat = go False (unLoc pat)
     go _ (S.PWild (x, _ty)) =
       -- (if b then CPVar x else CPBang (CPVar x), [])
       (CPVar x, [])
-    go _ (S.PBang p) =
-      let (p', subs) = go True (unLoc p)
-      in (CPBang p', subs)
+    -- go _ (S.PBang p) =
+    --   let (p', subs) = go True (unLoc p)
+    --   in (CPBang p', subs)
 
     gos _ []       = ([], [])
     gos b (p:ps) =
@@ -305,7 +298,7 @@ fillCPat = evalState . go
     go :: CPat -> State [C.Pat Name] (C.Pat Name)
     go (CPVar x)    = return (C.PVar x)
     go (CPCon c ps) = C.PCon c <$> mapM go ps
-    go (CPBang p)   = C.PBang <$> go p
+--    go (CPBang p)   = C.PBang <$> go p
     go CPHole       = next
 
 convertClauseU :: MonadDesugar m => S.Clause 'TypeCheck -> m (C.Exp Name)

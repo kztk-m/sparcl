@@ -43,8 +43,9 @@ class HsName n where
 
 
 
-class (Monad m, IsName n, HsName n, MiniHaskellPat n p, MiniHaskellType n t) =>
-      MiniHaskellExp m n p e d s t | m -> e, m -> d, m -> s, m -> n, m -> p, m -> t  where
+class (Monad m, IsName n, HsName n, MiniHaskellPat n p,
+       MiniHaskellType n t, MiniHaskellConstraint n t c) =>
+      MiniHaskellExp m n p e d s t c | m -> e, m -> d, m -> s, m -> n, m -> p, m -> t, m -> c  where
   var :: n -> m e
   lit :: Literal -> m e
   app :: e -> e -> m e
@@ -57,7 +58,7 @@ class (Monad m, IsName n, HsName n, MiniHaskellPat n p, MiniHaskellType n t) =>
 
   vald :: n -> e -> m d
   sigd :: n -> t -> m d
-  datad :: n -> [n] -> [(n,[t])] -> m d
+  datad :: n -> [n] -> [(n,[n],[c],[t])] -> m d
   typed :: n -> [n] -> t -> m d
 
   list  :: [e] -> m e
@@ -94,6 +95,9 @@ class (IsName n, HsName n) => MiniHaskellType n t | t -> n where
   tytuple  :: [t] -> t
   tylist   :: t -> t
   tyforall :: [n] -> t -> t
+
+class (MiniHaskellType n t) => MiniHaskellConstraint n t c | c -> n, c -> t  where
+  tyeq :: t -> t -> c
 
 -- Tentatively disabled modulePrefix
 
@@ -203,7 +207,7 @@ instance MiniHaskellPat GName (Precedence -> Doc) where
 type TextGen = Precedence -> Doc
 
 instance MiniHaskellExp Identity GName
-                        (Precedence -> Doc) (Precedence -> Doc) Doc Doc (Precedence -> Doc) where
+                        (Precedence -> Doc) (Precedence -> Doc) Doc Doc (Precedence -> Doc) Doc where
 
   var n = Identity $ \_ -> text (rhsNameG n)
   lit n = Identity $ \_ -> text (prettyShow n)
@@ -241,8 +245,12 @@ instance MiniHaskellExp Identity GName
   datad n tvs cs = Identity $
     text "data" <+> text (lhsNameG n) <+> hsep (map (text . lhsNameG) tvs)
     <> nest 2 ((line <>) . vcat $ zipWith (<+>) (text "=":repeat (text "|")) $
-              flip map cs $ \(c,ts) ->
-                 text (lhsNameG c) <+> hsep (map ($ 10) ts))
+              flip map cs $ \(c, ns, q, ts) ->
+                  let fd = if null ns then empty
+                           else text "forall" <+> hsep (map (text . lhsNameG) ns) <> text "."
+                      cd = if null q then empty
+                           else parens (hsep $ punctuate comma q) <+> text "=> "
+                  in fd <> cd <> text (lhsNameG c) <+> hsep (map ($ 10) ts))
 
   typed n tvs t = Identity $
     text "type" <+> text (lhsNameG n) <+> hsep (map (text . lhsNameG) tvs) <+> text "=" <+> t 0
@@ -281,7 +289,8 @@ instance MiniHaskellType GName (Precedence -> Doc) where
                         text "forall" <+> hsep (map (text . lhsNameG) tvs) <> text "."
                         <+> t 0
 
-
+instance MiniHaskellConstraint GName (Precedence -> Doc) Doc where
+  tyeq t1 t2 = t1 0 <+> text "~" <+> t2 0
 
 hsblock :: [Doc] -> Doc
 hsblock []  = text "{}"
@@ -289,10 +298,10 @@ hsblock [d] = d
 hsblock ds  = vcat (zipWith (<+>) (text "{":repeat (text ";")) ds) <> text "}"
 
 
-toDocExp :: (forall m n p e d s t. MiniHaskellExp m n p e d s t => m e) -> Doc
+toDocExp :: (forall m n p e d s t c. MiniHaskellExp m n p e d s t c => m e) -> Doc
 toDocExp (m :: Identity (Precedence -> Doc)) = runIdentity m 0
 
-toDocDec :: (forall m n p e d s t. MiniHaskellExp m n p e d s t => m [d]) -> Doc
+toDocDec :: (forall m n p e d s t c. MiniHaskellExp m n p e d s t c => m [d]) -> Doc
 toDocDec (m :: Identity [Doc]) = vcat $ runIdentity m
 
 toDocTop :: ModuleName ->
@@ -372,13 +381,13 @@ toDocTop mn exports imports ddecls tdecls defs =
     --     go _    (TyMetaV _)   = error "Cannot happen."
 
 
-genTopBind :: MiniHaskellExp m n p e d s t =>
+genTopBind :: MiniHaskellExp m n p e d s t c =>
               [C.DDecl Name] -> -- ^ data type declaration
               [C.TDecl Name] -> -- ^ type declaration
               C.Bind Name -> Gen m [d]
 genTopBind ddecls tdecls topbind = do
   d1 <- T.lift $ sequence [ datad (fromName n) (map genTyVar tvs)
-                            [ (fromName c, map genTy ts) | (c,ts) <- cs ]
+                            [ (fromName c, map fromName ns, genC q, map genTy ts) | (c,ns,q,ts) <- cs ]
                           | DDecl n tvs cs <- ddecls ]
   d2 <- T.lift $ sequence [ typed (fromName n) (map genTyVar tvs) (genTy t)
                           | TDecl n tvs t <- tdecls ]
@@ -388,6 +397,12 @@ genTopBind ddecls tdecls topbind = do
 genTyVar :: IsName n => TyVar -> n
 genTyVar (BoundTv n) = fromName n
 genTyVar _           = error "Cannot happen."
+
+genC :: MiniHaskellConstraint n t c => [TyConstraint] -> [c]
+genC [] = []
+genC (MSub _ _:cs) = genC cs
+genC (TyEq t1 t2:cs) =
+  tyeq (genTy t1) (genTy t2) : genC cs
 
 genTy :: MiniHaskellType n t => Ty -> t
 genTy (TyCon c tys)
@@ -432,7 +447,7 @@ runGen m = evalStateT m 0
 --                   return (fromName x, e')) ds
 --   bind ds'
 
-genBind :: MiniHaskellExp m n p e d s t => C.Bind Name -> Gen m [d]
+genBind :: MiniHaskellExp m n p e d s t c => C.Bind Name -> Gen m [d]
 genBind ds = do
   ds' <- forM ds $ \(x,ty,e) -> do
     e'  <- genExp e
@@ -451,19 +466,19 @@ instance (IsName n, Monad m) => NameGen (StateT Int m) n where
     put $! i + 1
     return $ fromName $ Generated i CodeGen
 
-mkApp :: MiniHaskellExp m n p e d s t => m e -> m e -> m e
+mkApp :: MiniHaskellExp m n p e d s t c => m e -> m e -> m e
 mkApp e1 e2 = do
   f <- e1
   x <- e2
   app f x
 
-addReturn :: MiniHaskellExp m n p e d s t => GenExp m s e -> m [s]
+addReturn :: MiniHaskellExp m n p e d s t c => GenExp m s e -> m [s]
 addReturn e =
   runCont e $ \v -> do
     s <- nobinds =<< var (hsName "Prelude.return") `mkApp` return v
     return [s]
 
-lift :: MiniHaskellExp m n p e d s t => GenExp m s e -> GenExp m s e -> Gen m (GenExp m s e)
+lift :: MiniHaskellExp m n p e d s t c => GenExp m s e -> GenExp m s e -> Gen m (GenExp m s e)
 lift e1 e2 = do
   r <- newName
   return $ cont $ \k ->
@@ -472,20 +487,20 @@ lift e1 e2 = do
        e <- var (rtName "liftRev") `mkApp` return v1 `mkApp` return v2
        liftM2 (:) (binds r e) (k =<< var r)
 
-unlift :: MiniHaskellExp m n p e d s t => GenExp m s e -> Gen m (GenExp m s e)
+unlift :: MiniHaskellExp m n p e d s t c => GenExp m s e -> Gen m (GenExp m s e)
 unlift e = do
   r <- newName
   return $ cont $ \k ->
     runCont e $ \v ->
        liftM2 (:) (binds r =<< var (rtName "unliftRev") `mkApp` return v) (k =<< var r)
 
-runit :: MiniHaskellExp m n p e d s t => Gen m (GenExp m s e)
+runit :: MiniHaskellExp m n p e d s t c => Gen m (GenExp m s e)
 runit = do
   r <- newName
   return $ cont $ \k ->
     liftM2 (:) (binds r =<< var (rtName "unitRev")) (k =<< var r)
 
-rpair :: MiniHaskellExp m n p e d s t => GenExp m s e -> GenExp m s e -> Gen m (GenExp m s e)
+rpair :: MiniHaskellExp m n p e d s t c => GenExp m s e -> GenExp m s e -> Gen m (GenExp m s e)
 rpair e1 e2 = do
   r <- newName
   return $ cont $ \k ->
@@ -495,7 +510,7 @@ rpair e1 e2 = do
       vr <- var r
       liftM2 (:) (binds r e) (k vr)
 
-rpin :: MiniHaskellExp m n p e d s t => GenExp m s e -> GenExp m s e -> Gen m (GenExp m s e)
+rpin :: MiniHaskellExp m n p e d s t c => GenExp m s e -> GenExp m s e -> Gen m (GenExp m s e)
 rpin e1 e2 = do
   r <- newName
   return $ cont $ \k ->
@@ -505,7 +520,7 @@ rpin e1 e2 = do
       vr <- var r
       liftM2 (:) (binds r e) (k vr)
 
-rununit :: MiniHaskellExp m n p e d s t => GenExp m s e -> GenExp m s e -> Gen m (GenExp m s e)
+rununit :: MiniHaskellExp m n p e d s t c => GenExp m s e -> GenExp m s e -> Gen m (GenExp m s e)
 rununit e1 e2 = do
   r <- newName
   return $ cont $ \k ->
@@ -517,7 +532,7 @@ rununit e1 e2 = do
      liftM2 (:) (binds r e) (k =<< var r)
 
 
-runpair :: MiniHaskellExp m n p e d s t => GenExp m s e -> GenExp m s e -> Gen m (GenExp m s e)
+runpair :: MiniHaskellExp m n p e d s t c => GenExp m s e -> GenExp m s e -> Gen m (GenExp m s e)
 runpair e1 e2 = do
   r <- newName
   x <- newName
@@ -533,8 +548,8 @@ runpair e1 e2 = do
     e <- var (rtName "unpairRev") `mkApp` return v1 `mkApp` e2'
     liftM2 (:) (binds r e) (k =<< var r)
 
-rcase :: forall m n p e d s t.
-         MiniHaskellExp m n p e d s t =>
+rcase :: forall m n p e d s t c.
+         MiniHaskellExp m n p e d s t c =>
          GenExp m s e -> [(GenExp m s e, GenExp m s e, GenExp m s e, GenExp m s e)] -> Gen m (GenExp m s e)
 rcase e0 _e4s = do
   r <- newName
@@ -558,15 +573,15 @@ rcase e0 _e4s = do
       go r i v0 (vbr:es) e4s k
 
 
-mkCon :: MiniHaskellExp m n p e d s t => Name -> [e] -> m e
+mkCon :: MiniHaskellExp m n p e d s t c => Name -> [e] -> m e
 mkCon n es
   | Just _ <- checkNameTuple n = tuple es
   | otherwise                  = con (fromName n) es
 
-lets_ :: MiniHaskellExp m n p e d s t => n -> e -> m s
+lets_ :: MiniHaskellExp m n p e d s t c => n -> e -> m s
 lets_ r e = lets =<< fmap (:[]) (vald r e)
 
-genExp :: MiniHaskellExp m n p e d s t => C.Exp Name -> Gen m (GenExp m s e)
+genExp :: MiniHaskellExp m n p e d s t c => C.Exp Name -> Gen m (GenExp m s e)
 genExp (C.Var x) = return $ cont $ \k ->
   k =<< var (fromName x)
 genExp (C.Lit l) = return $ cont $ \k ->
@@ -597,7 +612,6 @@ genExp (C.Con n es) = do
 
   -- xs <- mapM genExp es
   -- con (fromName n) xs
-genExp (C.Bang e) = genExp e
 genExp (C.Case e0 pes) = do
   r <- newName
   e0' <- genExp e0
@@ -678,8 +692,8 @@ genExp (C.RCase e0 alts) = do
   rcase e0' alts'
 
 
-genRAlts :: forall m n p e d s t.
-            MiniHaskellExp m n p e d s t => (Pat Name, Exp Name, Exp Name) -> Gen m (GenExp m s e, GenExp m s e, GenExp m s e, GenExp m s e)
+genRAlts :: forall m n p e d s t c.
+            MiniHaskellExp m n p e d s t c => (Pat Name, Exp Name, Exp Name) -> Gen m (GenExp m s e, GenExp m s e, GenExp m s e, GenExp m s e)
 genRAlts (pat, bexp, wexp) = do
   x <- newName
   y <- newName
@@ -811,15 +825,13 @@ mkConP n ps
 
 genPat :: MiniHaskellPat n p => C.Pat Name -> p
 genPat (C.PVar x)    = pvar (fromName x)
-genPat (C.PBang p)   = genPat p
 genPat (C.PCon n ps) = mkConP n (map genPat ps)
 
-genExpFromPat :: MiniHaskellExp m n p e d s t => C.Pat Name -> m e
+genExpFromPat :: MiniHaskellExp m n p e d s t c => C.Pat Name -> m e
 genExpFromPat (C.PVar x)    = var (fromName x)
-genExpFromPat (C.PBang p)   = genExpFromPat p
 genExpFromPat (C.PCon n ps) = mkCon n =<< mapM genExpFromPat ps
 
-pairsToRight :: MiniHaskellExp m n p e d s t => [e] -> m e
+pairsToRight :: MiniHaskellExp m n p e d s t c => [e] -> m e
 pairsToRight []  = tuple []
 pairsToRight [e] = return e
 pairsToRight (e:es) = do
@@ -827,7 +839,7 @@ pairsToRight (e:es) = do
   tuple [e, r']
 
 
-pairsToRightR :: MiniHaskellExp m n p e d s t => [GenExp m s e] -> Gen m (GenExp m s e)
+pairsToRightR :: MiniHaskellExp m n p e d s t c => [GenExp m s e] -> Gen m (GenExp m s e)
 pairsToRightR []  = runit
 pairsToRightR [e] = T.lift $ return e
 pairsToRightR (e:es) = do

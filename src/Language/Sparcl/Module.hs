@@ -23,6 +23,7 @@ import           Language.Sparcl.Class
 import           Language.Sparcl.Core.Syntax
 import           Language.Sparcl.Desugar
 import           Language.Sparcl.Exception
+import           Language.Sparcl.Multiplicity
 import           Language.Sparcl.Renaming
 import           Language.Sparcl.Surface.Syntax  (Assoc (..), Prec (..))
 import           Language.Sparcl.Typing.TCMonad
@@ -39,6 +40,7 @@ import           Language.Sparcl.Surface.Parsing
 data KeyName
 data KeyOp
 data KeyType
+data KeyCon
 data KeySyn
 data KeySearchPath
 data KeyValue
@@ -53,6 +55,7 @@ type MonadModule v m =
    Local KeyName       NameTable m,
    Local KeyOp         OpTable   m,
    Local KeyType       TypeTable m,
+   Local KeyCon        CTypeTable m,
    Local KeySyn        SynTable m,
    Has   KeySearchPath [FilePath] m,
    Local KeyValue      (M.Map Name v) m)
@@ -62,6 +65,7 @@ data ModuleInfo v = ModuleInfo {
   miNameTable  :: NameTable,
   miOpTable    :: OpTable,
   miTypeTable  :: TypeTable,
+  miConTable   :: CTypeTable,
   miSynTable   :: SynTable,
   miValueTable :: M.Map Name v,
   miHsFile     :: FilePath
@@ -229,6 +233,7 @@ baseModuleInfo = ModuleInfo {
                  [ (Bare n, S.fromList [(mn ,n)]) | Original mn n _ <- names ]
                  ++ [ (Qual mn n, S.fromList [(mn, n)]) | Original mn n _ <- names ],
   miOpTable    = opTable,
+  miConTable   = conTable,
   miTypeTable  = typeTable,
   miSynTable   = synTable,
   miValueTable = valueTable,
@@ -247,17 +252,21 @@ baseModuleInfo = ModuleInfo {
     unChar (VLit (LitChar n)) = n
     unChar _                  = rtError $ text "Not a character"
 
+    conTable = M.fromList [
+      conTrue  |-> ConTy [] [] [] [] boolTy,
+      conFalse |-> ConTy [] [] [] [] boolTy,
+      base "U" |->
+        let a = BoundTv (Local $ User "a")
+        in ConTy [a] [] [] [(TyVar a, omega)] (TyCon (base "Un") [TyVar a]),
+      base "MkMany" |->
+        let [a, p] = map (BoundTv . Local . User) ["a", "p"]
+        in ConTy [p, a] [] [] [(TyVar a, TyVar p)] (TyCon (base "Many") [TyVar p, TyVar a])
+      ]
+
     typeTable = M.fromList [
-          conTrue  |-> boolTy,
-          conFalse |-> boolTy,
           base "+" |-> intTy -@ (intTy -@ intTy),
           base "-" |-> intTy -@ (intTy -@ intTy),
           base "*" |-> intTy -@ (intTy -@ intTy),
-
-          base "U" |->
-            let a = BoundTv (Local $ User "a")
-            in TyForAll [a] (TyQual [] $ TyVar a *-> TyCon (base "Un") [TyVar a]),
-
 
           -- is it OK?
           eqInt  |-> intTy -@ intTy -@ boolTy,
@@ -293,7 +302,7 @@ baseModuleInfo = ModuleInfo {
           ltChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool $ ((<)  `on` unChar) c d)
           ]
 
-    names = M.keys typeTable
+    names = M.keys typeTable ++ M.keys conTable
 
     fromBool True  = VCon conTrue  []
     fromBool False = VCon conFalse []
@@ -348,10 +357,11 @@ baseModuleInfo = ModuleInfo {
 withImport :: MonadModule v m => ModuleInfo v -> m r -> m r
 withImport mo m =
   local (key @KeyName) (M.unionWith S.union $ miNameTable mo) $
-   local (key @KeyOp) (M.union $ miOpTable mo) $
-    local (key @KeyType) (M.union $ miTypeTable mo) $
-     local (key @KeySyn) (M.union $ miSynTable mo) $
-      local (key @KeyValue) (M.union $ miValueTable mo) m
+  local (key @KeyOp) (M.union $ miOpTable mo) $
+  local (key @KeyType) (M.union $ miTypeTable mo) $
+  local (key @KeyCon) (M.union $ miConTable mo) $
+  local (key @KeySyn) (M.union $ miSynTable mo) $
+  local (key @KeyValue) (M.union $ miValueTable mo) m
   -- let t = miTables mod
   -- withOpTable (tOpTable t) $
   --   withTypeTable (tTypeTable t) $
@@ -367,10 +377,11 @@ withImports ms comp =
 withNoTables :: MonadModule v m => m r -> m r
 withNoTables m =
   local (key @KeyName) (const M.empty) $
-   local (key @KeyOp) (const M.empty) $
-    local (key @KeyType) (const M.empty) $
-     local (key @KeySyn) (const M.empty) $
-      local (key @KeyValue) (const M.empty) m
+  local (key @KeyOp) (const M.empty) $
+  local (key @KeyType) (const M.empty) $
+  local (key @KeyCon) (const M.empty) $
+  local (key @KeySyn) (const M.empty) $
+  local (key @KeyValue) (const M.empty) m
 
 ext :: String
 ext = "sparcl"
@@ -392,10 +403,11 @@ moduleNameToFilePath (ModuleName mo) = go mo
 
 restrictNames :: [Name] -> ModuleInfo v -> ModuleInfo v
 restrictNames ns mi =
-  mi { miNameTable = M.mapMaybe conv (miNameTable mi),
-       miOpTable   = restrict (miOpTable mi),
-       miTypeTable = restrict (miTypeTable mi),
-       miSynTable  = restrict (miSynTable mi),
+  mi { miNameTable  = M.mapMaybe conv (miNameTable mi),
+       miOpTable    = restrict (miOpTable mi),
+       miTypeTable  = restrict (miTypeTable mi),
+       miConTable   = restrict (miConTable mi),
+       miSynTable   = restrict (miSynTable mi),
        miValueTable = restrict (miValueTable mi)
         }
   where
@@ -450,6 +462,7 @@ exportNames ns m = do
   nameTbl <- M.union (miNameTable m)  <$> ask (key @KeyName)
   opTbl   <- M.union (miOpTable m)    <$> ask (key @KeyOp)
   typeTbl <- M.union (miTypeTable m)  <$> ask (key @KeyType)
+  conTbl  <- M.union (miConTable m)   <$> ask (key @KeyCon)
   synTbl  <- M.union (miSynTable m)   <$> ask (key @KeySyn)
   valTbl  <- M.union (miValueTable m) <$> ask (key @KeyValue)
 
@@ -468,6 +481,7 @@ exportNames ns m = do
   return $ restrictNames onames $ m { miNameTable = nameTbl,
                                       miOpTable = opTbl,
                                       miTypeTable = typeTbl,
+                                      miConTable  = conTbl,
                                       miSynTable = synTbl,
                                       miValueTable = valTbl }
 
@@ -525,13 +539,14 @@ readModule fp interp = do
     debugPrint 1 $ text "Renaming Ok."
 
     tyEnv  <- ask (key @KeyType)
+    conEnv <- ask (key @KeyCon)
     synEnv <- ask (key @KeySyn)
 
     debugPrint 1 $ text "Type checking ..."
     debugPrint 2 $ text "under ty env" </> pprMap tyEnv
 
-    (typedDecls, nts, dataDecls', typeDecls', newTypeTable, newSynTable) <-
-      runTCWith tyEnv synEnv $ inferTopDecls renamedDecls tyDecls synDecls
+    (typedDecls, nts, dataDecls', typeDecls', newCTypeTable, newSynTable) <-
+      runTCWith conEnv tyEnv synEnv $ inferTopDecls renamedDecls tyDecls synDecls
 
     debugPrint 1 $ text "Type checking Ok."
     debugPrint 1 $ text "Desugaring ..."
@@ -566,7 +581,8 @@ readModule fp interp = do
           miOpTable   = newOpTable,
           miNameTable = newNameTable,
           miSynTable  = newSynTable,
-          miTypeTable = foldr (uncurry M.insert) newTypeTable nts,
+          miTypeTable = M.fromList nts,
+          miConTable  = newCTypeTable,
           miValueTable = M.fromList newValueEnv,
           miHsFile     = hsFile
           }

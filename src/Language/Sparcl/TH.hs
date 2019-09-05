@@ -1,30 +1,32 @@
+{-# LANGUAGE TemplateHaskell #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
 module Language.Sparcl.TH (sparcl, sparclf, parseToQDec, parseToQDec') where
 
-import Language.Sparcl.CodeGen.Haskell as Gen
-import Language.Sparcl.Core.Syntax as C
-import Language.Sparcl.Pretty hiding ((<$>))
-import Language.Sparcl.Typing.TCMonad
+import           Language.Sparcl.CodeGen.Haskell as Gen
+import           Language.Sparcl.Core.Syntax     as C
+import           Language.Sparcl.Pretty          hiding ((<$>))
+import           Language.Sparcl.Typing.TCMonad
 
-import Language.Sparcl.Surface.Parsing (parseDecl)
-import Language.Sparcl.Module (baseModuleInfo, ModuleInfo(..))
-import Language.Sparcl.Exception (staticError)
+import           Language.Sparcl.Exception       (staticError)
+import           Language.Sparcl.Module          (ModuleInfo (..),
+                                                  baseModuleInfo)
+import           Language.Sparcl.Surface.Parsing (parseDecl)
 
-import Language.Sparcl.Renaming 
-import Language.Sparcl.Typing.Typing (inferTopDecls)
-import Language.Sparcl.Desugar       (desugarTopDecls, runDesugar)
+import           Language.Sparcl.Desugar         (desugarTopDecls, runDesugar)
+import           Language.Sparcl.Renaming
+import           Language.Sparcl.Typing.Typing   (inferTopDecls)
 
-import qualified Language.Haskell.TH as TH
-import qualified Language.Haskell.TH.Syntax as TH
-import qualified Language.Haskell.TH.Quote as TH
+import qualified Language.Haskell.TH             as TH
+import qualified Language.Haskell.TH.Quote       as TH
+import qualified Language.Haskell.TH.Syntax      as TH
 
-import Control.Monad.IO.Class
+import           Control.Monad.IO.Class
 
 data HName = HName { hLhsName :: TH.Name, hRhsName :: TH.Name }
 
 
-mkGName :: String -> String -> HName 
+mkGName :: String -> String -> HName
 mkGName m s = HName (TH.mkName s) (TH.mkName (m ++ "." ++ s))
 
 mkLName :: String -> HName
@@ -33,7 +35,7 @@ mkLName s   = HName (TH.mkName s) (TH.mkName s)
 instance IsName HName where
   fromName nn@(Original m n _)
     | nn == conTrue  = mkGName "Prelude" "True"
-    | nn == conFalse = mkGName "Prelude" "False" 
+    | nn == conFalse = mkGName "Prelude" "False"
     | otherwise      =
       HName (TH.mkName $ unUser n)
             (TH.mkName $ Gen.genModuleName m ++ "." ++ unUser n)
@@ -45,27 +47,30 @@ instance IsName HName where
 instance HsName HName where
   hsName s = HName (error "hsName: The name can only be used in RHS.") (TH.mkName s)
   rtName s = HName (TH.mkName s) (TH.mkName $ Gen.runtimePrefix ++ s)
-  
-    
-      
+
+
+
 
 
 
 instance MiniHaskellPat HName TH.Pat where
   pvar n = TH.VarP (hLhsName n)
-  pcon n = TH.ConP (hRhsName n) 
-  ptuple = TH.TupP 
+  pcon n = TH.ConP (hRhsName n)
+  ptuple = TH.TupP
 
-instance MiniHaskellExp TH.Q HName TH.Pat TH.Exp TH.Dec TH.Stmt TH.Type where
+instance MiniHaskellConstraint HName TH.Type TH.Pred where
+  tyeq t1 t2 = TH.EqualityT `TH.AppT` t1 `TH.AppT` t2
+
+instance MiniHaskellExp TH.Q HName TH.Pat TH.Exp TH.Dec TH.Stmt TH.Type TH.Pred where
   var n = TH.varE (hRhsName n)
   lit l = TH.litE (l2l l)
     where
       l2l :: Literal -> TH.Lit
-      l2l (LitChar c) = TH.CharL c
-      l2l (LitDouble d) = TH.DoublePrimL (realToFrac d)
-      l2l (LitInt i)    = TH.IntegerL (fromIntegral i)
-      l2l (LitRational r) = TH.RationalL r 
-      
+      l2l (LitChar c)     = TH.CharL c
+      l2l (LitDouble d)   = TH.DoublePrimL (realToFrac d)
+      l2l (LitInt i)      = TH.IntegerL (fromIntegral i)
+      l2l (LitRational r) = TH.RationalL r
+
   app e1 e2 = return $ TH.AppE e1 e2
   abs x e = return $ TH.LamE [TH.VarP $ hLhsName x] e
 
@@ -82,14 +87,19 @@ instance MiniHaskellExp TH.Q HName TH.Pat TH.Exp TH.Dec TH.Stmt TH.Type where
 
   datad n tvs cs = return $
     TH.DataD [] (hLhsName n) [TH.PlainTV $ hLhsName tv | tv <- tvs] Nothing
-     [ TH.NormalC (hLhsName c) [ (TH.Bang TH.NoSourceUnpackedness TH.SourceStrict, t) | t <- ts] | (c,ts) <- cs ] 
-     []
+    [ if null ns && null q then
+        TH.NormalC (hLhsName c) [ (TH.Bang TH.NoSourceUnpackedness TH.SourceStrict, t) | t <- ts]
+      else
+        TH.ForallC (map (TH.PlainTV . hLhsName) ns) q $
+        TH.NormalC (hLhsName c) [ (TH.Bang TH.NoSourceUnpackedness TH.SourceStrict, t) | t <- ts]
+    | (c,ns, q, ts) <- cs ]
+    []
   typed n tvs t = return $
-    TH.TySynD (hLhsName n) [TH.PlainTV $ hLhsName tv | tv <- tvs ] t 
+    TH.TySynD (hLhsName n) [TH.PlainTV $ hLhsName tv | tv <- tvs ] t
 
 
   list = return . TH.ListE
-  tuple = return . TH.TupE 
+  tuple = return . TH.TupE
 
   do_ = return . TH.DoE
 
@@ -102,11 +112,11 @@ instance MiniHaskellType HName TH.Type where
   tyvar x = TH.VarT $ hLhsName x
   tyfun t1 t2 = TH.ArrowT `TH.AppT` t1 `TH.AppT` t2
   tycon n =
-    foldl TH.AppT (TH.ConT (hRhsName n)) 
+    foldl TH.AppT (TH.ConT (hRhsName n))
   tytuple ts = foldl TH.AppT (TH.TupleT (length ts)) ts
   tylist t   = TH.ListT `TH.AppT` t
   tyforall ns =
-    TH.ForallT [TH.PlainTV (hLhsName tv) | tv <- ns] [] 
+    TH.ForallT [TH.PlainTV (hLhsName tv) | tv <- ns] []
 
 -- ty2ty :: C.Ty -> TH.Type
 -- ty2ty (C.TyCon n ts)
@@ -128,7 +138,7 @@ instance MiniHaskellType HName TH.Type where
 --     TH.ConT (TH.mkName "Prelude.Char")
 --   | n == nameTyBool =
 --     TH.ConT (TH.mkName "Prelude.Bool")
---   | otherwise = 
+--   | otherwise =
 --     foldl (\r a -> r `TH.AppT` ty2ty a) (TH.ConT $ TH.mkName $ rhsName n) ts
 -- ty2ty (C.TyForAll tvs ty) =
 --   TH.ForallT [TH.PlainTV (TH.mkName (prettyShow tv)) | tv <- tvs] [] (ty2ty ty)
@@ -146,7 +156,7 @@ instance MiniHaskellType HName TH.Type where
 --                   Nothing (map genC cs) []
 --       where
 --         genC (c,ts) = TH.NormalC (TH.mkName $ lhsName c) $
---                       map (\t -> (TH.Bang TH.NoSourceUnpackedness TH.SourceStrict, ty2ty t)) ts 
+--                       map (\t -> (TH.Bang TH.NoSourceUnpackedness TH.SourceStrict, ty2ty t)) ts
 
 -- convertTypeDecls :: [C.TDecl C.Name] -> TH.Q [TH.Dec]
 -- convertTypeDecls = return . map convertTypeDecl
@@ -163,25 +173,25 @@ parseToQDec' fp str = do
   decs <- parseToQDec str
   liftIO $ writeFile fp $ show $ TH.ppr decs
   return decs
-  
+
 parseToQDec :: String -> TH.Q [TH.Dec]
 parseToQDec str = do
   decls <- either (staticError . text) return $ parseDecl str
 
   TH.Module _ (TH.ModName modName) <- TH.thisModule
-  let currentModule = ModuleName modName 
+  let currentModule = ModuleName modName
 
   let opTable   = miOpTable baseModuleInfo
-  let nameTable = miNameTable baseModuleInfo 
-  
+  let nameTable = miNameTable baseModuleInfo
+
   (renamedDecls, dataDecls, synDecls, _newNames, _newOpTable) <-
       liftIO $ either nameError return $ runRenaming nameTable opTable $ renameTopDecls currentModule decls
 
   tinfo <- liftIO initTypingContext
   -- liftIO $ setEnvs tinfo (miTypeTable baseModuleInfo) (miSynTable baseModuleInfo)
 
-  (typedDecls, _nts, dataDecls', typeDecls', _newTypeTable, _newSynTable) <-
-      liftIO $ runSimpleTC tinfo $ runTCWith (miTypeTable baseModuleInfo) (miSynTable baseModuleInfo) $ inferTopDecls renamedDecls dataDecls synDecls
+  (typedDecls, _nts, dataDecls', typeDecls', _newCTypeTable, _newSynTable) <-
+      liftIO $ runSimpleTC tinfo $ runTCWith (miConTable baseModuleInfo) (miTypeTable baseModuleInfo) (miSynTable baseModuleInfo) $ inferTopDecls renamedDecls dataDecls synDecls
 
   desugarred <- liftIO $ runSimpleTC tinfo $ runTC $ runDesugar $ desugarTopDecls typedDecls
 
@@ -204,4 +214,4 @@ sparcl = TH.QuasiQuoter {
     unimplemented s = error $ "sparcl: " ++ "quasiquoter for " ++ s ++ " is not implemented."
 
 sparclf :: TH.QuasiQuoter
-sparclf = TH.quoteFile sparcl 
+sparclf = TH.quoteFile sparcl

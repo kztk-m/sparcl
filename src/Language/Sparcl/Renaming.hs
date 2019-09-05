@@ -140,10 +140,6 @@ renameExp level localnames (Loc loc expr) = first (Loc loc) <$> go expr
       c' <- resolveImportedName loc c
       return (Con c', S.empty)
 
-    go (Bang e) = do
-      (e', fv) <- renameExp level localnames e
-      return (Bang e', fv)
-
     go Lift = return (Lift, S.empty)
 
 
@@ -362,7 +358,6 @@ hasRev (PVar _)    = False
 hasRev (PREV _)    = True
 hasRev (PCon _ ps) = any (hasRev . unLoc) ps
 hasRev (PWild _)   = False
-hasRev (PBang p)   = hasRev (unLoc p)
 
 hasWith :: Clause p -> Bool
 hasWith (Clause _ _ (Just _)) = True
@@ -402,9 +397,12 @@ renameTopDecls currentModule (Decls _ topdecls) = do
   let typeDecls = [ (loc, unBare n, map unBare ns, ty) | Loc loc (DType n ns ty) <- topdecls ]
 
   let ns  = [ n | (_, n, _) <- defs ]
+
+  let conName (NormalC c _)      = c
+      conName (GeneralC c _ _ _) = c
   let names = ns
               ++ [ n | (_, n, _, _) <- dataDecls ]
-              ++ [ unBare n | (_, _, _, cds) <- dataDecls, Loc _ (CDecl n _) <- cds ]
+              ++ [ unBare n | (_, _, _, cds) <- dataDecls, n <- map (conName . unLoc) cds ]
               ++ [ n | (_, n, _, _) <- typeDecls ]
   -- FIXME: check there is no overlaps in names.
 
@@ -429,9 +427,19 @@ renameTopDecls currentModule (Decls _ topdecls) = do
     dataDecls' <- forM dataDecls $ \(loc, n, tyns, cdecls) -> do
       let tyns' = zipWith Alpha [0..] tyns
       let nm = M.fromList $ zip tyns tyns'
-      cdecls' <- forM cdecls $ \(Loc cloc (CDecl c tys)) -> do
-        tys' <- mapM (renameTy (length tyns) nm) tys
-        return $ Loc cloc (CDecl (toOrig $ unBare c) tys')
+      cdecls' <- forM cdecls $ \case
+        (Loc cloc (NormalC c tys)) -> do
+          tys' <- mapM (renameTy (length tyns) nm) tys
+          return $ Loc cloc (NormalC (toOrig $ unBare c) tys')
+        (Loc cloc (GeneralC c xs q ts)) -> do
+          let xs' = zipWith Alpha [length tyns..] $ map unBare xs
+          let lv  = length tyns + length xs
+          q'  <- mapM (renameTyC lv nm) q
+          ts' <- mapM (\(m,t) -> do
+                          m' <- renameTy lv nm m
+                          t' <- renameTy lv nm t
+                          return (m', t')) ts
+          return $ Loc cloc $ GeneralC (toOrig $ unBare c) xs' q' ts'
       return $ Loc loc (toOrig n, tyns', cdecls')
 
     renameLocalDeclsWork level' M.empty currnames (Decls () decls) $ \ds' _ _ _boundVars _ opTable ->
@@ -445,6 +453,16 @@ renameTopDecls currentModule (Decls _ topdecls) = do
   --   mapDecls f (Decls i ds)   = Decls  i (map f ds)
   --   mapDecls f (HDecls i dss) = HDecls i (map (map f) dss)
 
+
+renameTyC :: DBLevel -> LocalNames -> TConstraint 'Parsing -> Renaming (TConstraint 'Renaming)
+renameTyC lv nm (MSub ts1 ts2) = do
+  ts1' <- mapM (renameTy lv nm) ts1
+  ts2' <- mapM (renameTy lv nm) ts2
+  return (MSub ts1' ts2')
+renameTyC lv nm (TyEq t1 t2) = do
+  t1' <- renameTy lv nm t1
+  t2' <- renameTy lv nm t2
+  return (TyEq t1' t2')
 
 renameTy :: DBLevel -> LocalNames -> LTy 'Parsing -> Renaming (LTy 'Renaming)
 renameTy level localnames lty = go level localnames lty (\lty' _ _ -> return lty')
@@ -489,6 +507,10 @@ renameTy level localnames lty = go level localnames lty (\lty' _ _ -> return lty
       gos lv1 nm1 ts2 $ \ts2' lv2 nm2 ->
       k (MSub ts1' ts2') lv2 nm2
 
+    goC lv nm (TyEq t1 t2) k =
+      go lv  nm  t1 $ \t1' lv1 nm1 ->
+      go lv1 nm1 t2 $ \t2' lv2 nm2 ->
+      k (TyEq t1' t2') lv2 nm2
 
 
 {- |
@@ -534,9 +556,9 @@ renamePat1 level localnames boundVars (Loc loc pat) cont =
       c' <- resolveImportedName loc c
       renamePats1 level localnames boundVars ps $ \ps' queue level' localnames' boundVars' ->
         k (PCon c' <$> ps') queue level' localnames' boundVars'
-    go (PBang p) k =
-      renamePat1 level localnames boundVars p $ \p' queue level' localnames' boundVars' ->
-        k (PBang <$> p') queue level' localnames' boundVars'
+    -- go (PBang p) k =
+    --   renamePat1 level localnames boundVars p $ \p' queue level' localnames' boundVars' ->
+    --     k (PBang <$> p') queue level' localnames' boundVars'
     go (PREV p) k =
       k (PREV <$> fillLater) [p] level localnames boundVars
 
