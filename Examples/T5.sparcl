@@ -1,0 +1,26 @@
+-- GADT style definition 
+data MyMany p a where
+  sig MkMyMany : a # p -> MyMany p a 
+end 
+
+data Exp a where
+  sig EInt  : Int  -> Exp Int 
+  sig EBool : Bool -> Exp Bool 
+  sig ELE   : Exp Int -> Exp Int -> Exp Bool 
+end
+
+{-
+     EBool |-> forall a.(a ~ Bool) => Bool # Omega -> Exp a
+     EInt |-> forall a.(a ~ Int) => Int # Omega -> Exp a
+     ELE |-> forall a.(a ~ Bool) => Exp Int # Omega -> Exp Int # Omega -> Exp a
+-}
+
+        
+sig eval : Exp a -> a 
+def eval (EInt a)  = a 
+   |     (EBool a) = a 
+   |     (ELE n m) = leInt (eval n) (eval m) 
+
+
+
+
