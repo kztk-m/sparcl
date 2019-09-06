@@ -10,10 +10,12 @@ import           Language.Sparcl.Name
 import           Language.Sparcl.Pretty       as D hiding ((<$>))
 import qualified Language.Sparcl.Pretty       as D
 
+import           Control.Arrow                (second)
 import           Control.Monad.IO.Class       (MonadIO (..))
 import           Data.IORef
-import           Data.Maybe                   (fromMaybe)
+import           Data.Maybe                   (fromMaybe, isJust)
 import           Data.Semigroup               (Endo (..))
+import qualified Data.Set                     as S
 import           System.IO.Unsafe
 
 {- |
@@ -57,6 +59,16 @@ data Ty = TyCon   Name [Ty]       -- ^ Type constructor
         | TySyn   Ty Ty           -- ^ type synonym (@TySym o u@ means @u@ but @o@ will be used for error messages)
         | TyMult  Multiplicity    -- ^ 1 or ω
          deriving (Eq, Ord, Show)
+
+isMonoTy :: Ty -> Bool
+isMonoTy = isJust . testMonoTy
+
+testMonoTy :: Ty -> Maybe MonoTy
+testMonoTy (TyForAll xs (TyQual q t)) | null xs && null q = testMonoTy t
+                                      | otherwise         = Nothing
+testMonoTy (TySyn _ t) = testMonoTy t
+testMonoTy t = Just t
+
 
 {- |
 
@@ -270,6 +282,35 @@ substTyC :: [ (TyVar, Ty) ] -> TyConstraint -> TyConstraint
 substTyC tbl' (MSub t1 ts2) = MSub (substTy tbl' t1) (map (substTy tbl') ts2)
 substTyC tbl' (TyEq t1 t2)  = TyEq (substTy tbl' t1) (substTy tbl' t2)
 
+consec2simul  :: [ (TyVar, Ty) ] -> [ (TyVar, Ty) ]
+consec2simul [] = []
+consec2simul ((x,t):xts) =
+  let r = consec2simul xts
+  in (x,t): map (\(y,s) -> (y, substTy [(x,t)] s)) r
+
+consec2simulMeta :: [ (MetaTyVar, Ty) ] -> [ (MetaTyVar, Ty) ]
+consec2simulMeta [] = []
+consec2simulMeta ((x,t):xts) =
+  (x,t) : map (second $ substTyMeta [(x,t)]) (consec2simulMeta xts)
+
+substTyMeta :: [ (MetaTyVar, Ty) ] -> Ty -> Ty
+substTyMeta tbl ty = case ty of
+  TyVar n       -> TyVar n
+  TyCon c ts    -> TyCon c (map (substTyMeta tbl) ts)
+  TyMetaV m     -> fromMaybe ty (Prelude.lookup m tbl)
+  TyForAll ns t -> TyForAll ns (substTyMetaQ tbl t)
+  TySyn _ uTy   -> substTyMeta tbl uTy
+  TyMult m      -> TyMult m
+
+substTyMetaQ :: [ (MetaTyVar, Ty) ] -> QualTy -> QualTy
+substTyMetaQ tbl (TyQual cs t) =
+  TyQual (map (substTyMetaC tbl) cs) (substTyMeta tbl t)
+
+substTyMetaC :: [ (MetaTyVar, Ty) ] -> TyConstraint -> TyConstraint
+substTyMetaC tbl (MSub t ts)  = MSub (substTyMeta tbl t) (map (substTyMeta tbl) ts)
+substTyMetaC tbl (TyEq t1 t2) = TyEq (substTyMeta tbl t1) (substTyMeta tbl t2)
+
+
 
 class MetaTyVars t where
   metaTyVarsGen :: Monoid n => (MetaTyVar -> n) -> t -> n
@@ -296,7 +337,7 @@ instance MetaTyVars TyConstraint where
   metaTyVarsGen f (TyEq t1 t2)   = metaTyVarsGen f (t1, t2)
 
 metaTyVars :: MetaTyVars t => t -> [MetaTyVar]
-metaTyVars t = appEndo (metaTyVarsGen (\x -> Endo (x:)) t) []
+metaTyVars t = S.toList $ appEndo (metaTyVarsGen (\x -> Endo (S.insert x)) t) S.empty
 
 bangTy :: Ty -> Ty
 bangTy ty = TyCon nameTyBang [ty]

@@ -1,4 +1,5 @@
 {-# LANGUAGE ConstraintKinds        #-}
+{-# LANGUAGE StandaloneDeriving     #-}
 {-# LANGUAGE TypeApplications       #-}
 {-# LANGUAGE TypeFamilies           #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
@@ -59,6 +60,7 @@ data Ty (p :: Pass)
   | TQual   [TConstraint p] (LTy p)
   | TMult   Multiplicity
 
+
 -- TODO: Maybe, we should add Eq or Ord later.
 data TConstraint p = MSub [LTy p] [LTy p] -- max p1 ... pn <= max q1 ... qm
                    | TyEq (LTy p) (LTy p) -- t1 ~ t2
@@ -113,7 +115,7 @@ decomposeArrTy :: forall p. Typeable p => LTy p -> ([(LTy p, LTy p)], LTy p)
 decomposeArrTy (unLoc -> TCon c [m, t2, t3])
   | isTyArr @p Proxy c =
       let (args, ret) = decomposeArrTy t3
-      in ( (m,t2):args, ret )
+      in ( (t2,m):args, ret )
 decomposeArrTy ty = ([], ty)
 
 decomposeTyCon :: Eq (XTId p) => XTId p -> LTy p -> Maybe [LTy p]

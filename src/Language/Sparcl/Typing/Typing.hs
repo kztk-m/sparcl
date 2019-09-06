@@ -11,7 +11,7 @@ import           Data.Void
 
 import qualified Data.Map                       as M
 
-import           Control.Arrow                  (first)
+import           Control.Arrow                  (first, (***))
 import qualified Data.Graph                     as G
 
 import           Language.Sparcl.Literal
@@ -34,7 +34,7 @@ import qualified Language.Sparcl.Surface.Syntax as S
 import           Language.Sparcl.Pretty         as D hiding ((<$>))
 
 -- import Data.Maybe (isNothing)
-import           Data.List                      (partition, (\\))
+import           Data.List                      (nub, partition, (\\))
 
 -- import Control.Exception (evaluate)
 import           Debug.Trace
@@ -169,13 +169,15 @@ checkPatsTyK :: MonadTypeCheck m =>
   m (a, [LPat 'TypeCheck], [(Name,MonoTy,Multiplication)])
 checkPatsTyK ps ms ts comp = do
   (cs, ps', bind) <- checkPatsTy ps ms ts
+  readConstraint >>= \r -> debugPrint 4 $ red $ "CC:" <+> ppr r
   res <- withVars [ (n,t) | (n,t,_) <- bind ] $
     if null cs then do
       comp
     else do
-      (a, ics) <- gatherConstraint $ pushICLevel comp
+      (a, ics) <- gatherConstraint $ pushIcLevel comp
       addImpConstraint cs ics
       return a
+  readConstraint >>= \r -> debugPrint 4 $ red $ "CC:" <+> ppr r
   return (res, ps', bind)
 
 
@@ -254,7 +256,6 @@ checkPatTyWork isUnderRev (Loc loc pat) pmult patTy = do
                                    , "but here passed is",  ppr (length ps)]
         abortTyping
 
-      addConstraint q
       tryUnify ret patTy
 
       (cs, ps', bind) <-
@@ -338,28 +339,129 @@ checkPatTyWork isUnderRev (Loc loc pat) pmult patTy = do
       --       (PBang (Loc _ (PVar x')), ubind, lbind) <- go (PBang (noLoc $ PVar x))
       --       return (PWild x', ubind, lbind)
 
-solveInferredConstraint :: MonadTypeCheck m => [TyConstraint] -> [InferredConstraint] -> m [TyConstraint]
-solveInferredConstraint given wanted = do
-  -- assuming that the current constraint is empty
-  let eqc  = [ (t1,t2) | ICNormal (TyEq t1 t2) <- wanted ]
-      subc = [ c | ICNormal c@(MSub _ _) <- wanted ]
-      impc = [ (cs', ics') | ICGuarded cs' ics' <- wanted ]
 
-  -- unify all equality constraints
-  mapM_ (uncurry unify) eqc
-  eqRemaining <- map (\(ICNormal c) -> c) <$> readConstraint
-  setConstraint []
-  subcSimplified <- simplifyConstraintsNoRed subc
-  let subsRemaining = filter (\c -> not $ checkImplication given [c]) subcSimplified
+solveInferredConstraint :: MonadTypeCheck m => [MetaTyVar] -> [TyConstraint] -> [InferredConstraint] -> m [TyConstraint]
+solveInferredConstraint ex given wanted =
+  solveInferredConstraintWork ex [] given wanted
 
-  forM_ impc $ \(cs', ics') -> do
-    res <- solveInferredConstraint (cs' ++ given) ics'
+solveInferredConstraintWork :: MonadTypeCheck m => [MetaTyVar] -> [TyConstraint] -> [TyConstraint] -> [InferredConstraint] -> m [TyConstraint]
+solveInferredConstraintWork existentials givenSubP given_ wanted_ = do
+  given  <- mapM zonkTypeC  given_
+  wanted <- mapM zonkTypeIC wanted_
+
+  let givenEq  = [ (t1, t2) | TyEq t1 t2 <- given ]
+  let givenSub = [ c | c@(MSub _ _) <- given ]
+
+  debugPrint 2 $ red $ text "Ex" <+> ppr existentials <> text "." <+> text "Solving" <+> ppr given <+> text "==>" <+> ppr wanted
+
+  -- After unification given part can be further processed.
+  givenEq' <- do
+    corig <- readConstraint
+    setConstraint []
+    mapM_ (uncurry unify) givenEq
+    givenEq' <- map (\(ICNormal (TyEq t1 t2)) -> (t1,t2)) <$> readConstraint
+    setConstraint corig
+    return givenEq'
+
+  -- givenEq' must have the form of either
+  --   TyVar   x = ???
+  --   TyMetaV x = ??? where x's IC level is smaller than the current
+
+  let (varSubsts, mvarSubsts) = (consec2simul *** consec2simulMeta) $ makeVarSubsts givenEq'
+
+  (givenSub', newEq)  <- do
+    corig <- readConstraint
+    setConstraint []
+    gs <- simplifyConstraintsNoRed $ map (substTyC varSubsts . substTyMetaC mvarSubsts) givenSub
+    eq' <- map (\(ICNormal (TyEq t1 t2)) -> (t1, t2)) <$> readConstraint
+    setConstraint corig
+    return (gs, eq')
+
+  let (varSubsts2, mvarSubsts2) = (consec2simul *** consec2simulMeta) $ makeVarSubsts newEq
+
+  debugPrint 4 $ red $ text "Substs" <+> align (sep [ ppr varSubsts,
+                                                      ppr mvarSubsts,
+                                                      ppr varSubsts2,
+                                                      ppr mvarSubsts2 ])
+
+
+  let newWanted = map (substMetaI mvarSubsts2 . substI varSubsts2 .
+                       substMetaI mvarSubsts  . substI varSubsts) wanted
+
+  let givenSubP' = map (substTyMetaC mvarSubsts2 . substTyC varSubsts2 .
+                        substTyMetaC mvarSubsts  . substTyC varSubsts) givenSubP
+
+
+  let eqRemaining  = [ (t1,t2) | ICNormal (TyEq t1 t2) <- newWanted, t1 /= t2 ]
+      wsub = [ c | ICNormal c@(MSub _ _) <- newWanted ]
+      wimp = [ (cs, ics) | ICGuarded cs ics <- newWanted ]
+
+  -- unless (null weq) $
+  --   reportError $ ImplicationCheckFail (map (uncurry TyEq) givenEq) (map (uncurry TyEq) weq)
+
+
+  -- We first check implication constraints.
+  forM_ wimp $ \(cs', ics') -> do
+    curIcLevel <- currentIcLevel
+    let existentials' = filter (\x -> metaIcLevel x > curIcLevel) $ metaTyVars ics'
+    res <- pushIcLevel $ solveInferredConstraintWork existentials' (givenSub' ++ givenSubP') cs' ics'
+
     unless (null res) $ do
       let normcs = [ c | ICNormal c <- ics' ]
-      reportError $ ImplicationCheckFail (cs'++given) normcs
+      reportError $ ImplicationCheckFail (cs'++givenSub' ++ givenSubP') normcs
       abortTyping
 
-  return $ eqRemaining ++ subsRemaining
+  wsub' <- eliminateExistential existentials <$> simplifyConstraints wsub
+
+  let subsRemaining = filter (\c -> not $ checkImplication (givenSub' ++ givenSubP') [c]) wsub'
+
+  return $ map (uncurry TyEq) eqRemaining ++ subsRemaining
+
+
+  -- -- TODO : Substitute eq for all others
+  -- --        Eliminate existential variables (the same or as equal as the current-level)
+
+
+  -- debugPrint 2 $ red $ text "Solving" <+> ppr given <+> text "==>" <+> ppr wanted
+
+  -- -- assuming that the current constraint is empty
+  -- let eqc  = [ (t1,t2) | ICNormal (TyEq t1 t2) <- wanted ]
+  --     subc = [ c | ICNormal c@(MSub _ _) <- wanted ]
+  --     impc = [ (cs', ics') | ICGuarded cs' ics' <- wanted ]
+
+  -- -- unify all equality constraints
+  -- -- mapM_ (uncurry unify) eqc
+  -- -- eqRemaining <- map (\(ICNormal c) -> c) <$> readConstraint
+  -- -- setConstraint []
+  -- subcSimplified <- simplifyConstraintsNoRed subc
+  -- let subsRemaining = filter (\c -> not $ checkImplication given [c]) subcSimplified
+
+  -- forM_ impc $ \(cs', ics') -> do
+  --   res <- solveInferredConstraint (cs' ++ given) ics'
+  --   unless (null res) $ do
+  --     let normcs = [ c | ICNormal c <- ics' ]
+  --     reportError $ ImplicationCheckFail (cs'++given) normcs
+  --     abortTyping
+
+  -- return $ map (uncurry TyEq) eqc ++ subsRemaining
+
+  where
+    substI m (ICNormal c) = ICNormal $ substTyC m c
+    substI m (ICGuarded cs ics) = ICGuarded (map (substTyC m) cs) (map (substI m) ics)
+
+    substMetaI m (ICNormal c) = ICNormal $ substTyMetaC m c
+    substMetaI m (ICGuarded cs ics) = ICGuarded (map (substTyMetaC m) cs) (map (substMetaI m) ics)
+
+    makeVarSubsts :: [ (Ty, Ty) ] -> ([ (TyVar, Ty) ], [ (MetaTyVar, Ty) ])
+    makeVarSubsts [] = ([], [])
+    makeVarSubsts ((t1,t2):eqs) =
+      let (r1, r2) = makeVarSubsts eqs
+      in case (t1, t2) of
+           (TyVar x, _)   -> ((x,t2):r1, r2)
+           (_, TyVar y)   -> ((y,t1):r1, r2)
+           (TyMetaV x, _) -> (r1, (x, t2):r2)
+           (_, TyMetaV y) -> (r1, (y, t1):r2)
+           (_, _)         -> error "Cannot happen."
 
   -- rem <- pushIcLevel $ mapM (\(cs',ics') -> simplifyInferredConstraint (given++cs') ics) impc
 
@@ -385,12 +487,10 @@ simplifyConstraints constrs = whenChecking (CheckingConstraint constrs) $ go con
 checkImplication :: [TyConstraint] -> [TyConstraint] -> Bool
 checkImplication given wanted =
   let prop = toFormula given .&&. SAT.neg (toFormula wanted)
-  in trace (show $ vcat [ text "Checking",
-                          ppr given,
-                          text "implies",
-                          ppr wanted,
-                          "by Solving",
-                          ppr prop]) $
+  in trace (show $ vcat [ text "Checking" <+>
+                          align (ppr given </>
+                                 "=>" <+> ppr wanted),
+                          "by solving" <+> align (ppr prop)]) $
      case SAT.sat prop of
        Just _  -> False
        Nothing -> True
@@ -669,7 +769,7 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
           addRev t                                     = revTy t
 
     go (Let decls e) = do
-      (decls', bind, umapLet) <- inferDecls decls
+      (decls', bind, umapLet) <- inferDecls False decls
       (e', umap)              <- {- withUnrestrictedVars -} withVars bind $ checkTy e expectedTy
       return (Let decls' e', mergeUseMap umap umapLet)
 
@@ -715,7 +815,73 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
           return ((p',e'):as', bindAs ++ bind,
                    mergeUseMap (foldr (M.delete . fst) umapAs xqs) umapE)
 
+checkGeneralizeTy :: MonadTypeCheck m => SrcSpan -> Bool -> MonoTy -> UseMap -> PolyTy -> m ()
+checkGeneralizeTy loc isTopLevel ty um polyTy2
+  | not isTopLevel, Just monoTy2 <- testMonoTy polyTy2 =
+      atLoc loc $ unify ty monoTy2
+  | otherwise =
+      checkPolyTy loc ty um polyTy2
 
+
+
+checkPolyTy :: MonadTypeCheck m => SrcSpan -> MonoTy -> UseMap -> PolyTy -> m ()
+checkPolyTy loc ty1_ um polyTy2 = atLoc loc $ do
+      debugPrint 4 $ "PolyTy" <+> text (show polyTy2)
+      ty1 <- zonkType ty1_
+      cs <- mapM zonkTypeIC =<< readConstraint
+      setConstraint []
+
+      currentTcLevel <- askCurrentTcLevel
+      umapVars <- metaTyVars <$> mapM zonkType [ t | m <- M.elems um, t <- m2ty m ]
+
+      generalizable <-
+        filterM (\m -> do
+                    lv <- readTcLevelMv m
+                    return $ lv > currentTcLevel) ((nub $ metaTyVars ty1 ++ metaTyVars cs) \\ umapVars)
+
+
+
+      -- if unification
+      let escapedMetaVars = metaTyVars ty1 \\ generalizable
+
+      (skolemTyVars, TyQual given ty2) <- skolemize polyTy2
+
+      readConstraint >>= \r -> debugPrint 4 $ red $ "CC:" <+> ppr r
+      unify ty1 ty2
+      readConstraint >>= \r -> debugPrint 4 $ red $ "CC:" <+> ppr r
+
+      escapedVars <- freeTyVars <$> mapM zonkMetaTyVar escapedMetaVars
+
+      when (any (`elem` skolemTyVars) escapedVars) $ do
+        reportError $ Other $ D.group $
+          D.hcat [ D.text "The type",
+                   D.nest 2 (D.line D.<> D.dquotes (D.align $ ppr ty1)),
+                   D.line <> D.text "cannot be polymorphic enough for:",
+                   D.nest 2 (D.line D.<> D.dquotes (D.align $ ppr ty2)),
+                   D.line <> D.text "Escaped" <+> ppr escapedMetaVars <+> ppr (metaTyVars ty1) <+> ppr generalizable
+                 ]
+
+      invisible <- metaTyVars <$> mapM zonkMetaTyVar generalizable
+
+      q <- solveInferredConstraint invisible given cs
+
+      unless (null q) $ do
+        reportError $ ImplicationCheckFail given q
+
+
+
+
+
+
+tryGeneralizeTy :: MonadTypeCheck m => Bool -> MonoTy -> UseMap -> m PolyTy
+tryGeneralizeTy isTopLevel ty_ u = do
+  cs <- readConstraint
+  if isTopLevel || null cs
+    then generalizeTy ty_ u
+    else do
+    ty <- zonkType ty_
+    debugPrint 3 $ "Generalization of" <+> ppr ty <+> "is suppressed."
+    return ty
 
 -- NB: @generalizeTy@ makes the current constraint empty
 generalizeTy :: MonadTypeCheck m => MonoTy -> UseMap -> m PolyTy
@@ -723,7 +889,7 @@ generalizeTy ty_ um = do
   cs  <- readConstraint
   setConstraint []
 
-  q <- solveInferredConstraint [] cs
+  q <- solveInferredConstraint [] [] cs
 
   ty <- zonkType ty_
 
@@ -821,16 +987,18 @@ gatherAltUC ((obj,umap):triples) = go obj umap triples
 
 
 
-inferDecls :: MonadTypeCheck m => Decls 'Renaming (LDecl 'Renaming) ->
-              m (Decls 'TypeCheck (LDecl 'TypeCheck), [(Name, PolyTy)], UseMap)
-inferDecls (Decls v _) = absurd v
-inferDecls (HDecls _ dss) = do
+inferDecls :: MonadTypeCheck m =>
+  Bool -> -- is top level
+  Decls 'Renaming (LDecl 'Renaming) ->
+  m (Decls 'TypeCheck (LDecl 'TypeCheck), [(Name, PolyTy)], UseMap)
+inferDecls _ (Decls v _) = absurd v
+inferDecls isTopLevel (HDecls _ dss) = do
   (dss', bind , umap) <- go [] dss
   return (HDecls () dss', bind, umap )
   where
     go bs [] = return ([], bs, M.empty)
     go bs (ds:rest) = do
-      (ds', bind,  umap)  <- inferMutual ds
+      (ds', bind,  umap)  <- inferMutual isTopLevel ds
       (rest', bs', umap') <- withVars bind $ go (bind ++ bs) rest
       return (ds':rest', bs', mergeUseMap umap umap')
 
@@ -866,7 +1034,7 @@ inferTopDecls decls dataDecls typeDecls = do
 
   withCons (M.toList ctypeTable) $
    withSyns (M.toList synTable) $ do
-     (decls', nts, _) <- inferDecls decls
+     (decls', nts, _) <- inferDecls True decls
      -- liftIO $ putStrLn $ show cs
      return (decls', nts, dataDecls', typeDecls', ctypeTable, synTable)
   where
@@ -887,8 +1055,9 @@ inferTopDecls decls dataDecls typeDecls = do
 
 
 inferMutual :: MonadTypeCheck m =>
+               Bool -> --
                [LDecl 'Renaming] -> m ([LDecl 'TypeCheck], [(Name, PolyTy)], UseMap)
-inferMutual decls = do
+inferMutual isTopLevel decls = do
 --  let nes = [ (n,e) | Loc _ (DDef n _) <- decls ]
   let ns  = [ n | Loc _ (DDef n _) <- decls ]
   let defs = [ (loc, n, pcs) | Loc loc (DDef n pcs) <- decls ]
@@ -931,16 +1100,15 @@ inferMutual decls = do
     -- Assuming that the current constraint is empty
     setConstraint cs
 
-    -- NB: No type variables exacpe in the useMap so using emptyUseMap is OK.
-    polyTy <- generalizeTy ty emptyUseMap
-
     res <- case M.lookup n sigMap of
-      Nothing    ->
+      Nothing    -> do
+        -- NB: No type variables exacpe in the useMap so using emptyUseMap is OK.
+        polyTy <- tryGeneralizeTy isTopLevel ty emptyUseMap
         return (n, loc, polyTy, pcs')
       Just sigTy -> do
         -- if a function comes with a signature, we check that its inferred type is more polymorphic than
         -- the signature
-        tryCheckMoreGeneral loc polyTy sigTy
+        checkGeneralizeTy loc isTopLevel ty emptyUseMap sigTy
         return (n, loc, sigTy, pcs')
 
     do cs' <- readConstraint
@@ -999,7 +1167,7 @@ inferMutual decls = do
 
 checkClauseTy :: MonadTypeCheck m => Clause 'Renaming -> Ty -> m (Clause 'TypeCheck, UseMap)
 checkClauseTy (Clause e ws wi) expectedTy = do
-  (ws', bind, umap) <- inferDecls ws
+  (ws', bind, umap) <- inferDecls False ws
   withVars bind $ do
     (e',  umapE) <- checkTy e expectedTy
     (wi', umapWi) <- case wi of
@@ -1014,7 +1182,7 @@ checkClauseTy (Clause e ws wi) expectedTy = do
 
 skolemize :: MonadTypeCheck m => PolyTy -> m ([TyVar], QualTy)
 skolemize (TyForAll tvs ty) = do
-  sks <- mapM newSkolemTyVar tvs
+  sks <- localIcLevel (const $ (-1)) $ mapM newSkolemTyVar tvs
   return (sks, substTyQ (zip tvs $ map TyVar sks) ty)
 skolemize ty = return ([], TyQual [] ty)
 
@@ -1045,10 +1213,10 @@ checkMoreGeneral loc polyTy1 polyTy2@(TyForAll _ _) = do
   let badTyVars = filter (`elem` escapedTyVars) skolemTyVars
   unless (null badTyVars) $
     reportError $ Other $ D.group $
-    D.hcat [ D.text "The inferred type",
-             D.nest 2 (D.line D.<> D.dquotes (D.align $ ppr polyTy1)),
-             D.line <> D.text "is not polymorphic enough for:",
-             D.nest 2 (D.line D.<> D.dquotes (D.align $ ppr polyTy2)) ]
+      D.hcat [ D.text "The inferred type",
+               D.nest 2 (D.line D.<> D.dquotes (D.align $ ppr polyTy1)),
+               D.line <> D.text "is not polymorphic enough for:",
+               D.nest 2 (D.line D.<> D.dquotes (D.align $ ppr polyTy2)) ]
 
 checkMoreGeneral loc polyTy1 ty = checkMoreGeneral2 loc polyTy1 (TyQual [] ty)
 
@@ -1310,7 +1478,7 @@ eliminateInvisible mvs (TyQual cs t) =
 
 quantify :: MonadTypeCheck m => [MetaTyVar] -> QualTy -> m PolyTy
 quantify mvs0 ty0 = do
-  -- debugPrint 2 $ text "Simpl:" <+> align (group (ppr (mvs0, ty0)) <> line <> text "-->" <> line <> group (ppr (mvs, ty)))
+  -- debugPrint 2 $ red $ text "Simpl:" <+> align (group (ppr (mvs0, ty0)) <> line <> text "-->" <> line <> group (ppr (mvs, ty)))
   -- liftIO $ print $ red $ "Generalization:" <+> ppr (zip mvs newBinders)
 
   forM_ (zip mvs newBinders) $

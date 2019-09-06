@@ -22,7 +22,7 @@ import           Language.Sparcl.Pretty         hiding (list, (<$>))
 import           Language.Sparcl.Typing.Type
 
 -- FIXME: These dependencies should be removed in future
-import           Language.Sparcl.Exception
+-- import           Language.Sparcl.Exception
 import           Language.Sparcl.Pass
 import           Language.Sparcl.Surface.Syntax as S (Export, Import (..))
 
@@ -431,7 +431,7 @@ genTy (TyForAll tvs (TyQual _ ty)) =
 genTy (TyVar tv)   = tyvar (genTyVar tv)
 genTy (TySyn ty _) = genTy ty
 genTy (TyMetaV _)  = tytuple [] -- defaulting to unit
-genTy (TyMult m)   = cannotHappen (text "Multiplicity" <+> ppr m <+> text "appear where a type is expected.")
+genTy (TyMult _m)   = tytuple [] -- cannotHappen (text "Multiplicity" <+> ppr m <+> text "appears where a type is expected.")
 
 
 type Gen = StateT Int

@@ -18,7 +18,7 @@ import           Text.Megaparsec                       ((<|>))
 
 import           Control.Monad
 
-import           Data.List                             ((\\))
+import           Data.List                             (nub, (\\))
 import           Data.Maybe                            (fromMaybe)
 
 
@@ -327,13 +327,22 @@ topDecl = typeDecl <|> dataDecl <|> (fmap DDecl <$> localDecl)
     tyLHS = do
       c <- L.lexeme sp conName
       xs <- P.many (L.lexeme sp varName)
-      void $ symbol "="
       return (c, xs)
 
     dataDecl = loc $ do
       void $ keyword "data"
       (c, xs) <- tyLHS
-      DData c xs <$> (P.try cdecl <|> gadtCDecl c xs) `P.sepBy1` symbol "|"
+      gadtDecl c xs <|> normalDecl c xs
+      where
+        normalDecl c xs = do
+          void $ symbol "="
+          DData c xs <$> (P.try cdecl <|> gadtCDecl c xs) `P.sepBy1` symbol "|"
+
+        gadtDecl c xs = do
+          void $ keyword "where"
+          cs <- P.many (keyword "sig" *> gadtCDecl c xs)
+          void $ keyword "end"
+          return $ DData c xs cs
 
     gadtCDecl tc xs = do
       start <- getSrcLoc
@@ -342,9 +351,13 @@ topDecl = typeDecl <|> dataDecl <|> (fmap DDecl <$> localDecl)
       ty <- arrTy
       let (args, ret) = decomposeArrTy ty
       targs       <- maybe (fail $ "A return type of GADT-style definition must be the headed by the type constructor.") return $ decomposeTyCon tc ret
-      let ftv = (freeTyVars args ++ freeTyVars targs) \\ xs
+      let ftv = (nub $ freeTyVars args ++ freeTyVars targs) \\ xs
       let l = start <> mconcat (map location targs)
-      return $ Loc l $ GeneralC c ftv (zipWith TyEq [noLoc $ TVar x | x <- xs] targs) args
+      let q = map (\(x,y) -> TyEq (noLoc $ TVar x) y)
+              $ filter (\(x,y) -> case unLoc y of TVar y' -> x /= y'
+                                                  _       -> True )
+              $ zip xs targs
+      return $ Loc l $ GeneralC c ftv q args
 
 
 

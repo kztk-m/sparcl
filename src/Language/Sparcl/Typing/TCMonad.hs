@@ -10,7 +10,7 @@ import           Data.Map.Merge.Lazy            as M
 import           Data.Sequence                  (Seq)
 import qualified Data.Sequence                  as Seq
 
-import           Data.Semigroup                 (Min (..))
+import           Data.Semigroup                 (Max (..), Min (..))
 
 import           Data.Foldable                  (toList)
 import           Data.IORef
@@ -56,6 +56,7 @@ data ErrorDetail
   | Undefined   Name
   | Untouchable MetaTyVar Ty
   | ImplicationCheckFail [TyConstraint] [TyConstraint]
+  | Escape      MetaTyVar Ty
   | Other       D.Doc
 
 
@@ -128,6 +129,11 @@ instance Pretty TypeError where
             D.vcat [ D.text "Cannot deduce" <+> ppr cs'
                    , D.text "under" <+> ppr cs ]
 
+
+          go (Escape mv ty) =
+            D.vcat [ text "Cannot unify:" <+> ppr mv <+> text "with" <+> ppr ty,
+                     text "because skolemized variable(s)" <+> hsep (punctuate comma $ map ppr sks) <+> text "escape." ]
+            where sks = [ s | s@(SkolemTv _ _ _) <- S.freeTyVars ty ]
 
           go (Other d) = d
 
@@ -230,6 +236,16 @@ data InferredConstraint
   = ICNormal  TyConstraint
   | ICGuarded [TyConstraint]       -- Given
               [InferredConstraint] -- Wanted
+
+
+instance MetaTyVars InferredConstraint where
+  metaTyVarsGen f (ICNormal  t)      = metaTyVarsGen f t
+  metaTyVarsGen f (ICGuarded cs ics) = metaTyVarsGen f (cs, ics)
+
+instance Pretty InferredConstraint where
+  ppr (ICNormal tc) = ppr tc
+  ppr (ICGuarded cs ics) =
+    angles (ppr cs <+> text "==>" <+> ppr ics)
 
 
 
@@ -561,9 +577,17 @@ pushLevel m = do
       procDeferred qs
 
 
-pushICLevel :: MonadTypeCheck m => m a -> m a
-pushICLevel = do
-  C.local (C.key @KeyTC) $ \tc -> tc { tcIcLevel = succ (tcIcLevel tc) }
+currentIcLevel :: MonadTypeCheck m => m IcLevel
+currentIcLevel =
+  C.asks (C.key @KeyTC) tcIcLevel
+
+pushIcLevel :: MonadTypeCheck m => m a -> m a
+pushIcLevel = localIcLevel succ
+
+localIcLevel :: MonadTypeCheck m => (IcLevel -> IcLevel) -> m a -> m a
+localIcLevel f =
+  C.local (C.key @KeyTC) $ \tc -> tc { tcIcLevel = f (tcIcLevel tc) }
+
 
 withVar :: MonadTypeCheck m => Name -> Ty -> m a -> m a
 withVar x ty =
@@ -618,6 +642,10 @@ zonkTypeC :: MonadTypeCheck m => TyConstraint -> m TyConstraint
 zonkTypeC (MSub t1 ts2) = MSub <$> zonkType t1 <*> traverse zonkType ts2
 zonkTypeC (TyEq t1 t2)  = TyEq <$> zonkType t1 <*> zonkType t2
 
+zonkTypeIC :: MonadTypeCheck m => InferredConstraint -> m InferredConstraint
+zonkTypeIC (ICNormal c) = ICNormal <$> zonkTypeC c
+zonkTypeIC (ICGuarded cs ics) = ICGuarded <$> mapM zonkTypeC cs <*> mapM zonkTypeIC ics
+
 zonkTypeError :: MonadTypeCheck m => TypeError -> m TypeError
 zonkTypeError (TypeError loc es wc res) = do
   wc'  <- zonkWhenChecking wc
@@ -638,6 +666,10 @@ zonkErrorDetail :: MonadTypeCheck m => ErrorDetail -> m ErrorDetail
 zonkErrorDetail (UnMatchTy t1 t2) = UnMatchTy <$> zonkType t1 <*> zonkType t2
 zonkErrorDetail (OccurrenceCheck tv ty) =
   OccurrenceCheck tv <$> zonkType ty
+zonkErrorDetail (ImplicationCheckFail cs cs') =
+  ImplicationCheckFail <$> mapM zonkTypeC cs <*> mapM zonkTypeC cs'
+zonkErrorDetail (Untouchable m t) =
+  Untouchable <$> pure m <*> zonkType t
 zonkErrorDetail res = pure res
 
 
@@ -650,8 +682,6 @@ unify ty1 ty2 = do
 unifyWork :: MonadTypeCheck m => MonoTy -> MonoTy -> m ()
 unifyWork (TySyn _ t1) t2 = unifyWork t1 t2
 unifyWork t1 (TySyn _ t2) = unifyWork t1 t2
-unifyWork (TyVar x1) (TyVar x2)       | x1 == x2 = return ()
-                                      | otherwise = addConstraint [TyEq (TyVar x1) (TyVar x2)]
 unifyWork (TyMetaV mv1) (TyMetaV mv2) | mv1 == mv2 = return ()
 unifyWork (TyMetaV mv) ty = unifyMetaTyVar mv ty
 unifyWork ty (TyMetaV mv) = unifyMetaTyVar mv ty
@@ -660,6 +690,9 @@ unifyWork (TyCon c ts) (TyCon c' ts') | c == c' = do
                                             reportError $ Other $ D.hsep [D.text "Type construtor", ppr c, D.text "has different number of arguments."]
                                           zipWithM_ unifyWork ts ts'
 unifyWork (TyMult m) (TyMult m') | m == m' = return ()
+unifyWork (TyVar x1) (TyVar x2)       | x1 == x2 = return ()
+unifyWork (TyVar x) t = addConstraint [TyEq (TyVar x) t]
+unifyWork t (TyVar x) = addConstraint [TyEq t (TyVar x)]
 unifyWork ty1 ty2 = do
   ty1' <- zonkType ty1
   ty2' <- zonkType ty2
@@ -693,36 +726,40 @@ unifyUnboundMetaTyVar :: MonadTypeCheck m => MetaTyVar -> MonoTy -> m ()
 unifyUnboundMetaTyVar mv (TyMetaV mv2) = do
   res <- readTyVar mv2
   sw  <- shouldBeSwapped mv mv2
+  cIcLevel <- C.asks (C.key @KeyTC) tcIcLevel
   case res of
     Nothing   ->
       if | mv == mv2 -> return ()
          | sw ->
-             substituteUnif mv2 (TyMetaV mv)
+             substituteUnif cIcLevel mv2 (TyMetaV mv)
          | otherwise ->
-             substituteUnif mv (TyMetaV mv2)
+             substituteUnif cIcLevel mv (TyMetaV mv2)
     Just ty2' -> unifyUnboundMetaTyVar mv ty2'
 unifyUnboundMetaTyVar mv ty2 = do
   ty2' <- zonkType ty2
   let mvs = metaTyVars [ty2']
+  cIcLevel <- C.asks (C.key @KeyTC) tcIcLevel
   if mv `elem` mvs
     then do
       reportError $ OccurrenceCheck mv ty2'
       -- We abort typing when occurrence check fails; otherwise, zonkType can diverge.
       abortTyping
     else do
-      substituteUnif mv ty2'
+      substituteUnif cIcLevel mv ty2'
 
 
 -- Assumption: ty is already zonked.
-substituteUnif :: MonadTypeCheck m => MetaTyVar -> MonoTy -> m ()
+substituteUnif :: MonadTypeCheck m => IcLevel -> MetaTyVar -> MonoTy -> m ()
 -- TODO: Implement escape checking (substituting variables more than the current IC level should be desabled
-substituteUnif mv ty = do
-  cIcLevel <- C.asks (C.key @KeyTC) tcIcLevel
-  let mIcLevel = metaIcLevel mv
-  if mIcLevel > cIcLevel
-    then do
-    reportError $ Untouchable mv ty
-    else do
+substituteUnif cIcLevel mv ty
+  | metaIcLevel mv < cIcLevel =
+    -- keep the constraint to hope that it will be resolved by `given` constraints
+    addConstraint [TyEq (TyMetaV mv) ty]
+    -- reportError $ Untouchable mv ty
+  | metaIcLevel mv <= skIcLevel ty =
+    reportError $ Escape mv ty
+  | otherwise = do
+    debugPrint 4 $ red $ brackets (ppr cIcLevel) <> text "unifying" <+> ppr mv <+> text "with" <+> ppr ty
     lvl <- readTcLevelMv mv
     ty'Adjusted <- capLevel lvl ty
     writeTyVar mv ty'Adjusted
@@ -745,5 +782,8 @@ tcLevel t =
   getMin <$> (runMM $ metaTyVarsGen (\mv -> MM $ Min <$> liftIO (readTcLevelMv mv)) t)
 
 
-
+skIcLevel :: S.FreeTyVars t TyVar => t -> IcLevel
+skIcLevel = getMax . S.foldMapVars (\x -> case x of
+                                       SkolemTv _ _ lv -> Max lv
+                                       _               -> mempty) (\_ m -> m)
 
