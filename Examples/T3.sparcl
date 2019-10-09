@@ -16,13 +16,10 @@ def fst (a,_) = a
 sig snd : (a, b) -> b 
 def snd (_,b) = b 
 
-sig curry : (p <= q, p <= r) => ((a, b) # p -> c) -> a # q -> b # r -> c
 def curry f x y = f (x,y)
 
-sig uncurry : (p <= r, q <= r) => (a # p -> b # q -> c) -> (a, b) # r -> c 
 def uncurry f (x,y) = f x y 
 
-sig ($) : p <= r => (a # p -> b) # q -> a # r -> b
 def ($) f x = f x 
 
 def (.) f g = \x -> f (g x)
@@ -38,6 +35,28 @@ fixity $ 0 right
 fixity . 90 right
 
 data List a = Nil | Cons a (List a) 
+
+def head (Cons a _) = a 
+
+def last (Cons a x) = go a x 
+    where
+      def go a Nil        = a
+           | a (Cons b y) = go b y 
+    end
+
+def init (Cons a x) = go a x 
+    where
+        def go a Nil = Nil
+             | a (Cons b y) = Cons a (go b y) 
+    end 
+
+def tail (Cons _ x) = x 
+
+def null Nil = True
+       | (Cons _ _) = False 
+
+def length Nil        = 0 
+         | (Cons _ x) = 1 + length x 
 
 sig map : (p <= q) => (a # p -> b) -> List a # q -> List b 
 def map f Nil        = Nil  
@@ -56,20 +75,20 @@ def filterByfoldr p = flip foldr Nil $ (\a -> case p a of
                                           | False -> \x -> x
                                           end)
 
-sig foldr : (q <= r, p <= s, q <= s) => (a # p -> b # q -> b) -> b # r -> List a # s -> b 
 def foldr f e Nil        = e
         | f e (Cons a x) = f a (foldr f e x) 
 
-sig foldl : (q <= r, p <= s, q <= s) => (b # q -> a # p -> b) -> b # r -> List a # s -> b 
 def foldl f e Nil        = e
         | f e (Cons a x) = foldl f (f e a) x 
 
-sig reverse : List a # p -> List a 
 def reverse xs = rv xs Nil
       where
     def rv Nil         ys = ys 
          | (Cons x xs) ys = rv xs (Cons x ys) 
   end
+
+
+def reverseFoldl = foldl (\xs a -> Cons a xs) Nil 
 
 sig tail : List a -> List a 
 def tail (Cons a x) = x 
@@ -98,6 +117,47 @@ def until p f x = case p x of
 def append Nil y = y 
          | (Cons a x) y = Cons a (append x y)
 
+def appendFoldr x y = foldr Cons y x
+
+def concat Nil        = Nil
+         | (Cons a x) = append a (concat x) 
+
+def concatFoldr = foldr append Nil 
+
+def concatMap f Nil        = Nil 
+            | f (Cons a x) = append (f a) (concatMap f x)
+
+def concatMapComp f = concat . map f 
+
+def concatMapFoldr f = foldr (append . f) Nil
+
+def scanl = go 
+   where
+        def go f q ls = Cons q (case ls of Nil -> Nil | Cons x xs -> go f (f q x) xs end  )  
+   end
+
+def scanr _ q0 Nil = Cons q0 Nil
+        | f q0 (Cons x xs) = 
+          (\qs -> Cons (f x (head qs)) qs) (scanr f q0 xs)
+
+def span f Nil = (Nil, Nil)
+       | f (Cons x xs) = 
+           case f x of
+           | True -> case span f xs of 
+                     | (ys, zs) -> (Cons x ys, zs)
+                     end
+           | False -> (Nil, Cons x xs)
+           end
+           
+
+def unzip Nil = (Nil, Nil)
+        | (Cons (a, b) xs) = 
+          case unzip xs of 
+          | (as, bs) -> (Cons a as, Cons b bs)
+          end 
+
+def unlines Nil = Nil 
+          | (Cons a x) = append a (Cons '\n' (unlines x))
 
 ----
 
@@ -109,6 +169,8 @@ def out (MkF f) = f
 -- sig myfix : ((a # p -> b) -> (a # p -> b)) -> a # p -> b 
 def myfix f a = (\x a -> f (out x x) a) (MkF (\x a -> f (out x x) a)) a
 
+
+def myfixRec f a = f (\x -> myfixRec f x) a 
 
 data Nat = Z | S Nat 
 
