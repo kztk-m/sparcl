@@ -316,7 +316,7 @@ singleImport = do
   void $ keyword "import"
   Import <$> L.lexeme sp moduleName <*> impNames
   where
-    impNames = P.optional (parens surfaceName `P.sepEndBy` comma)
+    impNames = P.optional (parens $ surfaceName `P.sepEndBy` comma)
 
 topDecls :: Monad m => P m (Decls 'Parsing (Loc (TopDecl 'Parsing)))
 topDecls = Decls () <$> P.many topDecl
@@ -363,6 +363,7 @@ topDecl = typeDecl <|> dataDecl <|> (fmap DDecl <$> localDecl)
     typeDecl = loc $ do
       void $ keyword "type"
       (c, xs) <- tyLHS
+      void $ symbol "="
       DType c xs <$> typeExpr
 
     cdecl = do
@@ -431,7 +432,7 @@ fixityDecl = do
 opExpr :: Monad m => P m (LExp 'Parsing)
 opExpr =
   foldl (\a f -> f a)  <$>
-  appExpr <*> P.many ((\o e2 e1 -> lop o e1 e2) <$> (qop <* sp) <*> appExpr)
+       appExpr <*> P.many ((\o e2 e1 -> lop o e1 e2) <$> (qop <* sp) <*> expr)
   where
     lop o e1 e2 = Loc (location e1 <> location e2) $ Op o e1 e2
 

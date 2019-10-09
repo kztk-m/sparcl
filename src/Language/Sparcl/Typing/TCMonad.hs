@@ -57,6 +57,7 @@ data ErrorDetail
   | Untouchable MetaTyVar Ty
   | ImplicationCheckFail [TyConstraint] [TyConstraint]
   | Escape      MetaTyVar Ty
+  | GeneralizeFail Ty Ty [TyVar]
   | Other       D.Doc
 
 
@@ -134,6 +135,14 @@ instance Pretty TypeError where
             D.vcat [ text "Cannot unify:" <+> ppr mv <+> text "with" <+> ppr ty,
                      text "because skolemized variable(s)" <+> hsep (punctuate comma $ map ppr sks) <+> text "escape." ]
             where sks = [ s | s@(SkolemTv _ _ _) <- S.freeTyVars ty ]
+
+          go (GeneralizeFail ty1 ty2 escapedMetaVars) =
+            D.hcat [ D.text "The inferred type",
+                     D.nest 2 (D.line D.<> D.dquotes (D.align $ ppr ty1)),
+                     D.line <> D.text "is not polymorphic enough for:",
+                     D.nest 2 (D.line D.<> D.dquotes (D.align $ ppr ty2)),
+                     D.line <> D.text "because variable(s)" <+> hsep (punctuate comma $ map ppr escapedMetaVars) <+> text "are monomorphic."
+                   ]
 
           go (Other d) = d
 
@@ -670,6 +679,8 @@ zonkErrorDetail (ImplicationCheckFail cs cs') =
   ImplicationCheckFail <$> mapM zonkTypeC cs <*> mapM zonkTypeC cs'
 zonkErrorDetail (Untouchable m t) =
   Untouchable <$> pure m <*> zonkType t
+zonkErrorDetail (GeneralizeFail ty1 ty2 tyvs) =
+  GeneralizeFail <$> zonkType ty1 <*> zonkType ty2 <*> pure tyvs
 zonkErrorDetail res = pure res
 
 

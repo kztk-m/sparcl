@@ -78,8 +78,11 @@ def comp3 = comp2
 
 def comps =
     let
-        def f = comp1 : (forall p1 p2 p3 p4 p5 a b c. (p1 ~ p4, p1 * p3 ~ p5) => (b # p1 -> c) # p2 -> (a # p3 -> b) # p4 -> a # p5 -> c)
-        def g = comp1 : (forall a b c. (b -o c) -o (a -o b) -o a -o c)
+        sig f : forall p1 p2 p3 p4 p5 a b c. (p1 ~ p4, p1 * p3 ~ p5) => (b # p1 -> c) # p2 -> (a # p3 -> b) # p4 -> a # p5 -> c
+        def f = comp1
+        sig g : forall a b c. (b -o c) -o (a -o b) -o a -o c
+        def g = comp1
+        sig h : forall a b c. (b -> c) -o (a -> b) -> a -> c
         def h = comp1 : (forall a b c. (b -> c) -o (a -> b) -> a -> c)
     in 
     ()

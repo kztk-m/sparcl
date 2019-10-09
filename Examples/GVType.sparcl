@@ -1,0 +1,26 @@
+module Examples.GVType where 
+
+data Recv t s where
+end
+data Send t s where
+end
+data And s1 s2 where
+end
+data Or s1 s2 where
+end
+data EndR where
+end
+data EndS where
+end
+
+data The t where
+end 
+
+data Dual ses1 ses2 where 
+  sig DualRS : Dual s1 s2 -o Dual (Recv t s1) (Send t s2)
+  sig DualSR : Dual s1 s2 -o Dual (Send t s1) (Recv t s2)
+  sig DualAO : Dual s1 s2 -o Dual s1' s2' -o Dual (And s1 s1') (Or s2 s2')
+  sig DualOA : Dual s1 s2 -o Dual s1' s2' -o Dual (Or s1 s1') (And s2 s2')
+  sig DualESER : Dual EndS EndR 
+  sig DualERES : Dual EndR EndS
+end

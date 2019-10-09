@@ -181,5 +181,8 @@ def add x y = addCps x y (\x -> x)
 
 sig f : a # p -> a 
 def f = 
-    let def id x = x 
+    let 
+        -- Currently we do not check the closedness so the signature is necessary.
+        sig id : forall q b. b # q -> b 
+        def id x = x 
     in id id id id id id id id id id id id id id id id id 

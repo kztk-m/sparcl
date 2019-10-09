@@ -1,0 +1,87 @@
+{-
+This examples taken from 
+ - J. Garrett Morris: The Best of Both Worlds Linear Functional Programming without Compromise, ICFP 2016.
+ - Sam Lindley,  J. Garrett Morris: Embedding Session Types in Haskell, Haskell 2016. 
+-}
+
+import Examples.GVType 
+
+-- Empty data type 
+data Ch a where end 
+
+sig fork : Dual s s' -> (Ch s -o Ch EndS) -o Ch s' 
+def fork x = fork x
+
+sig send : t -o Ch (Send t s) -o Ch s 
+def send x = send x 
+
+sig recv : Ch (Recv t s) -o (t, Ch s)
+def recv x = recv x 
+
+sig wait : Ch EndR -o () 
+def wait x = wait x 
+
+sig left  : Ch (Or s1 s2) -o Ch s1 
+def left x = left x 
+
+sig right : Ch (Or s1 s2) -o Ch s2 
+def right x = right x 
+
+sig offer : Ch (And s1 s2) -o (Ch s1 -o r) -o (Ch s2 -o r) -o r 
+def offer x = offer x 
+
+-- the T combinator 
+def t x f = f x 
+
+def multiplier c = 
+   t (recv c) (\ (x, c) -> 
+   t (recv c) (\ (y, c) -> 
+   send (x * y) c))
+
+def negator c = 
+   t (recv c) (\ (x, c) -> 
+    send (0 - x) c)
+
+def calculator c = offer c multiplier negator 
+
+def prf = DualAO (DualRS (DualRS (DualSR DualESER)))
+                 (DualRS (DualSR DualESER))
+
+def (&) = t 
+
+fixity & 0 right
+
+def answer () = 
+    fork prf calculator & \c -> 
+    left c & \c -> 
+    send 3 c & \c -> 
+    send 4 c & \c -> 
+    recv c & \ (z, c) -> 
+    wait c & \ () -> z 
+
+{- 
+-- The following causes a type error
+def answerWrong () = 
+    fork prf calculator & \c -> 
+    left c & \c -> 
+    send 3 c & \c -> 
+    recv c & \ (z, c) -> 
+    wait c & \ () -> z 
+
+ERROR!
+/Users/kztk/work/sparcl-impl/Examples/GV_func.sparcl:(65:27)-(69:23): type error
+  - Types do not match: Recv b EndR /= Send Base.Int (Recv Base.Int EndR)
+
+  - when checking the following types are equivalent:
+      Inferred: Ch (Or (Send Base.Int (Recv b EndR)) (Send Base.Int (Recv Base.Int EndR))) # _3881[1|0]
+                -> b
+      Expected: Ch (Or (Send Base.Int (Send Base.Int (Recv Base.Int EndR))) (Send Base.Int (Recv Base.Int EndR))) # _3881[1|0]
+                -> b
+  - In: /Users/kztk/work/sparcl-impl/Examples/GV_func.sparcl:(65:27)-(69:23)
+      \c -> left c & (\c -> send 3 c & (\c -> recv c & (\(z, c) -> wait c & (\() -> z))))
+    In: /Users/kztk/work/sparcl-impl/Examples/GV_func.sparcl:(65:5)-(69:23)
+      fork prf calculator & (\c -> left c & (\c -> send 3 c & (\c -> recv c & (\(z, c) -> wait c & (\() -> z)))))
+
+-}
+   
+
