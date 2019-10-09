@@ -350,7 +350,7 @@ topDecl = typeDecl <|> dataDecl <|> (fmap DDecl <$> localDecl)
       void $ symbol ":"
       ty <- arrTy
       let (args, ret) = decomposeArrTy ty
-      targs       <- maybe (fail $ "A return type of GADT-style definition must be the headed by the type constructor.") return $ decomposeTyCon tc ret
+      targs       <- maybe (fail $ "A return type of GADT-style definition must be headed by the type constructor.") return $ decomposeTyCon tc ret
       let ftv = (nub $ freeTyVars args ++ freeTyVars targs) \\ xs
       let l = start <> mconcat (map location targs)
       let q = map (\(x,y) -> TyEq (noLoc $ TVar x) y)
@@ -358,8 +358,6 @@ topDecl = typeDecl <|> dataDecl <|> (fmap DDecl <$> localDecl)
                                                   _       -> True )
               $ zip xs targs
       return $ Loc l $ GeneralC c ftv q args
-
-
 
 
     typeDecl = loc $ do

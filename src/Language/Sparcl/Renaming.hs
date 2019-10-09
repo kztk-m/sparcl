@@ -434,10 +434,11 @@ renameTopDecls currentModule (Decls _ topdecls) = do
         (Loc cloc (GeneralC c xs q ts)) -> do
           let xs' = zipWith Alpha [length tyns..] $ map unBare xs
           let lv  = length tyns + length xs
-          q'  <- mapM (renameTyC lv nm) q
+          let nm' = foldr (uncurry M.insert) nm $ zip (map unBare xs) xs'
+          q'  <- mapM (renameTyC lv nm') q
           ts' <- mapM (\(m,t) -> do
-                          m' <- renameTy lv nm m
-                          t' <- renameTy lv nm t
+                          m' <- renameTy lv nm' m
+                          t' <- renameTy lv nm' t
                           return (m', t')) ts
           return $ Loc cloc $ GeneralC (toOrig $ unBare c) xs' q' ts'
       return $ Loc loc (toOrig n, tyns', cdecls')
