@@ -15,6 +15,8 @@ import           Data.Semigroup                 (Max (..), Min (..))
 import           Data.Foldable                  (toList)
 import           Data.IORef
 
+import           Text.Printf
+
 import           Control.Monad.Reader
 -- import Control.Monad.Except
 -- import Control.Exception (evaluate, Exception, throw, catch)
@@ -33,6 +35,8 @@ import           Language.Sparcl.Typing.Type
 import qualified Language.Sparcl.Class          as C
 
 import           Language.Sparcl.DebugPrint
+
+import           System.Clock
 
 data AbortTyping = AbortTyping
   deriving Show
@@ -263,13 +267,48 @@ type TypeErrorContext = ([S.LExp 'Renaming], WhenChecking)
 data SuspendedCheck =
   SuspendedCheck { scCheck    :: forall m. MonadTypeCheck m => m () }
 
+
+data BenchInfo = BenchInfo { biCount :: !Int,     -- the number of total check happened
+                             biTotal :: !Integer  -- the total elapsed time (in nano sec)
+                           }
+
+-- We may want to count some informations depending on keys.
+type BMap = M.Map String BenchInfo
+
+
+pprBi :: BenchInfo -> Doc
+pprBi bi =
+  let elapsedInNanoSecs :: Double = fromIntegral (biTotal bi) / (10 ** 6)
+  in text "#happened" <+> int (biCount bi) <+> text "/" <+> text "elapsed(ms)" <+> text (printf "%2.4f" elapsedInNanoSecs)
+
+pprBMap :: BMap -> Doc
+pprBMap bm =
+  vcat $ map (\(k,v) -> text "Ev" <+> text k <> text ":" <+> pprBi v) $ M.toList bm
+
+
+resetBench :: (MonadIO m, C.Has KeyTC TypingContext m) => m ()
+resetBench = do
+  tc <- C.ask (C.key @KeyTC)
+  liftIO $ writeIORef (tcBLog tc) M.empty
+
+
+reportBench :: (MonadIO m, C.Has KeyTC TypingContext m) => m ()
+reportBench = do
+  tc <- C.ask (C.key @KeyTC)
+  bm <- liftIO $ readIORef (tcBLog tc)
+
+  liftIO $ putStrLn "-- report --"
+  liftIO $ print $ pprBMap bm
+
+
 -- the following information is used. The information is kept globally.
 data TypingContext =
   TypingContext { tcRefMvCount :: !(IORef Int),
                   tcRefSvCount :: !(IORef Int),
-                  tcTcLevel    :: TcLevel,
-                  tcIcLevel    :: IcLevel,
+                  tcTcLevel    :: !TcLevel,
+                  tcIcLevel    :: !IcLevel,
                   tcConstraint :: !(IORef [InferredConstraint]),
+                  tcBLog       :: !(IORef BMap),
                   tcTyEnv      :: TyEnv,    -- Current typing environment
                   tcConEnv     :: ConEnv,
                   tcSyn        :: SynTable, -- Current type synonym table
@@ -292,6 +331,7 @@ initTypingContext = do
   r  <- newIORef Seq.empty
   rc <- newIORef []
   ric <- newIORef []
+  rbm <- newIORef M.empty
   return TypingContext { tcRefMvCount = r1,
                          tcRefSvCount = r2,
                          tcIcLevel = 0,
@@ -305,6 +345,7 @@ initTypingContext = do
                          tcConEnv = M.empty,
                          tcTyEnv      = M.empty,
                          tcSyn        = M.empty,
+                         tcBLog       = rbm,
                          tcDeferredIC = ric }
 
 -- This function must be called before each session of type checking.
@@ -370,6 +411,27 @@ runTC m = do
     staticError $ vcat (map ppr errs')
     else do
     return res
+
+logBench :: MonadTypeCheck m => String -> m a -> m a
+logBench key comp = logBenchN key 1 comp
+
+logBenchN :: MonadTypeCheck m => String -> Int -> m a -> m a
+logBenchN key cnt comp = do
+  tc  <- C.ask (C.key @KeyTC)
+
+  !s <- liftIO $ getTime Monotonic
+  !r <- comp
+  !e <- liftIO $ getTime Monotonic
+
+  let diff = toNanoSecs (e `diffTimeSpec` s)
+
+
+  liftIO $ modifyIORef (tcBLog tc) $ M.insertWith mrg key (BenchInfo cnt diff)
+
+  return r
+  where
+    mrg (BenchInfo i m) (BenchInfo i' m') = BenchInfo (i + i') (m + m')
+
 
 
 runTCWith :: MonadTypeCheck m => CTypeTable -> TypeTable -> SynTable -> m a -> m a

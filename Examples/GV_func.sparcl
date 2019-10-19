@@ -4,18 +4,42 @@ This examples taken from
  - Sam Lindley,  J. Garrett Morris: Embedding Session Types in Haskell, Haskell 2016. 
 -}
 
-import Examples.GVType 
+data Recv t s where
+end
+data Send t s where
+end
+data And s1 s2 where
+end
+data Or s1 s2 where
+end
+data EndR where
+end
+data EndS where
+end
+
+data The t where
+end 
+
+data Dual ses1 ses2 where 
+  sig DualRS : Dual s1 s2 -o Dual (Recv t s1) (Send t s2)
+  sig DualSR : Dual s1 s2 -o Dual (Send t s1) (Recv t s2)
+  sig DualAO : Dual s1 s2 -o Dual s1' s2' -o Dual (And s1 s1') (Or s2 s2')
+  sig DualOA : Dual s1 s2 -o Dual s1' s2' -o Dual (Or s1 s1') (And s2 s2')
+  sig DualESER : Dual EndS EndR 
+  sig DualERES : Dual EndR EndS
+end
+
 
 -- Empty data type 
 data Ch a where end 
 
-sig fork : Dual s s' -> (Ch s -o Ch EndS) -o Ch s' 
+sig fork : Dual s s' -> (Ch s -o Ch EndS) -o (Ch s' -o Un r) -o r 
 def fork x = fork x
 
-sig send : t -o Ch (Send t s) -o Ch s 
+sig send : t -> Ch (Send t s) -o Ch s 
 def send x = send x 
 
-sig recv : Ch (Recv t s) -o (t, Ch s)
+sig recv : Ch (Recv t s) -o (Un t, Ch s)
 def recv x = recv x 
 
 sig wait : Ch EndR -o () 
@@ -34,12 +58,12 @@ def offer x = offer x
 def t x f = f x 
 
 def multiplier c = 
-   t (recv c) (\ (x, c) -> 
-   t (recv c) (\ (y, c) -> 
+   t (recv c) (\ (U x, c) -> 
+   t (recv c) (\ (U y, c) -> 
    send (x * y) c))
 
 def negator c = 
-   t (recv c) (\ (x, c) -> 
+   t (recv c) (\ (U x, c) -> 
     send (0 - x) c)
 
 def calculator c = offer c multiplier negator 
@@ -48,16 +72,19 @@ def prf = DualAO (DualRS (DualRS (DualSR DualESER)))
                  (DualRS (DualSR DualESER))
 
 def (&) = t 
-
 fixity & 0 right
 
+def ($) = \f x -> f x 
+fixity $ 0 right 
+
+sig answer : () # p -> Int 
 def answer () = 
-    fork prf calculator & \c -> 
+    fork prf calculator $ \c -> 
     left c & \c -> 
     send 3 c & \c -> 
     send 4 c & \c -> 
-    recv c & \ (z, c) -> 
-    wait c & \ () -> z 
+    recv c & \ (U z, c) -> 
+    wait c & \ () -> U z 
 
 {- 
 -- The following causes a type error

@@ -288,7 +288,7 @@ solveInferredConstraintWork raiseError existentials givenSubP given_ wanted_ = d
     setConstraint corig
     return res
 
-  wsub' <- eliminateExistential existentials <$> simplifyConstraints wsub
+  wsub' <- eliminateExistentialL existentials =<< simplifyConstraints wsub
   subsRemaining <- filterM (\c -> not <$> checkImplication raiseError (givenSub' ++ givenSubP') [c]) wsub'
 
   let qRem = eqRenaming ++ subsRemaining
@@ -376,7 +376,7 @@ simplifyConstraints constrs = whenChecking (CheckingConstraint constrs) $ go con
 
 
 checkImplication :: MonadTypeCheck m => Bool -> [TyConstraint] -> [TyConstraint] -> m Bool
-checkImplication doesRaiseError given wanted = do
+checkImplication doesRaiseError given wanted = logBench "imp" $ do
   let prop = toFormula given .&&. SAT.neg (toFormula wanted)
   debugPrint 4 $ red $ vcat [ text "Checking" <+>
                                    align (ppr given </>
@@ -1299,17 +1299,22 @@ eliminateExistential vars cs =
       subs' = eliminateExistentialM vars subs
   in map (uncurry MSub) subs' ++ eqs
 
-eliminateInvisible :: [MetaTyVar] -> QualTy -> ([MetaTyVar],  QualTy)
-eliminateInvisible mvs (TyQual cs t) =
-  -- Assumption: @mvs@ is a set of variables to be generalized.
-  let visibleVars = nub $ metaTyVars [t] ++ concatMap gatherMvInTyEq cs
-      invisibles  = mvs \\ visibleVars
-      cs' = eliminateExistential invisibles cs
-  in (mvs \\ invisibles, TyQual cs' t)
-  where
-    gatherMvInTyEq (TyEq t1 t2) = metaTyVars [t1,t2]
-    gatherMvInTyEq _            = []
+-- eliminateInvisible :: [MetaTyVar] -> QualTy -> ([MetaTyVar],  QualTy)
+-- eliminateInvisible mvs (TyQual cs t) =
+--   -- Assumption: @mvs@ is a set of variables to be generalized.
+--   let visibleVars = nub $ metaTyVars [t] ++ concatMap gatherMvInTyEq cs
+--       invisibles  = mvs \\ visibleVars
+--       cs' = eliminateExistential invisibles cs
+--   in (mvs \\ invisibles, TyQual cs' t)
+--   where
+--     gatherMvInTyEq (TyEq t1 t2) = metaTyVars [t1,t2]
+--     gatherMvInTyEq _            = []
 
+eliminateExistentialL :: MonadTypeCheck m => [MetaTyVar] -> [TyConstraint] -> m [TyConstraint]
+eliminateExistentialL vars cs =
+  logBenchN "qe" (length vars) $ do
+    let cs' = eliminateExistential vars cs
+    seq cs' (return cs')
 
 
 quantify :: MonadTypeCheck m => [MetaTyVar] -> QualTy -> m PolyTy
@@ -1317,13 +1322,24 @@ quantify mvs0 ty0 = do
   -- debugPrint 2 $ red $ text "Simpl:" <+> align (group (ppr (mvs0, ty0)) <> line <> text "-->" <> line <> group (ppr (mvs, ty)))
   -- liftIO $ print $ red $ "Generalization:" <+> ppr (zip mvs newBinders)
 
+  (mvs, ty) <- do
+    let TyQual cs0 t0 = ty0
+        visibleVars = nub $ metaTyVars [t0] ++ concatMap gatherMvInTyEq cs0
+        invisibles  = mvs0 \\ visibleVars
+    cs <-  eliminateExistentialL invisibles cs0
+    return (mvs0 \\ invisibles, TyQual cs t0)
+
+  let usedBinders = bindersQ ty
+      newBinders  = take (length mvs) $ allFancyBinders \\ usedBinders
+
+
   forM_ (zip mvs newBinders) $
     \(mv, tyv) -> writeTyVar mv (TyVar tyv)
   ty' <- zonkTypeQ ty
   return $ TyForAll newBinders ty'
   where
-    (mvs, ty) = eliminateInvisible mvs0 ty0
-    -- (mvs, ty) = (mvs0, ty0)
+    gatherMvInTyEq (TyEq t1 t2) = metaTyVars [t1,t2]
+    gatherMvInTyEq _            = []
 
     binders (TyForAll bs t) = bs ++ bindersQ t
     binders (TyCon _ ts)    = concatMap binders ts
@@ -1336,9 +1352,6 @@ quantify mvs0 ty0 = do
 
     bindersC (MSub t1 ts2) = binders t1 ++ concatMap binders ts2
     bindersC (TyEq t1 t2)  = binders t1 ++ binders t2
-
-    usedBinders = bindersQ ty
-    newBinders = take (length mvs) $ allFancyBinders \\ usedBinders
 
 allFancyBinders :: [TyVar]
 allFancyBinders = map (BoundTv . Local . User) $

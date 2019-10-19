@@ -31,6 +31,7 @@ common deps
       array, 
       haskeline, 
       deepseq,
+      clock >= 0.6 && < 0.9, 
       ansi-wl-pprint
 
   ghc-options: 
@@ -88,6 +89,19 @@ library
   hs-source-dirs:
       src
 
+benchmark typing
+  import: deps
+  type: exitcode-stdio-1.0
+  main-is: Bench.hs 
+
+  hs-source-dirs:
+    bench 
+
+  ghc-options:
+    -fprof-auto -O2 
+
+  build-depends: 
+    sparcl 
 
 
 executable sparcl-exe  
