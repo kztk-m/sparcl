@@ -1,0 +1,57 @@
+data Either a b = Left a | Right b
+
+sig either : (p <= r, q <= r) => (a # p -> c) -> (b # q -> c) -> Either a b # r -> c 
+def either left right (Left a)  = left a 
+         | left right (Right b) = right b
+
+sig curry : (p <= r, p <= s) => ((a , b) # p -> c) # q -> a # r -> b # s -> c 
+def curry f x y = f (x,y)
+
+sig uncurry : (p <= s, q <= s) => (a # p -> b # q -> c) # r -> (a, b) # s -> c 
+def uncurry f (x,y) = f x y 
+
+sig (.) : (q <= s, q <= t, p <= t) => (b # q -> c) # r -> (a # p -> b) # s -> a # t -> c 
+def (.) f g x = f (g x) 
+
+data List a = Nil | Cons a (List a) 
+
+sig foldr : (q <= r, p <= s, q <= s) => (a # p -> b # q -> b) -> b # r -> List a # s -> b 
+def foldr f e Nil        = e
+        | f e (Cons a x) = f a (foldr f e x) 
+
+sig foldl : (p <= r, r <= s, q <= s) => (b # p -> a # q -> b) -> b # r -> List a # s -> b 
+def foldl f e Nil        = e
+        | f e (Cons a x) = foldl f (f e a) x 
+
+sig map : (p <= q) => (a # p -> b) -> List a # q -> List b 
+def map f Nil        = Nil  
+      | f (Cons a x) = Cons (f a) (map f x) 
+
+sig filter : (a # p -> Bool) -> List a -> List a 
+def filter p Nil = Nil 
+         | p (Cons a x) = case p a of 
+           | True -> Cons a (filter p x)
+           | False -> filter p x
+           end 
+
+sig append : List a # p -> List a # q -> List a 
+def append Nil y = y 
+         | (Cons a x) y = Cons a (append x y)
+
+
+sig reverse : List a # p -> List a 
+def reverse xs = rv xs Nil
+      where
+    def rv Nil         ys = ys 
+         | (Cons x xs) ys = rv xs (Cons x ys) 
+  end
+
+sig concat : List (List a) # p -> List a 
+def concat Nil        = Nil
+         | (Cons a x) = append a (concat x) 
+
+sig concatMap : (p <= q) => (a # p -> List b) -> List a # q -> List b 
+def concatMap f Nil        = Nil 
+            | f (Cons a x) = append (f a) (concatMap f x)
+
+

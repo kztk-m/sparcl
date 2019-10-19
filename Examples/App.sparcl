@@ -1,0 +1,32 @@
+sig app : p <= q => (a # p -> b) # r -> a # q -> b 
+def app f x = f x
+
+sig app1 : p <= q => (a # p -> b) # r -> a # q -> b 
+def app1 f x = app f x 
+
+sig app2 : p <= q => (a # p -> b) # r -> a # q -> b 
+def app2 f x = app app f x 
+
+sig app3 : p <= q => (a # p -> b) # r -> a # q -> b 
+def app3 f x = app app app f x 
+
+sig app4 : p <= q => (a # p -> b) # r -> a # q -> b 
+def app4 f x = app app app app f x 
+
+sig app5 : p <= q => (a # p -> b) # r -> a # q -> b 
+def app5 f x = app app app app app f x 
+
+sig app5 : p <= q => (a # p -> b) # r -> a # q -> b 
+def app5 f x = app app app app app app f x 
+
+sig app6 : p <= q => (a # p -> b) # r -> a # q -> b 
+def app6 f x = app app app app app app app f x 
+
+sig app7 : p <= q => (a # p -> b) # r -> a # q -> b 
+def app7 f x = app app app app app app app app f x 
+
+sig app8 : p <= q => (a # p -> b) # r -> a # q -> b 
+def app8 f x = app app app app app app app app app f x 
+
+sig app9 : p <= q => (a # p -> b) # r -> a # q -> b 
+def app9 f x = app app app app app app app app app app f x 

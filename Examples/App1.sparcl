@@ -1,0 +1,5 @@
+sig app : p <= q => (a # p -> b) # r -> a # q -> b 
+def app f x = f x
+
+sig app1 : p <= q => (a # p -> b) # r -> a # q -> b 
+def app1 f x = app f x 
