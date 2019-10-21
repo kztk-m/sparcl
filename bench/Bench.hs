@@ -35,10 +35,9 @@ bench str trials m = do
   let ts = map snd res
   let tt = sum ts
   let mean :: Double = fromInteger tt / fromIntegral trials / (10 ** 6) -- in seconds
-  let dist :: Double = fromInteger (sum [ (a * fromIntegral trials - tt)^(2 :: Integer) | a <- ts ]) / (fromIntegral trials ** 3) / (10 ** 12)
+  let var  :: Double = fromInteger (sum [ (a * fromIntegral trials - tt)^(2 :: Integer) | a <- ts ]) / (fromIntegral trials ** 3) / (10 ** 12)
 
-  -- liftIO $ print $ text "mean:" <+> text (printf "%2.4f"  mean) <+> text "dist:" <+> text (printf "%2.4f" dist)
-  liftIO $ putStrLn $ printf "mean: %2.4f ms / dist: %2.4f ms^2" mean dist
+  liftIO $ putStrLn $ printf "mean: %2.4f ms / var: %2.4f ms^2" mean var
 
   return (last $ map fst res)
   where
