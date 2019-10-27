@@ -1,0 +1,40 @@
+sparcl> benchmarks
+Running 1 benchmarks...
+Benchmark typing: RUNNING...
+--------------------------------------------------------------------------------
+Elapsed (Typing (./Examples/F.sparcl)): 4.1983 ms
+mean: 4.1941 ms / dist: 0.6327 ms^2
+-- report --
+Ev imp: #happened 42000 / elapsed(ms) 687.7981
+Ev qe: #happened 15000 / elapsed(ms) 84.1710
+Processed: 12 definitions.
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+Elapsed (Typing (./Examples/GV_func.sparcl)): 3.8614 ms
+mean: 3.8572 ms / dist: 0.4716 ms^2
+-- report --
+Ev imp: #happened 9000 / elapsed(ms) 90.8611
+Ev qe: #happened 17000 / elapsed(ms) 138.3550
+Processed: 15 definitions.
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+Elapsed (Typing (./Examples/App1.sparcl)): 0.3314 ms
+mean: 0.3272 ms / dist: 0.0073 ms^2
+-- report --
+Ev imp: #happened 40000 / elapsed(ms) 459.0953
+Ev qe: #happened 20000 / elapsed(ms) 119.0399
+Processed: 2 definitions.
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+Elapsed (Typing (./Examples/App10.sparcl)): 0.8272 ms
+mean: 0.8230 ms / dist: 0.0758 ms^2
+-- report --
+Ev imp: #happened 40000 / elapsed(ms) 493.0802
+Ev qe: #happened 210000 / elapsed(ms) 378.9250
+Processed: 2 definitions.
+--------------------------------------------------------------------------------
+
+Benchmark typing: FINISH
