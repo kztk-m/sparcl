@@ -1,0 +1,49 @@
+def fwd f = case unlift f of (x, _) -> x end 
+def bwd f = case unlift f of (_, x) -> x end 
+
+data Nat = Z | S Nat
+
+sig add : Nat -o rev Nat -o rev Nat 
+def add Z     y = y 
+      | (S x) y = rev S (add x y)
+
+sig eqNat : Nat -> Nat -> Bool 
+def eqNat Z Z         = True
+        | (S x) (S y) = eqNat x y 
+        | _     _     = False 
+
+sig fib : rev Nat -o rev (Nat, Nat) 
+def fib (rev Z)   = rev (rev S (rev Z), rev S (rev Z)) with \(x,y) -> eqNat x y 
+      | (rev S n) = 
+          case fib n of
+          | rev (x, y) -> 
+             pin y (\y' -> add y' x) 
+          end 
+
+data Either a b = Left a | Right b 
+
+sig inPInt : rev Int -o rev (Either () Int) 
+def inPInt = lift (\x -> case eqInt x 0 of 
+                         | True  -> Left ()
+                         | False -> Right (x - 1) 
+                         end)
+                  (\x -> case x of 
+                         | Left _ -> 0 
+                         | Right n -> n + 1 end) 
+                         
+
+sig lftInt : Int -> rev Int 
+def lftInt n = lift (\() -> n) (\a -> case eqInt a n of 
+                                       | True -> () 
+                                       end) (rev ())
+
+sig addInt : Int -> rev Int -o rev Int 
+def addInt n = lift (\a -> a + n) (\a -> a - n) 
+
+sig fibN : rev Int -o rev (Int, Int) 
+def fibN x = case inPInt x of 
+             | rev (Left ()) -> rev (lftInt 1, lftInt 1) with \(x,y) -> eqInt x y 
+             | rev (Right n) -> case fibN n of 
+                                | rev (x ,y) -> pin y (\y' -> addInt y' x)
+                                end 
+             end 
