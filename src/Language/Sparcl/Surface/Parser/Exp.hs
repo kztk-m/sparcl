@@ -65,11 +65,19 @@ expr = getSrcLoc >>= \startLoc ->
       e <- expr
       return $ Loc (startLoc <> location e) $ Abs ps e )
   <|>
+  P.try (do void $ keyword "let"
+            decls <- localDecls
+            void $ keyword "in"
+            e <- expr
+            return $ Loc (startLoc <> location e) $ Let decls e)
+  <|>
   (do void $ keyword "let"
-      decls <- localDecls
+      p <- pat
+      void leftArrow
+      e1 <- expr
       void $ keyword "in"
-      e <- expr
-      return $ Loc (startLoc <> location e) $ Let decls e)
+      e2 <- expr
+      return $ Loc (startLoc <> location e2) $ Let1 p e1 e2)
   <|>
   (do void $ keyword "case"
       e0   <- expr

@@ -12,8 +12,26 @@ def null Nil = True
 Transformations from sets of numbers (expressed as a sorted list) to lists of numbers. 
 -}
 
-sig s2l : rev (List Int) -o rev (List Int)
+
+-- sig ($) : forall a b. (a -o b) -o a -o b 
+def ($) f x = f x 
+-- NB: definition like f $ x = f x is not possible in the current version
+fixity $ 0 right 
+
+sig sub : Int -> rev Int -o rev Int 
+def sub n = lift (\x -> x - n) (\x -> x + n) 
+
+sig s2l : rev (List Int) -o rev (List Int) 
 def s2l = go 0 
+    where 
+      def go n (rev Nil) = rev Nil with null 
+           | n (rev Cons x xs) = 
+             let rev (x, r) <- pin x $ \x' -> go x' xs in 
+             rev Cons (sub n x) r 
+    end
+
+sig s2l'' : rev (List Int) -o rev (List Int)
+def s2l'' = go 0 
     where 
       def go n (rev Nil)       = rev Nil with null
            | n (rev Cons x xs) = 
@@ -32,14 +50,9 @@ def s2l' = go 0
              in    rev Cons (flipsub n x') r 
   end
 
--- sig ($) : forall a b. (a -o b) -o a -o b 
-def ($) f x = f x 
--- NB: definition like f $ x = f x is not possible in the current version
-
-fixity $ 0 right 
 
 sig dec : rev Int -o rev Int 
-def dec = (\x -> x) $ lift (\x -> x - 1) (\x -> x + 1)
+def dec = lift (\x -> x - 1) (\x -> x + 1)
 
 sig flipsub : Int -> rev Int -o rev Int 
 def flipsub n r = 
@@ -47,3 +60,9 @@ def flipsub n r =
    | True  -> r 
    | False -> flipsub (n-1) (dec r)
    end 
+
+def (|:) x xs = Cons x xs 
+fixity |: 5 right 
+
+def list1  = 1 |: 2 |: 5 |: 2 |: 3 |: Nil 
+def list1' = bwd s2l $ fwd s2l list1 

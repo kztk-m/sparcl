@@ -1,3 +1,7 @@
+-- ($) is useful for reducing paretheses. 
+def ($) = \f x -> f x 
+fixity $ 0 right 
+
 type Symbol = Char
 data Huff = Lf Symbol | Br Huff Huff
 
@@ -43,6 +47,11 @@ def huffCompress s = case pin s (\s' -> const eqHuff (makeHuff s')) of
          | rev (s, h) -> pin h (\h' -> encode h' s)
          end
 
+sig huffCompressLet : rev (List Symbol) -o rev (Huff, List Bit) 
+def huffCompressLet s = 
+    let rev (s, h) <- pin s $ \s' -> const eqHuff (makeHuff s') in 
+    pin h $ \h' -> encode h' s
+
 sig huffCompressDo : rev (List Symbol) -o rev (Huff, List Bit) 
 def huffCompressDo s = 
    revdo s  <- s ;
@@ -78,10 +87,15 @@ def bwd h = case unlift h of
             | (x, y) -> y
             end 
 
-def t0 = fwd huffCompress (Cons 'a' (Cons 'a' (Cons 'b' (Cons 'a' (Cons 'c' (Cons 'a' (Cons 'b' (Cons 'd' (Cons 'a' (Cons 'a' Nil))))))))))
+def origList = Cons 'a' (Cons 'a' (Cons 'b' (Cons 'a' (Cons 'c' (Cons 'a' (Cons 'b' (Cons 'd' (Cons 'a' (Cons 'a' Nil)))))))))
+
+def t0 = fwd huffCompress origList
 
 def t1 = bwd huffCompress t0 
 
-def t0' = fwd huffCompressDo (Cons 'a' (Cons 'a' (Cons 'b' (Cons 'a' (Cons 'c' (Cons 'a' (Cons 'b' (Cons 'd' (Cons 'a' (Cons 'a' Nil))))))))))
+def t0' = fwd huffCompressDo origList
 
-def t1' = bwd huffCompressDo t0 
+def t1' = bwd huffCompressDo t0' 
+
+def t0'' = fwd huffCompressLet origList 
+def t1'' = bwd huffCompressLet t0'' 

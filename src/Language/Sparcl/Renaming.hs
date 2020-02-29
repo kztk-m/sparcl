@@ -136,6 +136,13 @@ renameExp level localnames (Loc loc expr) = first (Loc loc) <$> go expr
         (e', fv) <- renameExp level' localnames' e
         return (Abs ps' e', fv S.\\ bvP)
 
+    go (Let1 p e1 e2) = do
+      (e1', fv1) <- renameExp level localnames e1
+      (p', e2', fv2) <- renamePat level localnames S.empty p $ \p' level' localnames' bvP -> do
+        (e' , fv) <- renameExp level' localnames' e2
+        return (p', e', fv S.\\ bvP)
+      return (Let1 p' e1' e2', fv1 `S.union` fv2)
+
     go (Con c) = do
       c' <- resolveImportedName loc c
       return (Con c', S.empty)

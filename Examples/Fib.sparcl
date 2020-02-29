@@ -20,6 +20,14 @@ def fib (rev Z)   = rev (rev S (rev Z), rev S (rev Z)) with \(x,y) -> eqNat x y
              pin y (\y' -> add y' x) 
           end 
 
+-- using non recursive let 
+sig fib' : rev Nat -o rev (Nat, Nat) 
+def fib' (rev Z) = rev (rev S (rev Z), rev S (rev Z)) with \(x,y) -> eqNat x y 
+       | (rev S n) = 
+         let rev (x, y) <- fib' n in 
+         pin y (\y' -> add y' x) 
+
+
 data Either a b = Left a | Right b 
 
 sig inPInt : rev Int -o rev (Either () Int) 

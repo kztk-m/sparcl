@@ -22,7 +22,7 @@ moduleName =
 
 
 keyword :: Monad m => String -> P m String
-keyword s = do
+keyword s = P.try $ do
   r <- P.string s
   P.notFollowedBy P.alphaNumChar
   sp
@@ -54,7 +54,7 @@ varidRaw :: P m String
 varidRaw = (:) <$> P.lowerChar <*> P.many (P.alphaNumChar <|> P.char '\'')
 
 keyWords :: [String]
-keyWords = ["let", "in", "if", "then", "else", "where", "end",
+keyWords = ["local", "let", "let1", "in", "if", "then", "else", "where", "end",
             "case", "of", "with", "rev", "module", "import",
             "sig", "def", "data", "type", "fixity",
             "lift", "unlift", "pin",

@@ -582,6 +582,27 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
 
       return (App e1' e2', mergeUseMap umap1 umap2)
 
+    go (Let1 p e1 e2) = do
+      qPat  <- newMetaTy
+      qPat' <- ty2mult qPat
+
+      ty1 <- newMetaTy
+
+      (e1', umap1) <- checkTyM e1 ty1 qPat'
+
+      ((e2', umap2), [p'], bind) <- checkPatsTyK [p] [qPat'] [ty1] $ do
+        checkTy e2 expectedTy
+
+      let xqs = map (\(x,_,q) -> (x,q)) bind
+
+      constrainVars xqs umap2
+      let umap2' = foldr (M.delete . fst) umap2 xqs
+
+      return (Let1 p' e1' e2', mergeUseMap umap1 umap2')
+
+
+
+
     go (Con c) = do
       tyOfC <- askType loc c
       t <- instantiate tyOfC

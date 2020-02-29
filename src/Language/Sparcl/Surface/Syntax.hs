@@ -196,6 +196,7 @@ data Exp p
   | Lift
   | Sig  (LExp p) (LTy p)
   | Let  (Decls p (LDecl p)) (LExp p)
+  | Let1 (LPat p) (LExp p) (LExp p) -- let p = e1 in e2 is equivalent to (\p . e2) e1
 
   | Parens   (LExp p) -- for operators
   | Op  (XId p) (LExp p) (LExp p)
@@ -247,6 +248,10 @@ instance AllPretty p => Pretty (Exp p) where
     where
       pprDecls (Decls _ ds)   = vcat $ map ppr ds
       pprDecls (HDecls _ dss) = vcat $ map (vcat . map ppr) dss
+
+  pprPrec k (Let1 p e1 e2) = parensIf (k > 0) $ D.align $
+    D.text "let" D.<+> D.align (ppr p <+> text "<-" <+> ppr e1 <+> D.text "in") D.</>
+    pprPrec 0 e2
 
   pprPrec _ (RCon c) = ppr c
 

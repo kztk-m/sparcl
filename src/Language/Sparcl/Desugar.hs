@@ -65,6 +65,7 @@ desugarExp (Loc _ expr) = go expr
       r <- desugarAlts [(p, S.Clause (noLoc $ S.Abs ps e) (S.HDecls () []) Nothing)]
       return $ mkAbs n (makeCase (C.Var n) r)
 
+
     go (S.Con (c, ty)) = do
       ty' <- zonkType ty
       let n = numberOfArgs ty'
@@ -95,6 +96,8 @@ desugarExp (Loc _ expr) = go expr
                           r <- desugarRHS pcs
                           return (n, ty, r)) bs
           return $ C.Let bs' e'
+
+    go (S.Let1 p1 e1 e2) = go (S.App (noLoc (S.Abs [p1] e2)) e1)
 
     go (S.Parens e) = desugarExp e
 
