@@ -14,7 +14,6 @@ import           Data.Maybe                  (fromMaybe)
 
 import           Language.Sparcl.Pretty      hiding ((<$>))
 
-
 -- lookupEnvR :: QName -> Env -> Eval Value
 -- lookupEnvR n env = case M.lookup n env of
 --   Nothing -> throwError $ "Undefined value: " ++ show n
@@ -168,13 +167,14 @@ evalCaseF env hp f0 alts = do
              res <- f (foldr (uncurry extendHeap) hp hbinds)
              checkAssert ch checker res
 
+    checkAssert :: (Value -> Eval Bool) -> [Value -> Eval Bool] -> Value -> Eval Value
     checkAssert ch checker res = do
       -- v  <- ch (VBang res)
       -- vs <- mapM (\c -> c (VBang res)) checker
       v <- ch res
       vs <- mapM (\c -> c res) checker
-      when (v && not (or vs)) $
-        rtError (text "Assertion failed (fwd)")
+      !() <- unless (v && not (or vs)) $
+               rtError (text "Assertion failed (fwd)")
       return res
 
 
