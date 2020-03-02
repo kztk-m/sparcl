@@ -6,43 +6,52 @@ def invert h =
       (f, g) -> lift g f 
     end  
 
-def firstR f (rev (a, b)) = rev (f a, b) 
 
-sig trace : (rev a -o rev (a, a)) -> 
-            (rev (Either a b) -o rev (Either a b)) -> 
-            rev a -o rev a
-def trace dup f x =
-   case dup x of 
-     rev (x, x') -> 
-      case firstR f (go f (rev (f (rev Left x), rev Left x'))) of 
-        rev (Left y, Left y') -> invert dup (rev (y, y'))
-      end
-   end 
+def fst (a, _) = a 
+def snd (_, b) = b 
 
-def fwd h = case unlift h of 
-              (a,_) -> a 
-            end
+def fwd h = fst (unlift h)
 
-def bwd h = case unlift h of 
-               (_,b) -> b 
-            end
+def bwd h = snd (unlift h) 
 
 def (.) f g = \x -> f (g x)
 
-def go f (rev (Left a,  y)) = rev (y, rev Left a) with \(a, _) -> isLeft a 
-     | f (rev (Right b, y)) = 
-          revdo (r, a) <- go f (rev (f (rev Right b), y)); 
-          in    rev (f r, a) 
+data Nat = Z | S Nat 
 
-      
+sig isZ : Nat -> Bool 
+def isZ Z = True 
+      | _ = False 
+
+sig isLeft : Either a b -> Bool 
 def isLeft (Left _) = True 
-         | _        = False
+         | _        = False 
 
-def isRight (Right _) = True
-         | _          = False 
+sig unsafeNew : a -> rev a 
+def unsafeNew a = lift (\() -> a) (\a' -> ()) (rev ())
+
+sig unsafeDup : rev a -o rev (a, a) 
+def unsafeDup a = pin a unsafeNew 
+
+sig trace : (rev (Either a x) -o rev (Either b x)) -> rev a -o rev b 
+def trace h a = 
+    let rev (a1, a2) <- unsafeDup a in 
+    let rev (b1, n)  <- go (h (rev Left a1)) in 
+    let rev Left b2   <- h (goN a2 n) in 
+        invert unsafeDup (rev (b1, b2)) 
+    where
+        -- NB: currently, scoped type variables are not supported.
+        -- sig go : rev (Either b x) -o rev (b, Nat)
+        def go (rev Left b) = rev (b, rev Z) with isZ . snd 
+             | (rev Right x) = let rev (b, n) <- go (h (rev Right x)) in rev (b, rev S n) 
+
+        -- NB: currently, scoped type variables are not supported. 
+        -- sig goN : rev a -o rev Nat -o rev (Either a x) 
+        def goN a (rev Z) = rev Left a with isLeft 
+              | a (rev S n) = let rev Right x <- h (goN a n) in rev Right x                     
+    end
 
 
-data List a = Nil | Cons a (List a) 
+data List a = Nil | Cons a (List a)           
 
 def null Nil = True
        | _   = False 
@@ -50,46 +59,47 @@ def null Nil = True
 def not True  = False
       | False = True 
 
-def revStep (rev Left (Nil, ys))   = rev Left  (rev (rev Nil, ys)) 
-                                       with \x -> case x of Left (_,ys) -> null ys |  _ -> False end
-          | (rev Left (xs, ys))    = rev Right (rev (xs, ys))
+def rnot (rev True)  = rev False with not 
+       | (rev False) = rev True  
+
+def revStep (rev Left Nil)   = rev Left (rev Nil)
+                                       with \x -> case x of Left ys -> null ys |  _ -> False end
+          | (rev Left xs)    = rev Right (rev (xs, rev Nil))
                                        with \x -> case x of Right (_,ys) -> null ys | _ -> False end
-          | (rev Right (Nil, ys))  = rev Left  (rev (rev Nil, ys))
-                                       with \x -> case x of Left (_,ys) -> not (null ys) | _ -> False end
+          | (rev Right (Nil, ys))  = rev Left ys
+                                       with \x -> case x of Left ys -> not (null ys) | _ -> False end
           | (rev Right (Cons a xs, ys)) = rev Right (rev (xs, rev Cons a ys))
                                        with \x -> case x of Right (_,ys) -> not (null ys) | _ -> False end 
 
-data ABC = A | B | C 
+sig reverseByTrace : rev (List a) -o rev (List a) 
+def reverseByTrace = trace revStep 
 
-sig dupABC : rev ABC -o rev (ABC, ABC)
-def dupABC (rev A) = rev (rev A, rev A) with \(x,_) -> case x of A -> True | _ -> False end
-         | (rev B) = rev (rev B, rev B) with \(x,_) -> case x of B -> True | _ -> False end
-         | (rev C) = rev (rev C, rev C) with \(x,_) -> case x of C -> True | _ -> False end
+def t0  = Cons 1 (Cons 2 (Cons 3 Nil))
+def t0' = fwd reverseByTrace t0 
+
+data B = B0 | B1 
+
+def double (rev Z) = rev Z with isZ 
+         | (rev S n) = rev S (rev S (double n))
+
+def odd Z     = False
+      | (S n) = even n 
+
+def even Z = True 
+       | (S n) = odd n 
+
+def msb2natStep 
+        (rev Left xs)        = rev Right (rev (xs, rev Z)) with \x -> case x of Right (_ , n) -> isZ n | _ -> False end 
+      | (rev Right (Nil, n)) = rev Left n                  with isLeft 
+      | (rev Right (Cons x xs, n)) = 
+          rev Right (rev (xs, case x of rev B0 -> double n with even | rev B1 -> rev S (double n) with odd end))
+          with \x -> case x of Right (_, n) -> not (isZ n) | _ -> False end
 
 
-def fst (a, _) = a
 
-def dupListABC (rev Nil) = rev (rev Nil, rev Nil) with null . fst 
-             | (rev Cons a xs) = 
-       case dupABC a of 
-         rev (a', a'') -> 
-            case dupListABC xs of 
-               rev (xs', xs'') -> 
-                  rev (rev Cons a' xs', rev Cons a'' xs'')
-            end
-       end
+-- Assumption: the input has no preceding 0s, such as Cons B0 (Cons B1 Nil)
+sig msb2nat : rev (List B) -o rev Nat 
+def msb2nat = trace msb2natStep 
 
-def dupPair dupA dupB (rev (a, b)) = 
-   case dupA a of 
-     rev (a', a'') -> 
-     case dupB b of 
-       rev (b', b'') -> rev (rev (a', b'), rev (a'', b''))
-     end
-   end 
-
-sig reverse : rev (List ABC) -o rev (List ABC)
-def reverse xs = case trace (dupPair dupListABC dupListABC) revStep (rev (xs, rev Nil)) of 
-                    rev (Nil, xs) -> xs 
-                 end
- 
-def lst = Cons A (Cons B (Cons A (Cons C Nil)))
+def b6 = Cons B1 (Cons B1 (Cons B0 Nil))
+def p6 = fwd msb2nat b6 
