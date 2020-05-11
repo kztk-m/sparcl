@@ -466,7 +466,8 @@ procType str = do
   case res of
     Nothing -> waitCommand
     Just ty -> do
-      liftIO $ print (ppr ty)
+      liftIO $ D.displayIO stdout (D.renderPretty 0.8 120 $ ppr ty)
+      liftIO $ putStrLn ""
       waitCommand
 
 
