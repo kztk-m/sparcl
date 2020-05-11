@@ -55,9 +55,13 @@ def encEOS ran =
 sig arithCompU : List Symbol -> Rational 
 def arithCompU = encodeU (0 % 1 , 1 % 1)
 
+-- sig encodeU : Range -> List Symbol -> Rational 
+-- def encodeU (l, r) (Cons EOS Nil) = encEOS (l, r) 
+--          |  (l, r) (Cons s    ss) = encodeU (narrowBySym (l, r) s) ss 
+
 sig encodeU : Range -> List Symbol -> Rational 
-def encodeU (l, r) (Cons EOS Nil) = encEOS (l, r) 
-         |  (l, r) (Cons s    ss) = encodeU (narrowBySym (l, r) s) ss 
+def encodeU (l, r) Nil         = l 
+          | (l, r) (Cons s ss) = encodeU (narrowBySym (l, r) s) ss 
 
 def origList = Cons A (Cons A (Cons B (Cons A (Cons C (Cons A (Cons B (Cons D (Cons A (Cons A (Cons EOS Nil))))))))))
 
@@ -84,12 +88,17 @@ sig arithCompR : rev (List Symbol) -o rev Rational
 def arithCompR = encodeR (0 % 1 , 1 % 1) 
 
 sig encodeR : Range -> rev (List Symbol) -o rev Rational 
-def encodeR (l, r) (rev (Cons s ss)) = 
-    let rev (s , q) <- pin s $ \s' -> case s' of 
-                                      | EOS -> case ss of | rev Nil -> new eqRational (encEOS (l,r)) with \_ -> True end 
-                                      | s'  -> encodeR (narrowBySym (l, r) s') ss 
-                                      end 
-    in deleteBy eqSym (find (l, r)) q s                                                                                    
+def encodeR (l, r) (rev Nil)         = new eqRational l with \l' -> eqRational l l' -- eta expansion due to the too specific type of eqRational
+          | (l, r) (rev (Cons s ss)) = 
+            let rev (s, q) <- pin s $ \s' -> encodeR (narrowBySym (l, r) s') ss 
+            in deleteBy eqSym (find (l, r)) q s                                                                                    
+
+-- def encodeR (l, r) (rev (Cons s ss)) = 
+--     let rev (s , q) <- pin s $ \s' -> case s' of 
+--                                       | EOS -> case ss of | rev Nil -> new eqRational (encEOS (l,r)) with \_ -> True end 
+--                                       | s'  -> encodeR (narrowBySym (l, r) s') ss 
+--                                       end 
+--     in deleteBy eqSym (find (l, r)) q s                                                                                    
                       
 def fwd f = case unlift f of (x, _) -> x end 
 def bwd f = case unlift f of (_, x) -> x end 
