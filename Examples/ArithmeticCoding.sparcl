@@ -1,0 +1,111 @@
+type Range = (Rational , Rational) 
+
+-- ($) is useful for reducing paretheses. 
+def ($) = \f x -> f x 
+fixity $ 0 right 
+
+data Symbol = A | B | C | D | EOS 
+
+-- Hard-coded 
+sig rangeOf : Symbol -> Range 
+def rangeOf A   = (0 % 10, 6 % 10) 
+          | B   = (6 % 10, 8 % 10) 
+          | C   = (8 % 10, 9 % 10) 
+          | D   = (9 % 10, 999 % 1000)  
+          | EOS = (999 % 1000, 1 % 1) 
+
+sig (&&) : Bool -> Bool -> Bool 
+def (&&) True  b = b 
+       | False _ = False  
+
+sig find : Range -> Rational -> Symbol 
+def find (s , e) q = 
+    let q' <- (q -% s) /% (e -% s) in 
+    case ltRational q' (6 % 10) of 
+    | True -> A
+    | False -> 
+      case ltRational q' (8 % 10) of 
+      | True -> B
+      | False -> 
+        case ltRational q' (9 % 10) of 
+        | True -> C
+        | False -> 
+          case ltRational q' (999 % 1000) of 
+          | True -> D 
+          | False -> EOS
+          end 
+        end
+      end
+    end
+
+sig narrow : Range -> Range -> Range 
+def narrow (l , r) (ls , rs) = (l +% (r -% l) *% ls, l +% (r -% l) *% rs)
+
+sig narrowBySym : Range -> Symbol -> Range 
+def narrowBySym ran s = narrow ran (rangeOf s) 
+
+data List a = Nil | Cons a (List a) 
+
+sig encEOS : Range -> Rational 
+def encEOS ran = 
+    let (l',_) <- narrowBySym ran EOS 
+    in l' 
+
+-- Unidirectional Version 
+sig arithCompU : List Symbol -> Rational 
+def arithCompU = encodeU (0 % 1 , 1 % 1)
+
+sig encodeU : Range -> List Symbol -> Rational 
+def encodeU (l, r) (Cons EOS Nil) = encEOS (l, r) 
+         |  (l, r) (Cons s    ss) = encodeU (narrowBySym (l, r) s) ss 
+
+def origList = Cons A (Cons A (Cons B (Cons A (Cons C (Cons A (Cons B (Cons D (Cons A (Cons A (Cons EOS Nil))))))))))
+
+sig new : forall a p q. (a # p -> a # q -> Bool) -> a -> rev a 
+def new eq c = lift (\_ -> c) (\c' -> case eq c c' of True -> () end) (rev ())
+
+sig delete : (a -> a -> Bool) -> a -> rev a -o rev () 
+def delete eq c a = lift (\c' -> case eq c c' of | True -> () end) (\_ -> c) a 
+
+sig deleteBy : (b -> b -> Bool) -> (a -> b) -> rev a -o rev b -o rev a 
+def deleteBy eq f a b =
+    let rev (a , ()) <- pin a (\a' -> delete eq (f a') b) in
+    a 
+
+sig eqSym : Symbol -> Symbol -> Bool 
+def eqSym A A = True
+        | B B = True
+        | C C = True
+        | D D = True
+        | EOS EOS = True
+        | _  _ = False 
+
+sig arithCompR : rev (List Symbol) -o rev Rational 
+def arithCompR = encodeR (0 % 1 , 1 % 1) 
+
+sig encodeR : Range -> rev (List Symbol) -o rev Rational 
+def encodeR (l, r) (rev (Cons s ss)) = 
+    let rev (s , q) <- pin s $ \s' -> case s' of 
+                                      | EOS -> case ss of | rev Nil -> new eqRational (encEOS (l,r)) with \_ -> True end 
+                                      | s'  -> encodeR (narrowBySym (l, r) s') ss 
+                                      end 
+    in deleteBy eqSym (find (l, r)) q s                                                                                    
+                      
+def fwd f = case unlift f of (x, _) -> x end 
+def bwd f = case unlift f of (_, x) -> x end 
+
+def codeU = arithCompU origList 
+def code = fwd arithCompR origList 
+def origList' = bwd arithCompR code 
+
+sig eqList : (a -> a -> Bool) -> List a -> List a -> Bool 
+def eqList eqElem Nil Nil = True 
+         | eqElem (Cons a as) (Cons b bs) = 
+           case eqElem a b of
+           | True  -> eqList eqElem as bs 
+           | False -> False 
+           end
+         | _ _ _ = False 
+
+def check = eqList eqSym origList origList' 
+
