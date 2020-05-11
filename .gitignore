@@ -7,3 +7,4 @@ stack.yaml.lock
 t.out
 .sparcl
 *~
+dist-newstyle/
