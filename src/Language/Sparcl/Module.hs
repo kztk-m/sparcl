@@ -6,6 +6,7 @@ import qualified Data.Map                        as M
 import qualified Data.Set                        as S
 
 import           Data.Function                   (on)
+import           Data.Ratio                      ((%))
 
 import           System.Directory                as Dir (createDirectoryIfMissing,
                                                          doesFileExist)
@@ -247,10 +248,16 @@ baseModuleInfo = ModuleInfo {
     leChar = base "leChar"
     ltChar = base "ltChar"
 
+    eqRational = base "eqRational"
+    leRational = base "leRational"
+    ltRational = base "ltRational"
+
     unInt  (VLit (LitInt n)) = n
-    unInt  _                 = rtError $ text "Not an integer"
+    unInt  _                 = cannotHappen $ text "Not an integer"
     unChar (VLit (LitChar n)) = n
-    unChar _                  = rtError $ text "Not a character"
+    unChar _                  = cannotHappen $ text "Not a character"
+    unRat (VLit (LitRational n)) = n
+    unRat _                      = cannotHappen $ text "Not a rational"
 
     conTable = M.fromList [
       conTrue  |-> ConTy [] [] [] [] boolTy,
@@ -267,18 +274,31 @@ baseModuleInfo = ModuleInfo {
           base "+" |-> intTy -@ (intTy -@ intTy),
           base "-" |-> intTy -@ (intTy -@ intTy),
           base "*" |-> intTy -@ (intTy -@ intTy),
+          base "%" |-> intTy -@ (intTy -@ rationalTy),
 
-          -- is it OK?
+          -- operators on rationals
+          base "+%" |-> rationalTy -@ (rationalTy -@ rationalTy),
+          base "-%" |-> rationalTy -@ (rationalTy -@ rationalTy),
+          base "*%" |-> rationalTy -@ (rationalTy -@ rationalTy),
+          base "/%" |-> rationalTy -@ (rationalTy -@ rationalTy),
+
+          -- In future, we should use type classes.
           eqInt  |-> intTy -@ intTy -@ boolTy,
           leInt  |-> intTy -@ intTy -@ boolTy,
           ltInt  |-> intTy -@ intTy -@ boolTy,
+
           eqChar |-> charTy -@ charTy -@ boolTy,
           leChar |-> charTy -@ charTy -@ boolTy,
           ltChar |-> charTy -@ charTy -@ boolTy,
 
+          eqRational |-> rationalTy -@ rationalTy -@ boolTy,
+          leRational |-> rationalTy -@ rationalTy -@ boolTy,
+          ltRational |-> rationalTy -@ rationalTy -@ boolTy,
+
           nameTyInt  |-> typeKi,
           nameTyBool |-> typeKi,
           nameTyChar |-> typeKi,
+          nameTyRational |-> typeKi,
           base "Un" |-> typeKi `arrKi` typeKi
           ]
 
@@ -287,19 +307,38 @@ baseModuleInfo = ModuleInfo {
     opTable = M.fromList [
       base "+" |-> (Prec 60, L),
       base "-" |-> (Prec 60, L),
-      base "*" |-> (Prec 70, L) ]
+      base "*" |-> (Prec 70, L),
+      base "%" |-> (Prec 70, L),
+
+      base "+%" |-> (Prec 60, L),
+      base "-%" |-> (Prec 60, L),
+      base "*%" |-> (Prec 70, L),
+      base "/%" |-> (Prec 70, L)
+      ]
 
 
     valueTable = M.fromList [
           base "+" |-> intOp (+),
           base "-" |-> intOp (-),
           base "*" |-> intOp (*),
+          base "%" |-> (VFun $ \(VLit (LitInt n)) -> return $ VFun $ \(VLit (LitInt m)) -> return $ VLit (LitRational (fromIntegral n % fromIntegral m))),
+
+          base "+%" |-> ratOp (+),
+          base "-%" |-> ratOp (-),
+          base "*%" |-> ratOp (*),
+          base "/%" |-> ratOp (/),
+
           eqInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool $ ((==) `on` unInt ) n m),
           leInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool $ ((<=) `on` unInt ) n m),
           ltInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool $ ((<)  `on` unInt ) n m),
           eqChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool $ ((==) `on` unChar) c d),
           leChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool $ ((<=) `on` unChar) c d),
-          ltChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool $ ((<)  `on` unChar) c d)
+          ltChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool $ ((<)  `on` unChar) c d),
+
+          eqRational |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool $ ((==) `on` unRat) n m),
+          leRational |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool $ ((<=) `on` unRat) n m),
+          ltRational |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool $ ((<)  `on` unRat) n m)
+
           ]
 
     names = M.keys typeTable ++ M.keys conTable
@@ -308,7 +347,9 @@ baseModuleInfo = ModuleInfo {
     fromBool False = VCon conFalse []
 
     intOp f = VFun $ \(VLit (LitInt n)) -> return $ VFun $ \(VLit (LitInt m)) -> return (VLit (LitInt (f n m)))
+    ratOp f = VFun $ \(VLit (LitRational n)) -> return $ VFun $ \(VLit (LitRational m)) -> return (VLit (LitRational (f n m)))
 
+    rationalTy = TyCon (base "Rational") []
     intTy = TyCon (base "Int") []
     base n = nameInBase (User n)
     a |-> b = (a, b)
