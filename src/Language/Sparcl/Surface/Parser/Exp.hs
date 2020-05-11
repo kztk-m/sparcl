@@ -530,7 +530,6 @@ literal = loc $ fmap Lit $
   intLit
   <|> charLit
   where
-    -- TODO: Add rationals
     intLit = LitInt <$> (L.decimal <* sp)
     charLit = fmap LitChar $ do
       void $ P.char '\''
