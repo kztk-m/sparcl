@@ -19,7 +19,7 @@ import qualified Data.Map                        as M
 import           Data.Maybe                      (fromMaybe)
 import qualified Data.Set                        as S
 import           Data.Time.Clock                 (getCurrentTime)
-import qualified Language.Haskell.Interpreter    as Hint
+-- import qualified Language.Haskell.Interpreter    as Hint
 import qualified Language.Haskell.TH             as TH
 import qualified System.Console.Haskeline        as HL
 import           System.Directory                (getCurrentDirectory,
@@ -100,22 +100,24 @@ instance (HL.MonadException m) => MonadMask (MyInputT m) where
       generalBracket' = generalBracket
 
 
-newtype REPL a = REPL { unREPL :: Rd.ReaderT Conf (Hint.InterpreterT (MyInputT IO)) a }
+-- newtype REPL a = REPL { unREPL :: Rd.ReaderT Conf (Hint.InterpreterT (MyInputT IO)) a }
+newtype REPL a = REPL { unREPL :: Rd.ReaderT Conf (MyInputT IO) a }
   deriving (Functor, Applicative, Monad, MonadIO,
             Rd.MonadReader Conf,
             MonadThrow, MonadCatch, MonadMask)
 
-instance Hint.MonadInterpreter REPL where
-  fromSession s = REPL $ lift (Hint.fromSession s)
-  modifySessionRef s f = REPL $ lift (Hint.modifySessionRef s f)
-  runGhc c = REPL $ lift (Hint.runGhc c)
+-- instance Hint.MonadInterpreter REPL where
+--   fromSession s = REPL $ lift (Hint.fromSession s)
+--   modifySessionRef s f = REPL $ lift (Hint.modifySessionRef s f)
+--   runGhc c = REPL $ lift (Hint.runGhc c)
 
 
 runREPL :: HL.Settings IO -> Conf -> REPL a -> IO a
 runREPL setting conf comp = do
-  let rethrow :: (MonadThrow m, Exception e) => m (Either e a) -> m a
-      rethrow m = m >>= either throwM return
-  HL.runInputT setting $ runMyInputT $ rethrow $ Hint.runInterpreter $ Rd.runReaderT (unREPL $ resetModule >> comp) conf
+  HL.runInputT setting $ runMyInputT $ Rd.runReaderT (unREPL $ resetModule >> comp) conf
+  -- let rethrow :: (MonadThrow m, Exception e) => m (Either e a) -> m a
+  --     rethrow m = m >>= either throwM return
+  -- HL.runInputT setting $ runMyInputT $ rethrow $ Hint.runInterpreter $ Rd.runReaderT (unREPL $ resetModule >> comp) conf
 
 
 
@@ -567,7 +569,7 @@ procExp str = do
 
 waitCommand :: REPL ()
 waitCommand = do
-  maybeLine <- REPL $ lift $ lift $ MyInputT $ HL.getInputLine "Sparcl> "
+  maybeLine <- REPL $ {- lift $ -} lift $ MyInputT $ HL.getInputLine "Sparcl> "
   case maybeLine of
     Nothing ->
       liftIO $ putStrLn "Quitting..."

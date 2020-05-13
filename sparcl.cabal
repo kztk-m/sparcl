@@ -19,7 +19,7 @@ common deps
   build-depends:
       base >=4.7 && <5,
 --      ghc  >=8.4 && <8.8,
-      hint >= 0.8 && <1,
+--      hint >= 0.8 && <1,
       exceptions >= 0.10 && <0.11, 
       time, 
       template-haskell, 
