@@ -24,7 +24,7 @@ common deps
       time, 
       template-haskell, 
       mtl,
-      megaparsec, 
+      megaparsec >= 6.0 && <7, 
       containers, 
       directory, 
       filepath, 
