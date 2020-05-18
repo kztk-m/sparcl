@@ -86,8 +86,8 @@ In the following, section numbers refer to those in our ICFP 2020 paper.
  * `S2l.sparcl`: An invertible function that computes differences of two consecutive elements in a list (Sections 1 and 2) 
  * `Pi.sparcl`: An invertible pre- and in-order traversals (Section 4.1)
  * `Huff.sparcl`: An invertible version of Huffman coding (Section 4.2)
- * `Loop.sparcl`: An implementation of the trace operator (which follows the version presented in Appendix A) and some examples using it. 
- * `ArithmeticCoding.sparcl`: an invertible implementation of arithmetic coding (Appendix B). 
+ * `Loop.sparcl`: An implementation of the trace operator (mentioned in Section 3.6.4) and some examples using it. 
+ * `ArithmeticCoding.sparcl`: an invertible implementation of arithmetic coding. 
  * `Reverse.sparcl`: Some invertible definitions of the list reversal function.
  * `T1.sparcl`: Miscellaneous examples (including `add` and `mul` discussed in Section 2). 
  * `IllTyped1.sparcl`: A non-example that should be rejected by Sparcl's type checker. 

@@ -21,6 +21,8 @@ fixity $ 0 right
 sig sub : Int -> rev Int -o rev Int 
 def sub n = lift (\x -> x - n) (\x -> x + n) 
 
+-- A function called "subs" in Sections 1 and 2 in the paper. 
+
 sig s2l : rev (List Int) -o rev (List Int) 
 def s2l = go 0 
     where 

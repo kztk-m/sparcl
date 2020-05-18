@@ -32,6 +32,8 @@ def unsafeNew a = lift (\() -> a) (\a' -> ()) (rev ())
 sig unsafeDup : rev a -o rev (a, a) 
 def unsafeDup a = pin a unsafeNew 
 
+-- The trace operator mentioned in Section 3.6.4 in the paper. 
+
 sig trace : (rev (Either a x) -o rev (Either b x)) -> rev a -o rev b 
 def trace h a = 
     let rev (a1, a2) <- unsafeDup a in 

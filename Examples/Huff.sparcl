@@ -1,3 +1,5 @@
+-- Correponds to Section 4.2 in the paper 
+
 -- ($) is useful for reducing paretheses. 
 def ($) = \f x -> f x 
 fixity $ 0 right 
