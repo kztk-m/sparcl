@@ -46,3 +46,7 @@ def pitrav = case unlift piR of (x,y) -> x end
 def piinv  = case unlift piR of (x,y) -> y end 
 
 def t0 = N 0 (N 1 (N 2 L L) (N 3 L L)) (N 4 L L)
+
+def tr0 = pitrav t0 
+
+def t0' = piinv tr0 -- must be equal to t0

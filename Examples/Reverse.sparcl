@@ -65,7 +65,7 @@ def revTaba = extract . uncurryR revWork . shape
   end
 
 def testRevTABAf = fwd revHO exampleList 
-def testRevTABAb = bwd revHO testRevTABAf
+def testRevTABAb = bwd revHO testRevTABAf -- must be equal to exampleList 
 
 def tail (Cons _ xs) = xs 
 
@@ -85,4 +85,7 @@ def revHO = go (\z -> revWork z (rev Nil)) null
     end
 
 def testRevHOf = fwd revHO exampleList
-def testRevHOb = bwd revHO testRevHOf
+def testRevHOb = bwd revHO testRevHOf -- must be equal to exampleList 
+
+
+

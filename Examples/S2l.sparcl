@@ -65,4 +65,4 @@ def (|:) x xs = Cons x xs
 fixity |: 5 right 
 
 def list1  = 1 |: 2 |: 5 |: 2 |: 3 |: Nil 
-def list1' = bwd s2l $ fwd s2l list1 
+def list1' = bwd s2l $ fwd s2l list1 -- this must be equal to list1

@@ -27,6 +27,9 @@ def fib' (rev Z) = rev (rev S (rev Z), rev S (rev Z)) with \(x,y) -> eqNat x y
          let rev (x, y) <- fib' n in 
          pin y (\y' -> add y' x) 
 
+def n0 = S (S (S Z)) -- 3 
+def p0 = fwd fib n0 
+def n0' = bwd fib p0 
 
 data Either a b = Left a | Right b 
 
@@ -55,3 +58,7 @@ def fibN x = case inPInt x of
                                 | rev (x ,y) -> pin y (\y' -> addInt y' x)
                                 end 
              end 
+
+def n1 = 3 
+def p1  = fwd fibN n1 
+def n1' = bwd fibN p1 

@@ -5,21 +5,21 @@ Sparcl: A Language for Partially-Invertible Computation
 How to Use
 ----------
 
-First, we need to build the system. We are using [`stack`](https://docs.haskellstack.org/en/stable/README/) for building, so please install `stack` by following the instruction found in the link. One `stack` has been installed, then type as below for building the system. 
+First, we need to build the system. We are using [`stack`](https://docs.haskellstack.org/en/stable/README/) for building, so please install `stack` by following the instruction found in the link. Once `stack` has been installed, then type as below to build the system. 
 
     $ stack build
     
-The command may take time as it build all required packages including a version of GHC required in a stack LTS. 
+The command may take time as it build all required packages including a version of GHC.
 
-Then, we can run REPL by:
+Then, we can start the read-eval-print loop by:
 
     $ stack exec sparcl-exe
     
-After invoking, one will see that the system shows the following prompt. 
+After invoking the executable, one will see that the system shows the following prompt. 
 
     Sparcl> 
 
-This is the interactive environment; one thing users can do is to type an expression to examine its evaluation results. 
+One thing users can do is to input an expression to examine its evaluation results. 
 
     Sparcl> 1 + 2 
     3 
@@ -28,10 +28,9 @@ Also, users can ask the inferred type of an expression.
 
     Sparcl> :type \x -> x 
     ...
-    forall a b. b # a -> b 
-    
+    forall a b. b # a -> b     
 
-We have some examples under `./Examples` in this distribution. Seeing `./Examples/T1.sparcl` would be useful for knowing the syntax of sparcl. The loading can be done by command `:load`.
+We have some examples under `./Examples` in this distribution. Seeing `./Examples/T1.sparcl` would be useful for knowing the syntax of Sparcl. The loading can be done by the command `:load`.
 
     Sparcl> :load Examples/T1.sparcl 
     ...
@@ -43,9 +42,9 @@ Then, you can use types and functions defined in the file.
     S (S (S Z))
     
 
-Typing `:h` and then enter will show the help as below.
+Typing `:help` and then enter will show the help as below.
 
-    Sparcl> :h
+    Sparcl> :help
     :quit
         Quit REPL.
     :load FILEPATH
@@ -56,7 +55,11 @@ Typing `:h` and then enter will show the help as below.
         Show this help.
     :type EXP
         Print the expression's type.
-        
+
+
+Currently, there is no batch execution mode. Invoking the executable with a file name is equivalent to invoking it without a file name and executing command `:load`.
+
+
 Synopses of `Examples`
 ----------------------
 

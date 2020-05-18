@@ -75,7 +75,9 @@ sig reverseByTrace : rev (List a) -o rev (List a)
 def reverseByTrace = trace revStep 
 
 def t0  = Cons 1 (Cons 2 (Cons 3 Nil))
-def t0' = fwd reverseByTrace t0 
+def rt0 = fwd reverseByTrace t0 
+def t0' = bwd reverseByTrace rt0 -- must be equal to t0 
+
 
 data B = B0 | B1 
 
@@ -101,5 +103,6 @@ def msb2natStep
 sig msb2nat : rev (List B) -o rev Nat 
 def msb2nat = trace msb2natStep 
 
-def b6 = Cons B1 (Cons B1 (Cons B0 Nil))
-def p6 = fwd msb2nat b6 
+def b6  = Cons B1 (Cons B1 (Cons B0 Nil))
+def p6  = fwd msb2nat b6 
+def b6' = bwd msb2nat p6 
