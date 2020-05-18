@@ -261,9 +261,9 @@ replCompletion cref (curr0, rest0) =
 
         makeNameStrings :: [SurfaceName] -> [String]
         makeNameStrings ns =
-          [ s | Bare (User s) <- ns ] ++
-          [ s | (_, s) <- qualified ] ++
-          [ m ++ "." ++ s | (m, s) <- qualified ]
+          S.toList (S.fromList ([ s | Bare (User s) <- ns ] ++
+                                [ s | (_, s) <- qualified ]))
+          ++ [ m ++ "." ++ s | (m, s) <- qualified ]
           where
             qualified = [ (m,n) | Qual (ModuleName m) (User n) <- ns ]
 
