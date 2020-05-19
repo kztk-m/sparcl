@@ -1,6 +1,10 @@
 Sparcl: A Language for Partially-Invertible Computation
 =======================================================
 
+This is an implementation of a system presented in the following paper.
+
+    Kazutaka Matsuda and Meng Wang: Sparcl: A Language for Partially-Invertible Computation, ICFP 2020. 
+    
 
 How to Use
 ----------
@@ -28,7 +32,7 @@ Also, users can ask the inferred type of an expression.
 
     Sparcl> :type \x -> x 
     ...
-    forall a b. b # a -> b     
+    forall a b. b # a -> b 
 
 We have some examples under `./Examples` in this distribution. Seeing `./Examples/T1.sparcl` would be useful for knowing the syntax of Sparcl. The loading can be done by the command `:load`.
 
@@ -40,6 +44,9 @@ Then, you can use types and functions defined in the file.
     Sparcl> fwd (add (S Z)) (S (S Z))
     ...
     S (S (S Z))
+    Sparcl> bwd (add (S Z)) (S (S (S Z)))
+    ...
+    S (S Z)
     
 
 Typing `:help` and then enter will show the help as below.
@@ -63,7 +70,7 @@ Currently, there is no batch execution mode. Invoking the executable with a file
 Synopses of `Examples`
 ----------------------
 
-There are roughly two sorts of examples: ones to check linear typing and the others to check partial invertiblity. 
+There are roughly two sorts of examples: ones to check linear typing and the others to check partial invertibility. 
 
 ### Examples concerning Linear Typing
 
@@ -71,7 +78,7 @@ There are roughly two sorts of examples: ones to check linear typing and the oth
 Nested applications of the function application function.
  * `F.sparcl`:
 Some higher-order functions extracted from Haskell's `Prelude`.
- * `GV_func.sparc`:
+ * `GV_func.sparcl`:
 An example taken from the papers J. Garret Morris: The Best of Both Worlds Linear Functional Programming without Compromise, ICFP 2016, and Sam Lindley: Embedding Session Types in Haskell, Haskell 2016.
  * `T2.sparcl`, `T3.sparcl`, `T4.sparcl`, `T5.sparcl`: 
 Miscellaneous examples, mainly used for debugging purpose. 
@@ -96,10 +103,71 @@ Notable Differences from Our ICFP 2020 Paper
 ---------------------------------------------
 
 * The concrete syntax is different (in particular, this implementation
-  uses a non-indentation-sensitive syntax)
+  uses a non-indentation-sensitive syntax, and the keyword `rev` is used instead of non-ascii bullets)
 * The interpreter uses value environments (as usual) instead of substitutions. HOAS-like representations are adopted for values; particularly, function values are represented by `Value -> Eval Value` where `Eval` is a monad used for the (unidirectional) evaluation. This applies also to residuals, which are represented by pairs of functions, which implements the forward and backward evaluations. 
 * The forward evaluation are not aware of linearity, as separation of environments would have large runtime overhead. 
 * The `Eval` monad mentioned above is used for providing fresh names of invertible variables, which essentially implements alpha renaming mentioned in Fig. 3.
+
+
+Rough Explanation of Syntax 
+--------------------------
+
+Here, we briefly explain the syntax of Sparcl. This explanation is not to be complete, but to help understanding of details of examples. 
+
+A program consists of type or function definitions. A type declaration can be datatype declarations, or type synonym declarations.
+
+    data T a1 ... an = C Ty1 ... Tym | ... | C' Ty1' ... Tyk
+    type T a1 ... an = T Ty1 ... Tym
+    
+Their syntax is a similar to Haskell's one. 
+Unlike Haskell, there is no partial applications of types and each type variable must range of types or multiplicities. 
+Currently, the system does not equip with kind-checking. 
+So, it may accept some ill-formed type declarations. 
+
+We also allow GADTs, of which syntax is different from Haskell. See, `GV_func.sparcl` for an example. 
+
+Types in Sparcl include following ones. 
+
+* primitive types (such as `Int`, `Char` and `Bool`)
+* type constructor applications (such as `List Int`) 
+* multiplicity-annotated function types (such as `Int # Omega -> Bool`)
+* tuple types (such as `(Int, Bool)`)
+* polymorphic types (with constraints) (such as `forall a p. a # p -> a` and `forall a b p q r. p <= q => (a # p -> b) # r -> a # q -> b `) 
+* invertible types (such as `rev Int` and `rev (List Int)`)
+
+Though our parser is too generous, we require polymorphic types can appear in outermost positions of `sig` declaration explained below.
+
+A function definition has a form of:
+
+    sig f : Ty 
+    def f p1 ... pn = e1 with e1' 
+        | ...
+        | q1 ... qn = ek with e2' 
+        
+Here, the `with` part is required only if patterns of a branch contain an invertible patterns `rev p`. 
+There is no invertible `case`in the surface syntax. 
+Pattern-matching containing invertible patterns will be converted to invertible `case`s internally. The `sig` declaration is optional. 
+
+Other than invertible patterns `rev p`, patterns can also be:
+
+* variable patterns (such as `x`)
+* constructor patterns (such as `Cons a x` and `Nil`)
+* tuple patterns (such as `(x,y)` and `()`)
+
+Invertible patterns cannot be nested. Currently, we do not have value patterns and guards. 
+
+Expressions are rather standard except invertible constructors `rev C`. We can use:
+
+* variable expressions
+* constructor expressions (such as `Cons`)
+* tuple expressions (such as `(1, 2)`)
+* applications (such as `f 1`)
+* case expressions (such as `case x of | Nil -> True | Cons _ _ -> False end`)
+* non-recursive let-expression (such as `let rev (x, y) <- e1 in e2`) 
+
+Notice that our `case` expressions require closing delimiters. 
+
+Local definitions are supported via `let ... in e` and `where ... end`.  The former is an expression while the latter comes with a branch. 
 
 Publications
 ------------
@@ -113,3 +181,5 @@ Known Issues
 
 * The system supports importing other modules but this functionality is not tested yet.
 * We are experimenting code generation for integration to other systems such as Haskell/GHC. This functionality is partially implemented and the system places such generated Haskell files under the directory `.sparcl`. 
+* The primitive operations now have linear function types (such as `(+) : Int -o Int -o Int`), but they may have unrestricted function types (such as `(+) : Int -> Int -> Int`).
+* Pretty-printers for tuple values are ugly. 
