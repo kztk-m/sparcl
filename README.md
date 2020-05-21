@@ -136,7 +136,8 @@ Types in Sparcl include following ones.
 * polymorphic types (with constraints) (such as `forall a p. a # p -> a` and `forall a b p q r. p <= q => (a # p -> b) # r -> a # q -> b `) 
 * invertible types (such as `rev Int` and `rev (List Int)`)
 
-Though our parser is too generous, we require polymorphic types can appear in outermost positions of `sig` declaration explained below. TODO: I do not understand this sentence. 
+Sparcl's type system is rank 1 and polymorphic types can appear in limited positions,
+namely outermost positions of signature declarations (i.e., `Ty` of `sig f : Ty` below).
 
 A function definition has the form of:
 
@@ -145,9 +146,8 @@ A function definition has the form of:
         | ...
         | q1 ... qn = ek with e2' 
         
-Here, the `with` part is required only if patterns of a branch contain an invertible patterns `rev p`. 
-There is no invertible `case`in the surface syntax. 
-Pattern-matching containing invertible patterns will be converted to invertible `case`s internally. The `sig` declaration is optional. TODO: I do not see any `case` in the above form.
+Here, the `with` part is required only if patterns of a branch contain an invertible patterns `rev p`. Branches with invertible patterns will be converted to invertible `case`s internally, while there is no such special `case` expression in the surface language. 
+The `sig` declaration is optional. 
 
 Other than invertible patterns `rev p`, patterns can also be:
 
@@ -168,7 +168,7 @@ Expressions are rather standard except invertible constructors `rev C`. We can u
 
 Notice that `case` expressions require closing delimiters. 
 
-Local definitions are supported via `let ... in e` and `where ... end`.  The former is an expression while the latter comes with a branch. TODO: What does "comes with a branch" mean?
+Local definitions are supported via `let ... in e` and `where ... end`.  The former is an expression while the latter can only appear after a branch (such as `def f x = y where def y = 1 end` and `case 1 of x -> y where def y = 1 end end`).
 
 Publications
 ------------
