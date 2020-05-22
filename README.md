@@ -92,7 +92,7 @@ In the following, section numbers refer to those in the paper.
 
  * `Fib.sparcl`: An invertible function that computes a consecutive fibonacci numbers from an index. 
  * `S2l.sparcl`: An invertible function that computes differences of two consecutive elements in a list (Sections 1 and 2) 
- * `Pi.sparcl`: An invertible pre- and in-order traversals (Section 4.1)
+ * `Pi.sparcl`: An invertible function that computes pre- and in-order traversals (Section 4.1)
  * `Huff.sparcl`: An invertible version of Huffman coding (Section 4.2)
  * `Loop.sparcl`: An implementation of the trace operator (mentioned in Section 3.6.4). 
  * `ArithmeticCoding.sparcl`: An invertible implementation of arithmetic coding. 

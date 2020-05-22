@@ -1,4 +1,29 @@
--- Correponds to Section 4.2 in the paper 
+{- 
+
+An invertible version of Huffman coding (Section 4.2 in our ICFP 2020
+paper).
+
+How to Run
+----------
+
+First, load the file. 
+
+    Sparcl> :load Examples/Huff.sparcl
+
+Then, one can write the invertible version (`huffCompress`) as below. 
+
+    Sparcl> origList
+    Cons 'a' (Cons 'a' (Cons 'b' (Cons 'a' (Cons 'c' (Cons 'a' (Cons 'b' (Cons 'd' (Cons 'a' (Cons 'a' Nil)))))))))
+    Sparcl> fwd huffCompress origList
+    <Tup 2> (Br (Lf 'a') (Br (Lf 'b') (Br (Lf 'c') (Lf 'd')))) (Cons Z (Cons Z (Cons O (Cons Z (Cons Z (Cons O (Cons O (Cons Z (Cons Z (Cons O (Cons Z (Cons O (Cons O (Cons O (Cons Z (Cons Z Nil))))))))))))))))
+    Sparcl> bwd huffCompress (fwd huffCompress origList)
+    Cons 'a' (Cons 'a' (Cons 'b' (Cons 'a' (Cons 'c' (Cons 'a' (Cons 'b' (Cons 'd' (Cons 'a' (Cons 'a' Nil)))))))))
+
+NB: The current pretty-printer prints `(3,5)` as `<Tup 2> 3 5`.
+
+-}
+
+
 
 -- ($) is useful for reducing paretheses. 
 def ($) = \f x -> f x 

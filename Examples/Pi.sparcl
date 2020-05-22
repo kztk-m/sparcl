@@ -1,4 +1,27 @@
--- Correponds to Section 4.1 in the paper 
+{-
+
+An invertible function that computes pre- and in-order traversals
+(Section 4.1 in our ICFP 2020 paper).
+
+How to Run
+----------
+
+First, load this file. 
+
+    Sparcl> Examples/Pi.sparcl
+
+Function `piR` implements the invertible pre- and in-order traversals.
+
+    Sparcl> t0
+    N 0 (N 1 (N 2 L L) (N 3 L L)) (N 4 L L)
+    Sparcl> fwd piR t0
+    <Tup 2> (Cons 0 (Cons 1 (Cons 2 (Cons 3 (Cons 4 Nil))))) (Cons 2 (Cons 1 (Cons 3 (Cons 0 (Cons 4 Nil)))))
+    Sparcl> bwd piR (fwd piR t0)
+    N 0 (N 1 (N 2 L L) (N 3 L L)) (N 4 L L)
+
+NB: The current pretty-printer prints `(3,5)` as `<Tup 2> 3 5`. 
+
+-}
 
 data Tree = L | N Int Tree Tree
 data List a = Nil | Cons a (List a) 
@@ -15,11 +38,16 @@ def head (Cons x _) = x
 def fst (x, y) = x 
 def snd (x, y) = y 
 
--- sig ($) : forall a b. (a -o b) -o a -o b 
+sig fwd : (rev a -o rev b) -> a -> b 
+def fwd h = fst (unlift h) 
+
+sig bwd : (rev a -o rev b) -> b -> a 
+def bwd h = snd (unlift h) 
+
+sig ($) : (p <= r) => (a # p -> b) # q -> a # r -> b
 def ($) f x = f x 
 -- NB: definition like f $ x = f x is not possible in the current version
 fixity $ 0 right 
-
 
 sig null : forall a. List a -> Bool
 def null Nil  = True

@@ -1,3 +1,4 @@
+-- Various invertible definitions of the list reversal function. 
 -- NB: "Loop.sparcl" also contains another version of reverse.
 
 data List a = Nil | Cons a (List a) 

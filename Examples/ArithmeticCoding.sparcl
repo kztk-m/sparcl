@@ -1,3 +1,25 @@
+{-
+
+An invertible implementation of arithmetic coding. 
+
+How to Use
+----------
+
+First, load this file.
+    
+    Sparcl> :load Examples/ArithmeticCoding.sparcl
+
+Then, one can test the invertible arithmetic coding (`arithComp`) as:
+
+    Sparcl> origList
+    Cons A (Cons A (Cons B (Cons A (Cons C (Cons A (Cons B (Cons D (Cons A (Cons A (Cons EOS Nil))))))))))
+    Sparcl> fwd arithCompR origList
+    986719598829 % 3906250000000
+    Sparcl> bwd arithCompR (fwd arithCompR origList)
+    Cons A (Cons A (Cons B (Cons A (Cons C (Cons A (Cons B (Cons D (Cons A (Cons A (Cons EOS Nil))))))))))    
+    
+-}
+
 type Range = (Rational , Rational) 
 
 -- ($) is useful for reducing paretheses. 
@@ -13,10 +35,6 @@ def rangeOf A   = (0 % 10, 6 % 10)
           | C   = (8 % 10, 9 % 10) 
           | D   = (9 % 10, 999 % 1000)  
           | EOS = (999 % 1000, 1 % 1) 
-
-sig (&&) : Bool -> Bool -> Bool 
-def (&&) True  b = b 
-       | False _ = False  
 
 sig find : Range -> Rational -> Symbol 
 def find (s , e) q = 

@@ -1,3 +1,37 @@
+{-
+
+An implementation of the trace operator (mentioned in Section 3.6.4 in
+our ICFP 2020 paper), and examples using the operator.
+
+How to Run 
+----------
+
+First, load this file. 
+
+    Sparcl> :load Examples/Loop.sparcl 
+
+The trace operator is implemented as `trace`. We implemented two
+functions by using `trace`: a list reversal function
+(`reverseByTrace`) and a mutual conversion between the MSB
+representation and Peano representation of natural numbers
+(`msb2nat`).
+
+    Sparcl> t0
+    Cons 1 (Cons 2 (Cons 3 Nil))
+    Sparcl> fwd reverseByTrace t0
+    Cons 3 (Cons 2 (Cons 1 Nil))
+    Sparcl> bwd reverseByTrace (fwd reverseByTrace t0)
+    Cons 1 (Cons 2 (Cons 3 Nil))
+
+    Sparcl> b6
+    Cons B1 (Cons B1 (Cons B0 Nil))
+    Sparcl> fwd msb2nat b6
+    S (S (S (S (S (S Z)))))
+    Sparcl> bwd msb2nat (fwd msb2nat b6)
+    Cons B1 (Cons B1 (Cons B0 Nil))
+
+-}
+
 data Either a b = Left a 
                 | Right b 
 

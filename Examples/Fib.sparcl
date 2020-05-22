@@ -1,3 +1,32 @@
+{-
+
+An invertible function that computes a consecutive fibonacci numbers from an index. 
+
+How to Use
+----------
+
+First, load this file. 
+
+    Sparcl> :load Examples/Fib.sparcl
+
+We have two versions of functions: `fib` works on `Nat` and `fibI'`
+works on `Int`. We can run these functions as below.
+ 
+    Sparcl> n0
+    S (S (S Z))
+    Sparcl> fwd fib n0
+    <Tup 2> (S (S (S Z))) (S (S (S (S (S Z)))))
+    Sparcl> bwd fib (fwd fib n0)
+    S (S (S Z))
+    Sparcl> fwd fibI 3
+    <Tup 2> 3 5
+    Sparcl> bwd fibI (3, 5)
+    3
+    
+NB: The current pretty-printer prints `(3,5)` as `<Tup 2> 3 5`.
+
+-}
+
 def fwd f = case unlift f of (x, _) -> x end 
 def bwd f = case unlift f of (_, x) -> x end 
 
@@ -51,14 +80,14 @@ def lftInt n = lift (\() -> n) (\a -> case eqInt a n of
 sig addInt : Int -> rev Int -o rev Int 
 def addInt n = lift (\a -> a + n) (\a -> a - n) 
 
-sig fibN : rev Int -o rev (Int, Int) 
-def fibN x = case inPInt x of 
+sig fibI : rev Int -o rev (Int, Int) 
+def fibI x = case inPInt x of 
              | rev (Left ()) -> rev (lftInt 1, lftInt 1) with \(x,y) -> eqInt x y 
-             | rev (Right n) -> case fibN n of 
+             | rev (Right n) -> case fibI n of 
                                 | rev (x ,y) -> pin y (\y' -> addInt y' x)
                                 end 
              end 
 
 def n1 = 3 
-def p1  = fwd fibN n1 
-def n1' = bwd fibN p1 
+def p1  = fwd fibI n1 
+def n1' = bwd fibI p1 

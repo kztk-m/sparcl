@@ -1,3 +1,28 @@
+{-
+
+An invertible function that computes differences of two consecutive
+elements in a list (Sections 1 and 2 in our ICFP 2020 paper)
+ 
+How to Run 
+----------
+
+Load this file.
+ 
+    Sparcl> :load Examples/S2l.sparcl
+
+The function `s2l` corresponds to the function `subs` in the
+paper. One can check its behavior for example as:
+
+    Sparcl> list1
+    Cons 1 (Cons 2 (Cons 5 (Cons 2 (Cons 3 Nil))))  
+    Sparcl> fwd s2l list1
+    Cons 1 (Cons 1 (Cons 3 (Cons -3 (Cons 1 Nil))))
+    Sparcl> bwd s2l (fwd s2l list1)
+    Cons 1 (Cons 2 (Cons 5 (Cons 2 (Cons 3 Nil))))
+
+-} 
+
+
 -- Example of a parameterised datatype.
 data List a = Nil | Cons a (List a) 
 
