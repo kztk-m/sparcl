@@ -294,7 +294,7 @@ fillCPat = evalState . go
   where
     next :: State [C.Pat Name] (C.Pat Name)
     next = do
-      (p:ps) <- get
+      ~(p:ps) <- get -- lazy pattern to avoid requiring MonadFail Identity.
       put ps
       return p
 

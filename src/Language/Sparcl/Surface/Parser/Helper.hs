@@ -1,3 +1,5 @@
+{-# LANGUAGE CPP #-}
+
 module Language.Sparcl.Surface.Parser.Helper where
 
 import qualified Text.Megaparsec            as P
@@ -44,7 +46,12 @@ parens = P.between (symbol "(") (symbol ")")
 getSrcLoc :: P m SrcSpan
 getSrcLoc =
   fmap (\(P.SourcePos fp l c) -> SrcSpan (Just fp) (P.unPos l) (P.unPos c) (P.unPos l) (P.unPos c))
-       P.getPosition
+
+#if MIN_VERSION_megaparsec(7,0,0)
+    P.getSourcePos
+#else
+    P.getPosition
+#endif
 
 withLoc :: Monad m => (SrcSpan -> P m a) -> P m a
 withLoc m = getSrcLoc >>= m

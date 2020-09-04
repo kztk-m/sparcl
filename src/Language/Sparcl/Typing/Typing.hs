@@ -209,7 +209,7 @@ checkPatTyWork isUnderRev (Loc loc pat) pmult patTy = do
 
     go (PWild x) = do -- this is only possible when pmult is omega
       -- tryUnify pmult (TyMult Omega)
-      (cs, Loc _ (PVar x'), _bind) <- checkPatTyWork isUnderRev (noLoc $ PVar x) omega patTy
+      ~(cs, Loc _ (PVar x'), _bind) <- checkPatTyWork isUnderRev (noLoc $ PVar x) omega patTy
       -- cs must be []
       addConstraint $ msubMult omega pmult
       return (cs, PWild x', [] )
@@ -434,16 +434,20 @@ loopToEquiv constraints = do
     makeLeMap [] = return M.empty
     makeLeMap (c:cs) = do
       t <- makeLeMap cs
-      MSub t1 ts2 <- zonkTypeC c
-      case ts2 of
-        []   -> do
-          unify t1 (TyMult One)
-          return t
-        [t2] | all noTyVar [t1, t2] ->
-          return $ M.insertWith (++) t1 [t2] t
-        _    ->
-          -- keep t
-          return t
+      c' <- zonkTypeC c
+      case c' of
+        MSub t1 ts2 ->
+          case ts2 of
+            []   -> do
+              unify t1 (TyMult One)
+              return t
+            [t2] | all noTyVar [t1, t2] ->
+                   return $ M.insertWith (++) t1 [t2] t
+            _    ->
+              -- keep t
+              return t
+        _ ->
+          error "makeLeMake: assumes multiplicity constraints."
 
     noTyVar (TyVar _)   = False
     noTyVar (TyMult _)  = True
@@ -466,24 +470,28 @@ propagateConstantsToFixedpoint xs = do
 propagateConstants :: MonadTypeCheck m => [TyConstraint] -> m [TyConstraint]
 propagateConstants [] = return []
 propagateConstants (c:cs) = do
-  MSub t1 ts2_ <- zonkTypeC c
-  let ts2 = simplifyMultiplication ts2_
-  case (t1, ts2) of
-    (TyMult One, _) ->
-      -- remove the constraint
-      propagateConstants cs
-    (TyMult Omega, [t2]) -> do
-      unify t2 (TyMult Omega)
-      propagateConstants cs
-    (_, [TyMult Omega]) ->
-      propagateConstants cs
-    (_, []) -> do
-      unify t1 (TyMult One)
-      propagateConstants cs
-    (_, _) | t1 `elem` ts2 ->
-             propagateConstants cs
-           | otherwise -> do
-               (MSub t1 ts2 :) <$> propagateConstants cs
+  c' <- zonkTypeC c
+  case c' of
+    MSub t1 ts2_ -> do
+      let ts2 = simplifyMultiplication ts2_
+      case (t1, ts2) of
+        (TyMult One, _) ->
+          -- remove the constraint
+          propagateConstants cs
+        (TyMult Omega, [t2]) -> do
+          unify t2 (TyMult Omega)
+          propagateConstants cs
+        (_, [TyMult Omega]) ->
+          propagateConstants cs
+        (_, []) -> do
+          unify t1 (TyMult One)
+          propagateConstants cs
+        (_, _) | t1 `elem` ts2 ->
+                 propagateConstants cs
+               | otherwise -> do
+                   (MSub t1 ts2 :) <$> propagateConstants cs
+    _ ->
+      error "propagateConstraints: expects multiplicity contraints."
     where
       simplifyMultiplication = go
         where
@@ -590,7 +598,7 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
 
       (e1', umap1) <- checkTyM e1 ty1 qPat'
 
-      ((e2', umap2), [p'], bind) <- checkPatsTyK [p] [qPat'] [ty1] $ do
+      ((e2', umap2), ~[p'], bind) <- checkPatsTyK [p] [qPat'] [ty1] $ do
         checkTy e2 expectedTy
 
       let xqs = map (\(x,_,q) -> (x,q)) bind
@@ -729,7 +737,7 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
 
           -- (as', bindAs, umapAs) <- withVars [ (n,t) | (n,t,_) <- bind ] $ goAs as
 
-          ((as', bindAs, umapAs), [p'], bind) <- checkPatsTyK [p] [omega] [tyE] $ do
+          ((as', bindAs, umapAs), ~[p'], bind) <- checkPatsTyK [p] [omega] [tyE] $ do
             goAs as
           let xqs = map (\(x,_,q) -> (x,q)) bind
 
@@ -875,7 +883,7 @@ checkAltsTy alts patTy q bodyTy =
       -- (pat', bind) <- checkPatTy pat q patTy
       -- (c', umap)   <- withVars [ (n,t) | (n,t,_) <- bind ] $ checkClauseTy c bodyTy
 
-      ((c', umap), [pat'], bind) <- checkPatsTyK [pat] [q] [patTy] $
+      ~((c', umap), [pat'], bind) <- checkPatsTyK [pat] [q] [patTy] $
         checkClauseTy c bodyTy
 
       let xqs = map (\(x,_,qq) -> (x,qq)) bind

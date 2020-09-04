@@ -1,3 +1,5 @@
+{-# LANGUAGE CPP #-}
+
 module Language.Sparcl.Surface.Parser.Exp where
 
 import           Language.Sparcl.Literal
@@ -29,17 +31,26 @@ import           Control.Arrow                         (left)
 full :: P m a -> P m a
 full p = sp *> p <* P.eof
 
+#if MIN_VERSION_megaparsec(7,0,0)
+pprError :: (P.Stream s, P.ShowErrorComponent e) => P.ParseErrorBundle s e -> String
+pprError = P.errorBundlePretty
+#else
+pprError :: (Ord t, P.ShowToken t, P.ShowErrorComponent e) => P.ParseError t e -> String
+pprError = P.parseErrorPretty
+#endif
+
+
 parseExp :: String -> Either String (LExp 'Parsing)
-parseExp = left P.parseErrorPretty . P.runParser (full expr) "<unknown source>"
+parseExp = left pprError . P.runParser (full expr) "<unknown source>"
 
 parseExp' :: FilePath -> String -> Either String (LExp 'Parsing)
-parseExp' fp = left P.parseErrorPretty . P.runParser (full expr) fp
+parseExp' fp = left pprError . P.runParser (full expr) fp
 
 parseModule :: FilePath -> String -> Either String (Module 'Parsing)
-parseModule fp = left P.parseErrorPretty . P.runParser (full modul) fp
+parseModule fp = left pprError . P.runParser (full modul) fp
 
 parseDecl :: String -> Either String (Decls 'Parsing (Loc (TopDecl 'Parsing)))
-parseDecl = left P.parseErrorPretty . P.runParser (full topDecls) "<unknown source>"
+parseDecl = left pprError . P.runParser (full topDecls) "<unknown source>"
 
 -- -- -- ptest :: P IO a -> String -> IO (Either (P.ParseError Char Void) a)
 -- -- ptest :: (Monad m, Show (P.Token s), Show e) => ParsecT e s m b -> s -> m b

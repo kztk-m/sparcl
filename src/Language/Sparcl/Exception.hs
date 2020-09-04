@@ -1,4 +1,9 @@
-module Language.Sparcl.Exception where
+module Language.Sparcl.Exception
+  (
+    CannotHappen, cannotHappen,
+    RunTimeException, rtError,
+    StaticException, staticError
+  ) where
 
 import           Control.Exception      (Exception, throw)
 import           Language.Sparcl.Pretty as D

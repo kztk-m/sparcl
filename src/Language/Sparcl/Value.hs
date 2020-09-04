@@ -11,13 +11,20 @@ import           Language.Sparcl.Exception
 import           Language.Sparcl.Literal
 import           Language.Sparcl.Name
 
+import           Control.Monad.Fail
 
 data Value = VCon Name [Value]
            | VLit Literal
            | VFun (Value -> Eval Value)
            | VRes (Heap -> Eval Value) (Value -> Eval Heap)
 
-type Eval = Reader Int
+newtype Eval a = MkEval (Reader Int a) deriving (Functor, Applicative, Monad, MonadReader Int, MonadFix)
+
+runEval :: Eval a -> a
+runEval (MkEval a) = runReader a 0
+
+instance MonadFail Eval where
+  fail = cannotHappen . D.text
 
 type ValueTable = M.Map Name Value
 type Env = M.Map Name Value
@@ -70,11 +77,8 @@ pprEnv env =
   D.sep [ ppr k D.<+> D.text "=" D.<+> ppr v
         | (k, v) <- M.toList env ]
 
-runEval :: Eval a -> a
-runEval a = runReader a 0
-
 evalTest :: Eval a -> IO a
-evalTest a = return $ runReader a 0
+evalTest a = return $ runEval a
   -- case runReaderT a 0 of
   --   Left  s -> Fail.fail s
   --   Right v -> return v

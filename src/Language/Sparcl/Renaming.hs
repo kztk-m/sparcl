@@ -571,7 +571,7 @@ renamePat1 level localnames boundVars (Loc loc pat) cont =
       k (PREV <$> fillLater) [p] level localnames boundVars
 
     fillLater = do
-      n:ns <- get
+      ~(n:ns) <- get -- lazy pattern to avoid requiring MonadFail Identity.
       put ns
       return n
 
