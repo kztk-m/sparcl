@@ -2,7 +2,7 @@ module Language.Sparcl.SrcLoc where
 
 import           Language.Sparcl.Pretty as D
 
-data SrcLoc = SrcLoc { slFilename :: Maybe FilePath, slRow :: Int, slCol :: Int }
+data SrcLoc = SrcLoc { slFilename :: !(Maybe FilePath), slRow :: !Int, slCol :: !Int }
   deriving (Eq, Ord, Show)
 
 instance Pretty SrcLoc where
@@ -18,7 +18,7 @@ pprMaybeFilePath Nothing  = D.text "*unknown source*"
 pprMaybeFilePath (Just s) = D.text s
 
 
-data SrcSpan = SrcSpan (Maybe FilePath) Int Int Int Int
+data SrcSpan = SrcSpan !(Maybe FilePath) !Int !Int !Int !Int
              | NoLoc
              deriving (Eq, Ord, Show)
 

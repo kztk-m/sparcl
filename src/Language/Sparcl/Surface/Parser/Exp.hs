@@ -69,41 +69,7 @@ E ::= \ P1 ... Pn -> E
 
 -}
 expr :: Monad m => P m (LExp 'Parsing)
-expr = getSrcLoc >>= \startLoc ->
-  (do void lambda
-      ps <- P.some simplePat
-      void rightArrow
-      e <- expr
-      return $ Loc (startLoc <> location e) $ Abs ps e )
-  <|>
-  P.try (do void $ keyword "let"
-            decls <- localDecls
-            void $ keyword "in"
-            e <- expr
-            return $ Loc (startLoc <> location e) $ Let decls e)
-  <|>
-  (do void $ keyword "let"
-      p <- pat
-      void leftArrow
-      e1 <- expr
-      void $ keyword "in"
-      e2 <- expr
-      return $ Loc (startLoc <> location e2) $ Let1 p e1 e2)
-  <|>
-  (do void $ keyword "case"
-      e0   <- expr
-      void $ keyword "of"
-      alts <- alternatives
-      void $ keyword "end"
-      endLoc <- getSrcLoc
-      return $ Loc (startLoc <> endLoc) $ Case e0 alts)
-  <|>
-  (do void $ keyword "revdo"
-      as <- assignment `P.endBy` semicolon
-      void $ keyword "in"
-      e <- expr
-      return $ Loc (startLoc <> location e) $ RDO as e)
-  <|>
+expr =
   (do e <- opExpr
       m <- P.optional (symbol ":" *> typeExpr)
       case m of
@@ -451,10 +417,48 @@ fixityDecl = do
 opExpr :: Monad m => P m (LExp 'Parsing)
 opExpr =
   foldl (\a f -> f a)  <$>
-       appExpr <*> P.many ((\o e2 e1 -> lop o e1 e2) <$> (qop <* sp) <*> appExpr)
+       funExpr <*> P.many ((\o e2 e1 -> lop o e1 e2) <$> (qop <* sp) <*> funExpr)
   where
     lop o e1 e2 = Loc (location e1 <> location e2) $ Op o e1 e2
 
+
+funExpr :: Monad m => P m (LExp 'Parsing)
+funExpr = getSrcLoc >>= \startLoc ->
+  (do void lambda
+      ps <- P.some simplePat
+      void rightArrow
+      e <- expr
+      return $ Loc (startLoc <> location e) $ Abs ps e )
+  <|>
+  P.try (do void $ keyword "let"
+            decls <- localDecls
+            void $ keyword "in"
+            e <- expr
+            return $ Loc (startLoc <> location e) $ Let decls e)
+  <|>
+  (do void $ keyword "let"
+      p <- pat
+      void leftArrow
+      e1 <- expr
+      void $ keyword "in"
+      e2 <- expr
+      return $ Loc (startLoc <> location e2) $ Let1 p e1 e2)
+  <|>
+  (do void $ keyword "case"
+      e0   <- expr
+      void $ keyword "of"
+      alts <- alternatives
+      void $ keyword "end"
+      endLoc <- getSrcLoc
+      return $ Loc (startLoc <> endLoc) $ Case e0 alts)
+  <|>
+  (do void $ keyword "revdo"
+      as <- assignment `P.endBy` semicolon
+      void $ keyword "in"
+      e <- expr
+      return $ Loc (startLoc <> location e) $ RDO as e)
+  <|>
+  appExpr
 
 appExpr :: Monad m => P m (LExp 'Parsing)
 appExpr =
