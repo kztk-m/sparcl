@@ -54,16 +54,16 @@ we want to allow types that are parameterized by multiplicity.
 -}
 
 data Ty (p :: Pass)
-  = TVar    (XTId p)
-  | TCon    (XTId p) [LTy p]
-  | TForall (XTId p) (LTy p)
-  | TQual   [TConstraint p] (LTy p)
-  | TMult   Multiplicity
+  = TVar    !(XTId p)
+  | TCon    !(XTId p) ![LTy p]
+  | TForall !(XTId p) !(LTy p)
+  | TQual   ![TConstraint p] !(LTy p)
+  | TMult   !Multiplicity
 
 
 -- TODO: Maybe, we should add Eq or Ord later.
-data TConstraint p = MSub [LTy p] [LTy p] -- max p1 ... pn <= max q1 ... qm
-                   | TyEq (LTy p) (LTy p) -- t1 ~ t2
+data TConstraint p = MSub ![LTy p] ![LTy p] -- max p1 ... pn <= max q1 ... qm
+                   | TyEq !(LTy p) !(LTy p) -- t1 ~ t2
 
 
 
@@ -187,25 +187,25 @@ type AllPretty p = (ForallX Pretty p, QueryName p, Typeable p)
 
 -- TODO: add "if" expression
 data Exp p
-  = Lit Literal
-  | Var (XId p)
-  | App (LExp p) (LExp p)
-  | Abs [LPat p] (LExp p)
-  | Con (XId p)
-  | Case (LExp p) [ (LPat p, Clause p) ]
+  = Lit !Literal
+  | Var !(XId p)
+  | App !(LExp p) !(LExp p)
+  | Abs ![LPat p] !(LExp p)
+  | Con !(XId p)
+  | Case !(LExp p) ![ (LPat p, Clause p) ]
   | Lift
-  | Sig  (LExp p) (LTy p)
-  | Let  (Decls p (LDecl p)) (LExp p)
-  | Let1 (LPat p) (LExp p) (LExp p) -- let p = e1 in e2 is equivalent to (\p . e2) e1
+  | Sig  !(LExp p) !(LTy p)
+  | Let  !(Decls p (LDecl p)) !(LExp p)
+  | Let1 !(LPat p) !(LExp p)  !(LExp p) -- let p = e1 in e2 is equivalent to (\p . e2) e1
 
-  | Parens   (LExp p) -- for operators
-  | Op  (XId p) (LExp p) (LExp p)
+  | Parens !(LExp p) -- for operators
+  | Op  !(XId p) !(LExp p) !(LExp p)
 
-  | RDO [(LPat p, LExp p)] (LExp p)
+  | RDO ![(LPat p, LExp p)] !(LExp p)
 
   | Unlift
 
-  | RCon (XId p)
+  | RCon !(XId p)
   | RPin
 
 
@@ -269,10 +269,10 @@ instance AllPretty p => Pretty (Exp p) where
 
 
 type LPat p = Loc (Pat p)
-data Pat p = PVar (XId p)
-           | PCon (XId p) [LPat p]
-           | PREV  (LPat p)
-           | PWild (XPWild p) -- PWild x will be treated as !x after renaming
+data Pat p = PVar !(XId p)
+           | PCon !(XId p) ![LPat p]
+           | PREV  !(LPat p)
+           | PWild !(XPWild p) -- PWild x will be treated as !x after renaming
          -- TODO: Add literal pattern
 --   deriving Show
 
@@ -344,12 +344,12 @@ instance Pretty Assoc where
 type LDecl p = Loc (Decl p)
 
 data CDecl p
-  = NormalC (XId p)  -- constructor name
-            [LTy p]  -- constructor argument
-  | GeneralC (XId p) -- constructor name
-             [XTId p]        -- xs of forall xs. C => ...
-             [TConstraint p] -- C  of forall xs. C => ...
-             [ (LTy p, LTy p) ] -- arguments together with their multiplicity
+  = NormalC !(XId p)  -- constructor name
+            ![LTy p]  -- constructor argument
+  | GeneralC !(XId p) -- constructor name
+             ![XTId p]        -- xs of forall xs. C => ...
+             ![TConstraint p] -- C  of forall xs. C => ...
+             ![ (LTy p, LTy p) ] -- arguments together with their multiplicity
 
 
 instance AllPretty p => Pretty (Loc (CDecl p)) where
@@ -385,14 +385,14 @@ type family XHDecls p where
   XHDecls 'TypeCheck = ()
 
 data TopDecl p
-  = DDecl (Decl p)
-  | DData (XId p) [XId p] [Loc (CDecl p)]   -- data type declaration
-  | DType (XId p) [XId p] (LTy p)
+  = DDecl !(Decl p)
+  | DData !(XId p) ![XId p] ![Loc (CDecl p)]   -- data type declaration
+  | DType !(XId p) ![XId p] !(LTy p)
 
 data Decl p
-  = DDef (XId p) [ ([LPat p],  Clause p) ]
-  | DSig (XId p) (LTy p)
-  | DFixity (XId p) Prec Assoc -- TODO: will be replaced with "DDefOp"
+  = DDef !(XId p) ![ ([LPat p],  Clause p) ]
+  | DSig !(XId p) !(LTy p)
+  | DFixity !(XId p) !Prec !Assoc -- TODO: will be replaced with "DDefOp"
   -- | DMutual [LDecl]
 
 
@@ -469,7 +469,7 @@ instance AllPretty p => Pretty (Module p) where
 
 
 type Export p = Loc (XId p)
-data Import p = Import { importModuleName :: ModuleName, importingNames :: Maybe [Loc (XId p)] }
+data Import p = Import { importModuleName :: !ModuleName, importingNames :: !(Maybe [Loc (XId p)]) }
 
 instance AllPretty p => Pretty (Import p) where
   ppr (Import m is) =

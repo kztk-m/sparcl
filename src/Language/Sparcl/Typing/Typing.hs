@@ -1228,7 +1228,7 @@ skolemize ty = return ([], TyQual [] ty)
 --     pprC = parens . hsep . punctuate comma . map ppr
 
 
-data VV = MV MetaTyVar | SV TyVar
+data VV = MV !MetaTyVar | SV !TyVar
   deriving (Eq, Ord)
 
 instance Pretty VV where

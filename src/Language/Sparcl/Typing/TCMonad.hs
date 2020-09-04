@@ -43,26 +43,26 @@ data AbortTyping = AbortTyping
 instance Exception AbortTyping
 
 
-data WhenChecking = CheckingEquality    Ty Ty
-                  | CheckingConstraint  [TyConstraint]
-                  | CheckingMoreGeneral Ty Ty
-                  | OtherContext        Doc
+data WhenChecking = CheckingEquality    !Ty !Ty
+                  | CheckingConstraint  ![TyConstraint]
+                  | CheckingMoreGeneral !Ty !Ty
+                  | OtherContext        !Doc
                   | CheckingNone
 
 
-data TypeError = TypeError (Maybe SrcSpan) [S.LExp 'Renaming] WhenChecking ErrorDetail
+data TypeError = TypeError !(Maybe SrcSpan) ![S.LExp 'Renaming] !WhenChecking !ErrorDetail
 
 data ErrorDetail
-  = UnMatchTy  Ty Ty
-  | OccurrenceCheck MetaTyVar Ty
-  | MultipleUse Name
-  | NoUse       Name
-  | Undefined   Name
-  | Untouchable MetaTyVar Ty
-  | ImplicationCheckFail [TyConstraint] [TyConstraint]
-  | Escape      MetaTyVar Ty
-  | GeneralizeFail Ty Ty [TyVar]
-  | Other       D.Doc
+  = UnMatchTy   !Ty !Ty
+  | OccurrenceCheck !MetaTyVar !Ty
+  | MultipleUse !Name
+  | NoUse       !Name
+  | Undefined   !Name
+  | Untouchable !MetaTyVar !Ty
+  | ImplicationCheckFail ![TyConstraint] ![TyConstraint]
+  | Escape      !MetaTyVar !Ty
+  | GeneralizeFail !Ty !Ty ![TyVar]
+  | Other       !D.Doc
 
 
 instance Pretty TypeError where
@@ -175,8 +175,8 @@ dummyName = Original (ModuleName "") (User "") (Bare (User ""))
 -- the expression has multiplicity `p` if it were used one.
 type UseMap = Map Name Multiplication
 
-data Multiplication = Multiply Multiplication Multiplication
-                    | MSingle Mul
+data Multiplication = Multiply !Multiplication !Multiplication
+                    | MSingle  !Mul
 
 instance MultiplicityLike Multiplication where
   one   = MSingle one
@@ -200,7 +200,7 @@ ty2mult = zonkType >=> go
         m <- newMetaTyVar
         return $ MSingle (MulVar m)
 
-data Mul = MulConst Multiplicity | MulVar MetaTyVar
+data Mul = MulConst !Multiplicity | MulVar !MetaTyVar
 
 instance MultiplicityLike Mul where
   one   = MulConst One
@@ -246,9 +246,9 @@ deleteUseMap = M.delete
 
 
 data InferredConstraint
-  = ICNormal  TyConstraint
-  | ICGuarded [TyConstraint]       -- Given
-              [InferredConstraint] -- Wanted
+  = ICNormal  !TyConstraint
+  | ICGuarded ![TyConstraint]       -- Given
+              ![InferredConstraint] -- Wanted
 
 
 instance MetaTyVars InferredConstraint where
@@ -309,12 +309,12 @@ data TypingContext =
                   tcIcLevel    :: !IcLevel,
                   tcConstraint :: !(IORef [InferredConstraint]),
                   tcBLog       :: !(IORef BMap),
-                  tcTyEnv      :: TyEnv,    -- Current typing environment
-                  tcConEnv     :: ConEnv,
-                  tcSyn        :: SynTable, -- Current type synonym table
-                  tcContexts   :: [S.LExp 'Renaming], -- parent expressions
-                  tcLoc        :: Maybe SrcSpan,  -- focused part
-                  tcChecking   :: WhenChecking,
+                  tcTyEnv      :: !TyEnv,    -- Current typing environment
+                  tcConEnv     :: !ConEnv,
+                  tcSyn        :: !SynTable, -- Current type synonym table
+                  tcContexts   :: ![S.LExp 'Renaming], -- parent expressions
+                  tcLoc        :: !(Maybe SrcSpan),  -- focused part
+                  tcChecking   :: !WhenChecking,
                   tcDebugLevel :: !Int,
                   tcRefErrors  :: !(IORef (Seq TypeError)),
                   tcDeferredIC :: !(IORef [(TypeErrorContext, SuspendedCheck)])

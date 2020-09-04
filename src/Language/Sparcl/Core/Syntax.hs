@@ -24,19 +24,19 @@ import qualified Text.PrettyPrint.ANSI.Leijen   as D
 import qualified Data.Set                       as Set
 
 data Exp n
-  = Lit Literal
-  | Var n
-  | App (Exp n) (Exp n)
-  | Abs n (Exp n)
-  | Con n [Exp n]
-  | Case (Exp n) [ (Pat n, Exp n) ]
-  | Let  (Bind n) (Exp n)
-  | Lift (Exp n) (Exp n)
-  | Unlift (Exp n)
+  = Lit !Literal
+  | Var !n
+  | App !(Exp n) !(Exp n)
+  | Abs !n !(Exp n)
+  | Con !n ![Exp n]
+  | Case !(Exp n) ![ (Pat n, Exp n) ]
+  | Let  !(Bind n) !(Exp n)
+  | Lift !(Exp n) !(Exp n)
+  | Unlift !(Exp n)
 
-  | RCon n [Exp n]
-  | RCase (Exp n) [ (Pat n, Exp n, Exp n ) ]
-  | RPin  (Exp n) (Exp n)
+  | RCon !n ![Exp n]
+  | RCase !(Exp n) ![ (Pat n, Exp n, Exp n ) ]
+  | RPin  !(Exp n) !(Exp n)
 
 
 freeVars :: Ord n => Exp n -> [n]
@@ -128,8 +128,8 @@ instance Pretty n => Pretty (Exp n) where
     D.text "pin" D.<+> pprPrec 10 e1 D.<+> pprPrec 10 e2
 
 
-data Pat n = PVar n
-           | PCon n [Pat n]
+data Pat n = PVar !n
+           | PCon !n ![Pat n]
   deriving Show
 
 instance Pretty n => Pretty (Pat n) where
@@ -149,7 +149,7 @@ type Bind n = [ (n, Ty, Exp n) ]
 
 
 -- | Datatype declarations
-data DDecl n = DDecl n [TyVar] [(n, [n], [TyConstraint], [Ty])]
+data DDecl n = DDecl !n ![TyVar] ![(n, [n], [TyConstraint], [Ty])]
 
 -- | Type synonym declarations
-data TDecl n = TDecl n [TyVar] Ty
+data TDecl n = TDecl !n ![TyVar] !Ty

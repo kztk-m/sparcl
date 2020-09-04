@@ -52,12 +52,12 @@ newtype IcLevel = IcLevel Int
   deriving newtype (Show, Pretty)
 
 
-data Ty = TyCon   Name [Ty]       -- ^ Type constructor
-        | TyVar   TyVar           -- ^ Type variable
-        | TyMetaV MetaTyVar       -- ^ Metavariables (to be substituted in type inf.)
-        | TyForAll [TyVar] QualTy -- ^ polymorphic types
-        | TySyn   Ty Ty           -- ^ type synonym (@TySym o u@ means @u@ but @o@ will be used for error messages)
-        | TyMult  Multiplicity    -- ^ 1 or ω
+data Ty = TyCon   !Name ![Ty]       -- ^ Type constructor
+        | TyVar   !TyVar           -- ^ Type variable
+        | TyMetaV !MetaTyVar       -- ^ Metavariables (to be substituted in type inf.)
+        | TyForAll ![TyVar] !QualTy -- ^ polymorphic types
+        | TySyn   !Ty !Ty           -- ^ type synonym (@TySym o u@ means @u@ but @o@ will be used for error messages)
+        | TyMult  !Multiplicity    -- ^ 1 or ω
          deriving (Eq, Ord, Show)
 
 isMonoTy :: Ty -> Bool
@@ -84,11 +84,11 @@ unification variables, but existential varibles are replaced with skolemized var
 Skolemized variables cannot escape in the resulting type, and use map.
 
 -}
-data ConTy = ConTy [TyVar]        -- universal variables
-                   [TyVar]        -- existential variables
-                   [TyConstraint] -- constraints
-                   [(Ty, Ty)]     -- constructor's arugument types (a pair of a type and a multipliticy)
-                   Ty             -- constructor's return types
+data ConTy = ConTy ![TyVar]        -- universal variables
+                   ![TyVar]        -- existential variables
+                   ![TyConstraint] -- constraints
+                   ![(Ty, Ty)]     -- constructor's arugument types (a pair of a type and a multipliticy)
+                   !Ty             -- constructor's return types
 
 instance Pretty ConTy where
   ppr (ConTy xs ys q args ty) =
@@ -108,15 +108,15 @@ instance MultiplicityLike Ty where
   omega = TyMult Omega
   fromMultiplicity = TyMult
 
-data QualTy = TyQual [TyConstraint] BodyTy
+data QualTy = TyQual ![TyConstraint] !BodyTy
   deriving (Eq, Ord, Show)
 
-data TyConstraint = MSub Ty [Ty]
-                  | TyEq Ty Ty
+data TyConstraint = MSub !Ty ![Ty]
+                  | TyEq !Ty !Ty
   deriving (Eq, Ord, Show)
 
-data TyVar = BoundTv  Name
-           | SkolemTv TyVar Int IcLevel
+data TyVar = BoundTv  !Name
+           | SkolemTv !TyVar !Int !IcLevel
              -- used for checking of which type is more general.
   deriving Show
 

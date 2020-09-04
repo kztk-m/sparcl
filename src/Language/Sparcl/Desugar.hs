@@ -180,7 +180,7 @@ mkApp e1 e2          = C.App e1 e2
 --                   deriving Functor
 
 
-data Occ a = Once a | None a | More
+data Occ a = Once !a | None !a | More
   deriving Functor
 
 liftO2 :: (a -> b -> r) -> Occ a -> Occ b -> Occ r
@@ -243,8 +243,8 @@ desugarRHS pcs = withNewNames len $ \ns -> do
             (ps,_):_ -> length ps
 
 data CPat = CPHole
-          | CPVar  Name
-          | CPCon  Name [ CPat ]
+          | CPVar  !Name
+          | CPCon  !Name ![ CPat ]
 --          | CPBang CPat
           deriving (Eq , Show)
 

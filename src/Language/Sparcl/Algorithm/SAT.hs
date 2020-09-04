@@ -9,32 +9,32 @@ module Language.Sparcl.Algorithm.SAT (
   true, false, sat, allsat
   ) where
 
+import qualified Data.IntMap.Strict     as IM
 import qualified Data.Map               as M
-import qualified Data.IntMap.Strict            as IM 
 
+import           Control.Monad.State
 import           Control.Monad.Writer
-import           Control.Monad.State 
 import           Language.Sparcl.Pretty hiding ((<$>))
 
-import           Data.Maybe             (mapMaybe, fromJust)
+import           Data.Maybe             (fromJust, mapMaybe)
 
 data Formula v
-  = FVar v
-  | FAnd (Formula v) (Formula v)
-  | FOr  (Formula v) (Formula v) 
-  | FNot (Formula v)
-  | FIff (Formula v) (Formula v) 
+  = FVar !v
+  | FAnd !(Formula v) !(Formula v)
+  | FOr  !(Formula v) !(Formula v)
+  | FNot !(Formula v)
+  | FIff !(Formula v) !(Formula v)
   | FTrue
   | FFalse
-  deriving (Functor, Foldable, Traversable) 
+  deriving (Functor, Foldable, Traversable)
 
 (.&&.) :: Formula v -> Formula v -> Formula v
 FFalse .&&. _  = FFalse
 FTrue  .&&. t2 = t2
 _  .&&. FFalse = FFalse
 t1 .&&. FTrue  = t1
-(FAnd t1 t2) .&&. t3 = t1 .&&. (t2 .&&. t3) 
-t1 .&&. t2 = FAnd t1 t2 
+(FAnd t1 t2) .&&. t3 = t1 .&&. (t2 .&&. t3)
+t1 .&&. t2 = FAnd t1 t2
 
 
 (.||.) :: Formula v -> Formula v -> Formula v
@@ -42,13 +42,13 @@ FTrue  .||. _  = FTrue
 FFalse .||. t2 = t2
 _  .||. FTrue  = FTrue
 t1 .||. FFalse = t1
-t1 .||. t2  = FOr t1 t2 
+t1 .||. t2  = FOr t1 t2
 
 neg :: Formula v -> Formula v
 neg FFalse   = FTrue
 neg FTrue    = FFalse
-neg (FNot t) = t 
-neg t = FNot t 
+neg (FNot t) = t
+neg t        = FNot t
 
 var :: v -> Formula v
 var = FVar
@@ -64,7 +64,7 @@ elim v b = go
     go (FNot t)     = neg (go t)
     go FTrue        = FTrue
     go FFalse       = FFalse
-    go (FIff t1 t2) = go t1 .<=>. go t2 
+    go (FIff t1 t2) = go t1 .<=>. go t2
 
 instance Pretty v => Pretty (Formula v) where
   pprPrec _ (FVar x) = ppr x
@@ -83,13 +83,13 @@ instance Pretty v => Pretty (Formula v) where
       orChain (FOr s1 s2) = s1:orChain s2
       orChain s           = [s]
   pprPrec k (FIff t1 t2) = parensIf (k > 1) $
-    pprPrec 2 t1 <+> "=" <+> pprPrec 2 t2 
+    pprPrec 2 t1 <+> "=" <+> pprPrec 2 t2
   pprPrec k (FNot t1) = parensIf (k > 9) $
     "~" <> pprPrec 10 t1
 
 
-data Clause = Clause !Int -- cached size 
-                     (IM.IntMap Bool) 
+data Clause = Clause !Int -- cached size
+                     !(IM.IntMap Bool)
 
 lookupC :: IM.Key -> Clause -> Maybe Bool
 lookupC x (Clause _ m) = IM.lookup x m
@@ -98,18 +98,18 @@ deleteC :: IM.Key -> Clause -> Clause
 deleteC x (Clause s m) = (Clause (s-1) (IM.delete x m))
 
 lookupMinC :: Clause -> Maybe (IM.Key, Bool)
-lookupMinC (Clause _ m) = IM.lookupMin m 
+lookupMinC (Clause _ m) = IM.lookupMin m
 
 {-# INLINE sizeC #-}
 sizeC :: Clause -> Int
-sizeC (Clause i _) = i 
+sizeC (Clause i _) = i
 
 {-# INLINE nullC #-}
-nullC :: Clause -> Bool 
+nullC :: Clause -> Bool
 nullC (Clause i _) = i == 0
 
 toListC :: Clause -> [(Int, Bool)]
-toListC (Clause _ m) = IM.toList m 
+toListC (Clause _ m) = IM.toList m
 
 (.=>.) :: Formula v -> Formula v -> Formula v
 (.=>.) a b = neg a .||. b
@@ -118,7 +118,7 @@ toListC (Clause _ m) = IM.toList m
 FTrue  .<=>. b = b
 FFalse .<=>. b = neg b
 a .<=>. FTrue  = a
-a .<=>. FFalse = neg a 
+a .<=>. FFalse = neg a
 a .<=>. b = FIff a b -- (neg a .||. b) .&&. (neg b .||. a)
 
 true :: Formula v
@@ -136,38 +136,39 @@ infixr 1 .<=>.
 
 type Key = Int
 
-
+-- Intentionally lazy
 data Join a = Empty | NonEmpty (JoinNonEmpty a)
-  deriving (Functor, Foldable, Traversable) 
+  deriving (Functor, Foldable, Traversable)
 
-data JoinNonEmpty a = Single a | Join (JoinNonEmpty a) (JoinNonEmpty a) 
-  deriving (Functor, Foldable, Traversable) 
+-- Intentionally lazy
+data JoinNonEmpty a = Single a | Join (JoinNonEmpty a) (JoinNonEmpty a)
+  deriving (Functor, Foldable, Traversable)
 
-data MyQueue a = MyQueue !(Join a) -- elements of size 1 
-                         !(Join a) -- other elements 
-  deriving (Functor, Foldable, Traversable) 
+data MyQueue a = MyQueue !(Join a) -- elements of size 1
+                         !(Join a) -- other elements
+  deriving (Functor, Foldable, Traversable)
 
 instance Semigroup (Join a) where
   Empty <> t = t
   NonEmpty t <> Empty = NonEmpty t
-  NonEmpty t1 <> NonEmpty t2 = NonEmpty (Join t1 t2) 
+  NonEmpty t1 <> NonEmpty t2 = NonEmpty (Join t1 t2)
 
 instance Monoid (Join a) where
   mempty = Empty
 
 {-# INLINE singletonQ #-}
-singletonQ :: (a -> Key) -> a -> MyQueue a 
+singletonQ :: (a -> Key) -> a -> MyQueue a
 singletonQ k n
-  | k n == 1  = MyQueue (NonEmpty $ Single n) Empty 
+  | k n == 1  = MyQueue (NonEmpty $ Single n) Empty
   | otherwise = MyQueue Empty (NonEmpty $ Single n)
 
 {-# INLINE emptyQ #-}
 emptyQ :: MyQueue a
-emptyQ = MyQueue Empty Empty 
+emptyQ = MyQueue Empty Empty
 
 {-# INLINE mergeQs #-}
 mergeQs :: [MyQueue a] -> MyQueue a
-mergeQs = foldr mergeQ emptyQ 
+mergeQs = foldr mergeQ emptyQ
 
 {-# INLINE mergeQ #-}
 mergeQ :: MyQueue a -> MyQueue a -> MyQueue a
@@ -177,8 +178,8 @@ pickOneJ :: Join a -> Maybe (a, Join a)
 pickOneJ Empty = Nothing
 pickOneJ (NonEmpty t) = go t Empty
   where
-    go (Single a)   r = Just (a, r) 
-    go (Join t1 t2) r = go t1 (NonEmpty t2 <> r) 
+    go (Single a)   r = Just (a, r)
+    go (Join t1 t2) r = go t1 (NonEmpty t2 <> r)
 
 pickOne1 :: MyQueue a -> Maybe (a, MyQueue a)
 pickOne1 (MyQueue xs ys) =
@@ -190,10 +191,10 @@ pickOne :: MyQueue a -> Maybe (a, MyQueue a)
 pickOne (MyQueue xs ys) =
   case pickOneJ xs of
     Just (a, xs') -> Just (a, MyQueue xs' ys)
-    Nothing       -> do 
+    Nothing       -> do
       (a, ys') <-  pickOneJ ys
       return (a, MyQueue xs ys')
-        
+
 
 {-# INLINE fromClauses #-}
 fromClauses :: [Clause] -> MyQueue Clause
@@ -205,34 +206,34 @@ type CNFimpl = MyQueue Clause
 toImpl :: forall v. Ord v => Formula v -> (CNFimpl, M.Map Int v)
 toImpl formula = -- fromClauses $ pCNF p
   let cs = evalState (convert formula) cnt
-  in (fromClauses cs, i2v) 
+  in (fromClauses cs, i2v)
   where
     -- Tseitin transformation
-    -- [[y]]x       => (~x | y) & (x | ~y) 
+    -- [[y]]x       => (~x | y) & (x | ~y)
     -- [[A & B]]x   => (~x | y) & (~x | z) & (~y | ~z | x) & [[A]]y & [[B]]z
     -- [[A | B]]x   => (~x | y | z) & (~y | x) & (~z | x) & [[A]]y & [[B]]z
     -- [[not A]]x   => (~x | ~y) & (x | y) & [[A]]y
     -- [[A <=> B]]x => (~x | ~y | z) & (~x | ~z | y) & (y | z | x) & (~y | ~z | x) & [[A]]y & [[B]]z
-    -- [[A => B]]x  => (~x | ~y | z) & (x | y) & (x | ~z) & [[A]]y & [[B]]z 
+    -- [[A => B]]x  => (~x | ~y | z) & (x | y) & (x | ~z) & [[A]]y & [[B]]z
     -- [[true]]x    => x
     -- [[false]]x   => ~x
     convert :: Formula v -> State Int [Clause]
-    convert p = do n <- newVar p 
-                   ($ []) <$> execWriterT (tell (wrap $ IM.singleton n True) >> go n p) 
+    convert p = do n <- newVar p
+                   ($ []) <$> execWriterT (tell (wrap $ IM.singleton n True) >> go n p)
       where
-        newVar :: MonadState Int m => Formula v -> m Int 
+        newVar :: MonadState Int m => Formula v -> m Int
         newVar (FVar x) = return (fromJust $ M.lookup x v2i)
         newVar _        = next
         wrap x = (Clause (IM.size x) x:)
-        go :: Int -> Formula v -> WriterT ([Clause] -> [Clause]) (State Int)  () 
+        go :: Int -> Formula v -> WriterT ([Clause] -> [Clause]) (State Int)  ()
         go x (FVar v) =
           let Just y = M.lookup v v2i
           in if x == y then
                tell mempty
-             else do 
+             else do
                tell $ wrap $ IM.fromList [(x,False), (y, True)]
                tell $ wrap $ IM.fromList [(x,True), (y,False)]
-        go x (FAnd t1 t2) = do 
+        go x (FAnd t1 t2) = do
           y <- newVar t1
           z <- newVar t2
           tell $ wrap $ IM.fromList [ (x, False), (y, True) ]
@@ -246,7 +247,7 @@ toImpl formula = -- fromClauses $ pCNF p
           tell $ wrap $ IM.fromList [ (x, False), (y, False), (z, True) ]
           tell $ wrap $ IM.fromList [ (x, False), (y, True),  (z, False) ]
           tell $ wrap $ IM.fromList [ (x, True),  (y, True),  (z, True) ]
-          tell $ wrap $ IM.fromList [ (x, True),  (y, False), (z, False) ] 
+          tell $ wrap $ IM.fromList [ (x, True),  (y, False), (z, False) ]
           go y t1
           go z t2
 
@@ -258,38 +259,38 @@ toImpl formula = -- fromClauses $ pCNF p
           tell $ wrap $ IM.fromList [ (x, True),  (y, True) ]
           tell $ wrap $ IM.fromList [ (x, True),  (z, False) ]
           go y t1
-          go z t2          
-          
+          go z t2
+
         go x (FOr t1 t2) = do
           y <- newVar t1
-          z <- newVar t2 
+          z <- newVar t2
           tell $ wrap $ IM.fromList [ (x, False), (y, True), (z, True) ]
           tell $ wrap $ IM.fromList [ (x, True), (y, False) ]
           tell $ wrap $ IM.fromList [ (x, True), (z, False) ]
           go y t1
-          go z t2 
-          
-        go x (FNot t) = do 
+          go z t2
+
+        go x (FNot t) = do
           y <- newVar t
           tell $ wrap $ IM.fromList [ (x, False), (y, False) ]
           tell $ wrap $ IM.fromList [ (x, True) , (y, True)  ]
-          go y t 
-        go x FTrue  = tell $ wrap $ IM.singleton x True 
-        go x FFalse = tell $ wrap $ IM.singleton x False 
-          
-                            
-    
+          go y t
+        go x FTrue  = tell $ wrap $ IM.singleton x True
+        go x FFalse = tell $ wrap $ IM.singleton x False
+
+
+
     i2v = M.fromList $ map (\(x,n) -> (n,x)) $ M.toList v2i
     (v2i, cnt) =
-      flip runState 0 $ 
-      traverse (const next) $   
+      flip runState 0 $
+      traverse (const next) $
       foldr (\x -> M.insert x (1 :: Int)) M.empty formula
 
-    next :: MonadState Int m => m Int 
+    next :: MonadState Int m => m Int
     next = do
       i <- get
       put (i + 1)
-      return i 
+      return i
 
 type Solver m = WriterT [(Int,Bool)] m
 
@@ -300,7 +301,7 @@ assign v b cs = do
   return $ foldr (\c r ->
                      case tryAssign c of
                        Nothing -> r
-                       Just c' -> singletonQ sizeC c' `mergeQ` r) emptyQ cs 
+                       Just c' -> singletonQ sizeC c' `mergeQ` r) emptyQ cs
   where
     {-# INLINABLE tryAssign #-}
     tryAssign :: Clause -> Maybe Clause
@@ -317,7 +318,7 @@ assign v b cs = do
 unitProp :: MonadPlus m => CNFimpl -> Solver m CNFimpl
 unitProp q = case pickOne1 q of
   Nothing     -> return q
-  Just (x,q') -> do 
+  Just (x,q') -> do
     let [(v,b)] = toListC x
     q'' <- assign v b q'
     unitProp q''
@@ -346,7 +347,7 @@ pickOneVariable :: CNFimpl -> Maybe Int
 pickOneVariable q = do
   (c, _) <- pickOne q
   fst <$> lookupMinC c
-                      
+
 -- pickOneVariable EmptyQ        = Nothing
 -- pickOneVariable (NodeQ _ m _) = fst <$> IM.lookupMin m
 
@@ -381,15 +382,15 @@ satI cs =
     vs:_ -> Just vs
 
 sat :: Ord v => Formula v -> Maybe [(v, Bool)]
-sat p = do 
-  let (cs, i2v) = toImpl p 
+sat p = do
+  let (cs, i2v) = toImpl p
   res <- satI cs
   return $ mapMaybe (\(n,t) -> do
                         x <- M.lookup n i2v
                         return (x, t)) res
 
 allsat :: Ord v => Formula v -> [[(v,Bool)]]
-allsat cs = -- trace (show $ "<" <> ppr cs <> ">") $ 
+allsat cs = -- trace (show $ "<" <> ppr cs <> ">") $
   case sat cs of
     Nothing -> []
     Just vs ->

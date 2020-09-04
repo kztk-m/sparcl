@@ -56,8 +56,8 @@ type OpTable = M.Map Name (Prec, Assoc)
 --
 type NameTable = M.Map SurfaceName (S.Set (ModuleName, NameBase))
 
-data RenamingEnv = RnEnv { rnOpTable   :: OpTable,
-                           rnNameTable :: NameTable }
+data RenamingEnv = RnEnv { rnOpTable   :: !OpTable,
+                           rnNameTable :: !NameTable }
 
 type Renaming a = ReaderT RenamingEnv (Either (SrcSpan,Doc)) a
 
@@ -72,17 +72,18 @@ lookupFixity op = do
     Nothing  -> return (Prec 100, L)
 
 isAssocLeft :: (Prec, Assoc) -> (Prec, Assoc) -> Bool
-isAssocLeft (k1, a1) (k2, a2)
-  | k1 >  k2 = True
-  | k1 == k2, L <- a1, L <- a2 = True
-  | otherwise = False
+isAssocLeft (k1, a1) (k2, a2) =
+  case compare k1 k2 of
+    LT -> False
+    EQ -> a1 == L && a2 == L
+    GT -> True
 
 isAssocRight :: (Prec, Assoc) -> (Prec, Assoc) -> Bool
-isAssocRight (k1, a1) (k2, a2)
-  | k1 <  k2 = True
-  | k1 == k2, R <- a1, R <- a2 = True
-  | otherwise = False
-
+isAssocRight (k1, a1) (k2, a2) =
+  case compare k1 k2 of
+    LT -> True
+    EQ -> a1 == R && a2 == R
+    GT -> False
 
 type LocalNames = M.Map NameBase Name
 

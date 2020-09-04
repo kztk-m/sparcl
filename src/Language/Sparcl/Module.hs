@@ -62,14 +62,14 @@ type MonadModule v m =
    Local KeyValue      (M.Map Name v) m)
 
 data ModuleInfo v = ModuleInfo {
-  miModuleName :: ModuleName,
-  miNameTable  :: NameTable,
-  miOpTable    :: OpTable,
-  miTypeTable  :: TypeTable,
-  miConTable   :: CTypeTable,
-  miSynTable   :: SynTable,
-  miValueTable :: M.Map Name v,
-  miHsFile     :: FilePath
+  miModuleName :: !ModuleName,
+  miNameTable  :: !NameTable,
+  miOpTable    :: !OpTable,
+  miTypeTable  :: !TypeTable,
+  miConTable   :: !CTypeTable,
+  miSynTable   :: !SynTable,
+  miValueTable :: !(M.Map Name v),
+  miHsFile     :: !FilePath
   }
 
 -- for caching.
@@ -474,7 +474,7 @@ searchModule mo = do
   fs <- liftIO $ mapM Dir.doesFileExist searchFiles
   case map fst $ filter snd $ zip searchFiles fs of
     fp:_ -> return fp
-    _    -> do
+    []   -> do
       vlevel <- ask (key @KeyDebugLevel)
       staticError $ text "Cannot find module:" <+> ppr mo <> reportSearchFiles vlevel searchFiles
   where
@@ -489,9 +489,9 @@ importNames mn ns m = do
   onames <- forM ns $ \(Loc loc n) ->
     case n of
       Bare bn -> return (Original mn bn (Bare bn))
-      _      -> staticError $ nest 2 $
-        vcat [ ppr loc ,
-               text "Qualified names in the import list:" <+> ppr n ]
+      _       -> staticError $ nest 2 $
+                 vcat [ ppr loc ,
+                        text "Qualified names in the import list:" <+> ppr n ]
 
   return $ restrictNames onames m
 
@@ -630,7 +630,7 @@ readModule fp interp = do
 
     newMod' <- case exports of
       Just es -> exportNames es newMod
-      _       -> return newMod
+      Nothing -> return newMod
 
     St.modify (M.insert currentModule newMod')
     return newMod'
@@ -687,7 +687,7 @@ interpModuleWork mo interp = do
   modTable <- St.get
   case M.lookup mo modTable of
     Just modData -> return modData
-    _            -> do
+    Nothing      -> do
       fp <- searchModule mo
       m <- readModule fp interp
       when (miModuleName m /= mo) $

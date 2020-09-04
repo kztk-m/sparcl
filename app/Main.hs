@@ -4,10 +4,13 @@ import           Language.Sparcl.REPL  (VerbosityLevel, startREPL)
 import           System.Console.GetOpt
 import           System.Environment
 
-data OptConf = OptConf { optSearchPath     :: Maybe [FilePath],
-                         optInputFile      :: Maybe FilePath,
-                         optVerbosityLevel :: VerbosityLevel,
-                         optHelpMode       :: Bool }
+import           Data.Maybe            (fromMaybe)
+import           Text.Read             (readMaybe)
+
+data OptConf = OptConf { optSearchPath     :: !(Maybe [FilePath]),
+                         optInputFile      :: !(Maybe FilePath),
+                         optVerbosityLevel :: !VerbosityLevel,
+                         optHelpMode       :: !Bool }
 
 initOptConf :: OptConf
 initOptConf = OptConf { optSearchPath = Nothing,
@@ -21,7 +24,7 @@ options =
     Option ['h'] ["help"]      (NoArg optH) "Show this help message."
   ]
   where
-    optV m c = c { optVerbosityLevel = maybe 1 read m }
+    optV m c = c { optVerbosityLevel = fromMaybe 1 (readMaybe =<< m) }
     optH c = c { optHelpMode = True }
 
 helpMessage :: IO ()

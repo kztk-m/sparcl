@@ -4,7 +4,7 @@ import           Control.DeepSeq
 import           Language.Sparcl.Pretty as D
 
 
-data NameBase = User   String
+data NameBase = User   !String
               | System !SystemName
               deriving (Eq, Ord, Show)
 
@@ -16,7 +16,7 @@ instance Pretty NameBase where
   ppr (User n)   = text n
   ppr (System s) = ppr s
 
-data SystemName = NTuple Int | KArrow | NArrow | NBang | NRev
+data SystemName = NTuple !Int | KArrow | NArrow | NBang | NRev
   deriving (Eq, Ord, Show)
 
 instance Pretty SystemName where
@@ -28,16 +28,16 @@ instance Pretty SystemName where
 
 
 data SurfaceName
-  = Qual ModuleName NameBase
-  | Bare              NameBase
-  | BuiltIn           Name     -- for built-in things
+  = Qual !ModuleName !NameBase
+  | Bare             !NameBase
+  | BuiltIn          !Name     -- for built-in things
   deriving (Eq, Ord, Show)
 
 data Name
-  = Local     NameBase
-  | Original  ModuleName NameBase SurfaceName
-  | Alpha     !Int NameBase
-  | Generated !Int Phase
+  = Local     !NameBase
+  | Original  !ModuleName !NameBase !SurfaceName
+  | Alpha     !Int !NameBase
+  | Generated !Int !Phase
   deriving Show
 
 data Phase = Desugaring | CodeGen deriving (Eq, Show, Ord)

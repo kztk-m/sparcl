@@ -48,18 +48,18 @@ import           Language.Sparcl.Value
 -- import Data.Coerce
 
 data Conf =
-  Conf { confSearchPath :: [FilePath],
-         confLoadPath   :: FilePath,
-         confCurrentDir :: FilePath,
+  Conf { confSearchPath :: ![FilePath],
+         confLoadPath   :: !FilePath,
+         confCurrentDir :: !FilePath,
          confVerbosity  :: !Int,
-         confLastLoad   :: Maybe FilePath,
-         confTC         :: TypingContext,
-         confNameTable  :: IORef NameTable,
-         confOpTable    :: IORef OpTable,
-         confTypeTable  :: IORef TypeTable,
-         confConTable   :: IORef CTypeTable,
-         confSynTable   :: IORef SynTable,
-         confValueTable :: IORef ValueTable
+         confLastLoad   :: !(Maybe FilePath),
+         confTC         :: !TypingContext,
+         confNameTable  :: !(IORef NameTable),
+         confOpTable    :: !(IORef OpTable),
+         confTypeTable  :: !(IORef TypeTable),
+         confConTable   :: !(IORef CTypeTable),
+         confSynTable   :: !(IORef SynTable),
+         confValueTable :: !(IORef ValueTable)
        }
 
 -- To avoid orphan instances

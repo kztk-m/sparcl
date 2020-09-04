@@ -13,10 +13,10 @@ import           Language.Sparcl.Name
 
 import           Control.Monad.Fail
 
-data Value = VCon Name [Value]
-           | VLit Literal
-           | VFun (Value -> Eval Value)
-           | VRes (Heap -> Eval Value) (Value -> Eval Heap)
+data Value = VCon !Name ![Value]
+           | VLit !Literal
+           | VFun !(Value -> Eval Value)
+           | VRes !(Heap -> Eval Value) !(Value -> Eval Heap)
 
 newtype Eval a = MkEval (Reader Int a) deriving (Functor, Applicative, Monad, MonadReader Int, MonadFix)
 

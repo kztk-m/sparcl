@@ -6,17 +6,14 @@ import qualified Text.PrettyPrint.ANSI.Leijen as D
 import           Control.DeepSeq
 
 data Literal
-  = LitInt      Int
-  | LitDouble   Double
-  | LitChar     Char
-  | LitRational Rational
+  = LitInt      !Int
+  | LitDouble   !Double
+  | LitChar     !Char
+  | LitRational !Rational
   deriving Show
 
 instance NFData Literal where
-  rnf (LitInt i)      = rnf i
-  rnf (LitDouble d)   = rnf d
-  rnf (LitChar c)     = rnf c
-  rnf (LitRational q) = rnf q
+  rnf s               = seq s ()
 
 instance Pretty Literal where
   ppr (LitInt i)      = D.int i
