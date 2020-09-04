@@ -451,7 +451,7 @@ fixityDecl = do
 opExpr :: Monad m => P m (LExp 'Parsing)
 opExpr =
   foldl (\a f -> f a)  <$>
-       appExpr <*> P.many ((\o e2 e1 -> lop o e1 e2) <$> (qop <* sp) <*> expr)
+       appExpr <*> P.many ((\o e2 e1 -> lop o e1 e2) <$> (qop <* sp) <*> appExpr)
   where
     lop o e1 e2 = Loc (location e1 <> location e2) $ Op o e1 e2
 
