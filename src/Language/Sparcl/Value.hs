@@ -86,6 +86,12 @@ evalTest a = return $ runEval a
 type Addr = Int
 type Heap = M.Map Addr Value
 
+pprHeap :: Heap -> Doc
+pprHeap heap =
+  D.encloseSep (D.text "{") (D.text "}") (D.comma D.<> D.space) $
+    [ ppr k D.<+> D.text "=" D.<+> ppr v
+      | (k, v) <- M.toList heap ]
+
 newAddr :: (Addr -> Eval a) -> Eval a
 newAddr f = do
   i <- ask
@@ -99,7 +105,7 @@ newAddrs n f = do
 
 lookupHeap :: Addr -> Heap -> Eval Value
 lookupHeap n heap = case M.lookup n heap of
-  Nothing -> rtError $ D.text "Undefined addr"
+  Nothing -> rtError $ D.text "Undefined addr" D.<+> D.int n D.<+> D.text "in" D.<+> pprHeap heap
   Just v  -> return v
 
 extendHeap :: Addr -> Value -> Heap -> Heap
