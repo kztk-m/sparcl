@@ -1,9 +1,12 @@
 .stack-work/
 .hlint.yaml 
+.hie
 *.prof
 *.profiterole.html
 *.profiterole.txt
-stack.yaml.lock
+*.yaml.lock
+stan.html
+sparcl-*.zip
 t.out
 .sparcl
 *~
