@@ -201,8 +201,6 @@ instance Has KeyTC TypingContext REPL where
 instance Local KeyTC TypingContext REPL where
   local _ f = Rd.local (\d -> d { confTC = f (confTC d) } )
 
-
--- Verbosity is not implemented yet.
 type VerbosityLevel = Int
 
 initConf :: IO Conf
@@ -321,7 +319,7 @@ commandSpec = [
   NoArgCommand  ":quit"    (return ())  (D.text "Quit REPL."),
   StringCommand ":load"      procLoad     "FILEPATH"  (D.text "Load a program."),
   NoArgCommand  ":reload"    procReload   (D.text "Reload the last program."),
---  StringCommand ":verbosity" propVerbosity "[0-3]" (D.text "Change the current verbosity."),
+  StringCommand ":verbosity" procVerbosity "[0-3]" (D.text "Change the current verbosity."),
   NoArgCommand  ":help"      procHelp     (D.text "Show this help."),
   StringCommand ":type"      procType     "EXP" (D.text "Print the expression's type.")
   ]
@@ -330,6 +328,15 @@ procHelp :: REPL ()
 procHelp = do
   liftIO $ print $ commandUsage commandSpec
   waitCommand
+
+procVerbosity :: String -> REPL ()
+procVerbosity vlStr =
+  case reads vlStr of
+    [ (n, "") ] ->
+      local (key @KeyDebugLevel) (const $ max n 0) $ waitCommand
+    _ -> do
+      liftIO $ putStrLn "Verbosity level should an integer"
+      waitCommand
 
 checkError :: (MonadCatch m, MonadIO m) => m a -> m a -> m a
 checkError m f =
