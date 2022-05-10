@@ -116,6 +116,14 @@ litTy (LitChar _)     = return $ TyCon nameTyChar []
 litTy (LitDouble _)   = return $ TyCon nameTyDouble []
 litTy (LitRational _) = return $ TyCon nameTyRational []
 
+hasPRev :: LPat 'Renaming -> Bool
+hasPRev (Loc _ p) = go p
+  where
+    go :: Pat 'Renaming -> Bool
+    go (PCon _ ps) = any hasPRev ps
+    go (PREV _)    = True
+    go _           = False
+
 checkPatsTyK :: MonadTypeCheck m =>
   [LPat 'Renaming] -> [Multiplication] -> [MonoTy] -> m a ->
   m (a, [LPat 'TypeCheck], [(Name,MonoTy,Multiplication)])
@@ -571,6 +579,7 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
       retTy <- newMetaTy
 
       ((e', umap), pats', bind) <- checkPatsTyK pats qs' ts $ do
+        when (any hasPRev pats) $ void $ ensureRevTy retTy
         checkTy e retTy
 
       let xqs = map (\(x,_,q) -> (x,q)) bind
@@ -599,6 +608,7 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
       (e1', umap1) <- checkTyM e1 ty1 qPat'
 
       ((e2', umap2), ~[p'], bind) <- checkPatsTyK [p] [qPat'] [ty1] $ do
+        when (hasPRev p) $ void $ ensureRevTy expectedTy
         checkTy e2 expectedTy
 
       let xqs = map (\(x,_,q) -> (x,q)) bind
@@ -883,8 +893,9 @@ checkAltsTy alts patTy q bodyTy =
       -- (pat', bind) <- checkPatTy pat q patTy
       -- (c', umap)   <- withVars [ (n,t) | (n,t,_) <- bind ] $ checkClauseTy c bodyTy
 
-      ~((c', umap), [pat'], bind) <- checkPatsTyK [pat] [q] [patTy] $
-        checkClauseTy c bodyTy
+      ~((c', umap), [pat'], bind) <- checkPatsTyK [pat] [q] [patTy] $ do
+          when (hasPRev pat) $ void $ ensureRevTy bodyTy
+          checkClauseTy c bodyTy
 
       let xqs = map (\(x,_,qq) -> (x,qq)) bind
       constrainVars xqs umap
@@ -1075,8 +1086,9 @@ inferMutual isTopLevel decls = do
         -- (ps', bind) <- checkPatsTy ps muls tys
         -- (c', umap) <- withVars [ (n,t) | (n,t,_) <- bind ] $ checkClauseTy c retTy
 
-        ((c', umap), ps', bind) <- checkPatsTyK ps muls tys $
-          checkClauseTy c retTy
+        ((c', umap), ps', bind) <- checkPatsTyK ps muls tys $ do
+            when (any hasPRev ps) $ void $ ensureRevTy retTy
+            checkClauseTy c retTy
 
         tryUnify (foldr (uncurry tyarr) retTy $ zip qs tys) expectedTy
 
