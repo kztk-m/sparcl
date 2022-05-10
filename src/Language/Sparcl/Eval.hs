@@ -12,6 +12,11 @@ import           Data.Maybe                  (fromMaybe)
 
 -- import qualified Control.Monad.Fail as Fail
 
+-- import Control.Monad.State
+
+-- import qualified Control.Monad.Fail as Fail
+import           Control.Monad.Reader        (MonadReader (local), ask)
+-- import           Debug.Trace                 (trace)
 import           Language.Sparcl.Pretty      hiding ((<$>))
 
 -- lookupEnvR :: QName -> Env -> Eval Value
@@ -40,7 +45,7 @@ evalU env expr = case expr of
         v2 <- evalU env e2
         f v2
       _ ->
-        rtError $ text $ "the first component of application must be a function." ++ show (ppr v1)
+        rtError $ text "the first component of application must be a function, but we got " <> ppr v1 <> text " from " <> ppr e1
   Abs n e ->
     return $ VFun (\v -> evalU (extendEnv n v env) e)
 
@@ -109,8 +114,9 @@ evalU env expr = case expr of
                              VCon q [] | q == conTrue -> return True
                              _                        -> return False
                      return (p, e, ch')) pes
-    return $ VRes (\hp -> evalCaseF env hp f0 pes')
-                  (\v  -> evalCaseB env v b0 pes')
+    lvl <- ask
+    return $ VRes (\hp -> local (const lvl) $ evalCaseF env hp f0 pes')
+                  (\v  -> local (const lvl) $ evalCaseB env v b0 pes')
 
 
   RPin e1 e2 -> do
@@ -173,7 +179,7 @@ evalCaseF env hp f0 alts = do
       -- vs <- mapM (\c -> c (VBang res)) checker
       v <- ch res
       vs <- mapM (\c -> c res) checker
-      !() <- unless (v && not (or vs)) $
+      () <- unless (v && not (or vs)) $
                rtError (text "Assertion failed (fwd)")
       return res
 
@@ -181,7 +187,7 @@ evalCaseF env hp f0 alts = do
 evalCaseB :: Env -> Value -> (Value -> Eval Heap) -> [ (Pat Name, Exp Name, Value -> Eval Bool) ] -> Eval Heap
 evalCaseB env vres b0 alts = do
   (v, hp) <- go [] alts
-  hp' <- b0 v
+  hp' <- {- trace (show $ text "hp = " <> pprHeap hp <> comma <+> text "v = " <> ppr v) $ -} b0 v
   return $ unionHeap hp hp'
   where
     mkAssert :: Pat Name -> Value -> Bool
@@ -199,9 +205,9 @@ evalCaseB env vres b0 alts = do
           newAddrs (length xs) $ \as -> do
             let binds' = zipWith (\x a ->
                                     (x, VRes (lookupHeap a) (return . singletonHeap a))) xs as
-            VRes _ b <- evalU (extendsEnv binds' env) e
-            hpBr <- b vres
-            v0 <- fillPat p <$> zipWithM (\x a -> (x,) <$> lookupHeap a hpBr) xs as
+            VRes _ b <- {- trace ("Evaluating bodies") $ -} evalU (extendsEnv binds' env) e
+            hpBr <- {- trace ("vres = " ++ show (ppr vres)) $ -} b vres
+            v0 <- {- trace ("hpBr = " ++ show (pprHeap hpBr)) $ -} fillPat p <$> zipWithM (\x a -> (x,) <$> lookupHeap a hpBr) xs as
             unless (any ($ v0) checker) $
               rtError $ text "Assertion failed (bwd)"
             return (v0, removesHeap as hpBr)
