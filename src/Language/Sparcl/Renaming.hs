@@ -251,9 +251,11 @@ rearrangeOp loc level localnames op exp1 exp2 = do
                (e12', fv1) <- go l1 e1 op1' e2'
                return (opExp l2 op2' e12' e3', S.union fv1 fv2)
            | isAssocRight (k1, a1) (k2, a2) -> do
-               (e1',  fv1) <- renameExp level localnames e1
-               (e23', fv2) <- go l2 e2 op2' e3'
-               return (opExp l1 op1' e1' e23', S.union fv1 fv2)
+               (e2', _) <- renameExp level localnames e2
+               go l1 e1 op1' (opExp l2 op2' e2' e3')
+              --  (e1',  fv1) <- renameExp level localnames e1
+              --  (e23', fv2) <- go l2 e2 op2' e3'
+              --  return (opExp l1 op1' e1' e23', S.union fv1 fv2)
            | otherwise ->
                throwError (loc,
                             nest 2 $
