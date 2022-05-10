@@ -547,6 +547,7 @@ readModule fp interp = do
   Module currentModule exports imports decls <- either (staticError . text) return $ parseModule fp s
 
   debugPrint 1 $ text "Parsing Ok."
+  debugPrint 2 $ ppr decls
 
   ms <- forM imports $ \(Import m is) -> do
     md <- interpModuleWork m interp
@@ -578,6 +579,7 @@ readModule fp interp = do
     -- debugPrint $ show (D.text "under ty env" D.<+> pprMap tyEnv)
 
     debugPrint 1 $ text "Renaming Ok."
+    debugPrint 2 $ ppr renamedDecls
 
     tyEnv  <- ask (key @KeyType)
     conEnv <- ask (key @KeyCon)
