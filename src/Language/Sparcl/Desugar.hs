@@ -60,11 +60,7 @@ desugarExp (Loc _ expr) = go expr
     go (S.App e1 e2)  =
       mkApp <$> desugarExp e1 <*> desugarExp e2
 
-    go (S.Abs [] e) = desugarExp e
-    go (S.Abs (p:ps) e) = withNewName $ \n -> do
-      r <- desugarAlts [(p, S.Clause (noLoc $ S.Abs ps e) (S.HDecls () []) Nothing)]
-      return $ mkAbs n (makeCase (C.Var n) r)
-
+    go (S.Abs ps e) = desugarRHS [(ps, S.Clause e (S.HDecls () []) Nothing)]
 
     go (S.Con (c, ty)) = do
       ty' <- zonkType ty
