@@ -72,14 +72,13 @@ testMonoTy t = Just t
 
 {- |
 
-We have a specfical treatment for constructor types, as this the only point
-we introduce existential variables.
-
-In it's use there is not difference between universal and existential variables---they are treated as
-ordinary types.
+We have a special treatment for constructor types in patterns, as they are the only constructs that
+introduce existential variables in pattern matching. Notice that we do not need
+such special treatment for their uses in expressions, where we need not distinguish
+existential variables from universal ones.
 
 In pattern matching, their behaviors are different. Universal variables are replaced with
-unification variables, but existential varibles are replaced with skolemized variables.
+unification variables, but existential variables are replaced with skolemized variables.
 
 Skolemized variables cannot escape in the resulting type, and use map.
 
@@ -134,7 +133,7 @@ instance Ord TyVar where
 
 instance Pretty TyVar where
   ppr (BoundTv n)       = ppr n
-  ppr (SkolemTv n i lv) = ppr n D.<> D.text "@" D.<> D.int i D.<> ppr lv
+  ppr (SkolemTv n i lv) = ppr n D.<> D.text "_" D.<> D.int i D.<> D.text "@" D.<> ppr lv
 
 
 instance FreeTyVars Ty TyVar where
@@ -246,7 +245,7 @@ type TyRef = IORef (Maybe MonoTy)
 instance Pretty MetaTyVar where
   ppr (MetaTyVar i _ r ic) =
     let l = unsafePerformIO (readIORef r)
-    in D.text $ "_" ++ show i ++ "[" ++ show l ++ "|" ++ show ic ++ "]"
+    in D.text $ "_" ++ show i ++ "[" ++ show l ++ "]@" ++ show ic
 
 instance Show MetaTyVar where
   show = prettyShow

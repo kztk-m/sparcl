@@ -823,7 +823,7 @@ unifyUnboundMetaTyVar mv ty2 = do
 
 -- Assumption: ty is already zonked.
 substituteUnif :: MonadTypeCheck m => IcLevel -> MetaTyVar -> MonoTy -> m ()
--- TODO: Implement escape checking (substituting variables more than the current IC level should be desabled
+-- TODO: Implement escape checking (substituting variables more than the current IC level should be disabled
 substituteUnif cIcLevel mv ty
   | metaIcLevel mv < cIcLevel =
     -- keep the constraint to hope that it will be resolved by `given` constraints

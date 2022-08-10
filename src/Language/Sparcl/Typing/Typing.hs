@@ -128,15 +128,16 @@ checkPatsTyK :: MonadTypeCheck m =>
   [LPat 'Renaming] -> [Multiplication] -> [MonoTy] -> m a ->
   m (a, [LPat 'TypeCheck], [(Name,MonoTy,Multiplication)])
 checkPatsTyK ps ms ts comp = do
-  (cs, ps', bind) <- checkPatsTy ps ms ts
+  (req, cs, ps', bind) <- checkPatsTy ps ms ts
   readConstraint >>= \r -> debugPrint 4 $ red $ "CC:" <+> ppr r
   res <- withVars [ (n,t) | (n,t,_) <- bind ] $
-    if null cs then do
-      comp
-    else do
+    if req then do
+      -- GADT constructor is used so we need to increase IC-level to check the body.
       (a, ics) <- gatherConstraint $ pushIcLevel comp
       addImpConstraint cs ics
       return a
+    else do
+      comp
   readConstraint >>= \r -> debugPrint 4 $ red $ "CC:" <+> ppr r
   return (res, ps', bind)
 
@@ -145,17 +146,17 @@ checkPatsTyK ps ms ts comp = do
 
 checkPatsTy :: MonadTypeCheck m =>
   [LPat 'Renaming] -> [Multiplication] -> [MonoTy] ->
-  m ([TyConstraint], [LPat 'TypeCheck], [(Name,MonoTy,Multiplication)])
-checkPatsTy [] [] [] = return ([], [], [])
+  m (Bool, [TyConstraint], [LPat 'TypeCheck], [(Name,MonoTy,Multiplication)])
+checkPatsTy [] [] [] = return (False, [], [], [])
 checkPatsTy (p:ps) (m:ms) (t:ts) = do
-  (cs_ps, ps', bind)  <- checkPatsTy ps ms ts
-  (cs_p,  p',  pbind) <- checkPatTy p m t
-  return (cs_p ++ cs_ps, p':ps', pbind ++ bind)
+  (req_ps, cs_ps, ps', bind)  <- checkPatsTy ps ms ts
+  (req_p,  cs_p,  p',  pbind) <- checkPatTy p m t
+  return (req_p || req_ps, cs_p ++ cs_ps, p':ps', pbind ++ bind)
 checkPatsTy _ _ _ = error "Cannot happen."
 
 checkPatTy :: MonadTypeCheck m =>
               LPat 'Renaming -> Multiplication -> MonoTy ->
-              m ([TyConstraint], LPat 'TypeCheck, [(Name, MonoTy, Multiplication)])
+              m (Bool, [TyConstraint], LPat 'TypeCheck, [(Name, MonoTy, Multiplication)])
 checkPatTy = checkPatTyWork False
 
 checkGADTConstructorInRev :: MonadTypeCheck m => SrcSpan -> Name -> m ()
@@ -173,13 +174,13 @@ checkPatTyWork ::
   MonadTypeCheck m =>
   Bool ->
   LPat 'Renaming -> Multiplication -> MonoTy ->
-  m ([TyConstraint], LPat 'TypeCheck, [(Name, MonoTy, Multiplication)])
+  m (Bool, [TyConstraint], LPat 'TypeCheck, [(Name, MonoTy, Multiplication)])
 checkPatTyWork isUnderRev (Loc loc pat) pmult patTy = do
-  (cs, pat', bind) <- atLoc loc $ go pat
-  return (cs, Loc loc pat', bind)
+  (req, cs, pat', bind) <- atLoc loc $ go pat
+  return (req, cs, Loc loc pat', bind)
   where
     go (PVar x) =
-      return ([], PVar (x, patTy), [(x,patTy, pmult)])
+      return (False, [], PVar (x, patTy), [(x,patTy, pmult)])
 
     go (PCon c ps) = do
       ConTy xs ys q_ args_ ret_ <- askConType loc c
@@ -203,8 +204,8 @@ checkPatTyWork isUnderRev (Loc loc pat) pmult patTy = do
 
       tryUnify ret patTy
 
-      (cs, ps', bind) <-
-        foldr (\(csj,pj',bindj) (cs, ps', bind) -> (csj++cs, pj':ps', bindj ++ bind)) ([],[],[]) <$>
+      (req, cs, ps', bind) <-
+        foldr (\(reqj, csj,pj',bindj) (req, cs, ps', bind) -> (reqj || req, csj++cs, pj':ps', bindj ++ bind)) (False, [],[],[]) <$>
         zipWithM (\pj (tj, mj) -> do
                     m <- ty2mult mj
                     checkPatTyWork isUnderRev pj (lub m pmult) tj)
@@ -212,7 +213,7 @@ checkPatTyWork isUnderRev (Loc loc pat) pmult patTy = do
                  args
 
       let tyOfC = foldr (\(t,m) r -> TyCon nameTyArr [m,t,r]) ret args
-      return (q++cs, PCon (c, tyOfC) ps', bind)
+      return (not (null q) || not (null ys) || req, q++cs, PCon (c, tyOfC) ps', bind)
 
 
 
@@ -222,21 +223,21 @@ checkPatTyWork isUnderRev (Loc loc pat) pmult patTy = do
         reportError $ Other $ text "rev patterns cannot be nested."
 
       ty <- ensureRevTy patTy
-      (cs, p', bind) <- checkPatTyWork True p pmult ty
+      (req, cs, p', bind) <- checkPatTyWork True p pmult ty
       let bind' = map (\(x,t,m) -> (x, revTy t,m)) bind
 
       forM_ bind' $ \(_, _, m) ->
         -- TODO: Add good error messages.
         addConstraint $ msubMult m one
 
-      return (cs, PREV p', bind')
+      return (req, cs, PREV p', bind')
 
     go (PWild x) = do -- this is only possible when pmult is omega
       -- tryUnify pmult (TyMult Omega)
-      ~(cs, Loc _ (PVar x'), _bind) <- checkPatTyWork isUnderRev (noLoc $ PVar x) omega patTy
+      ~(req, cs, Loc _ (PVar x'), _bind) <- checkPatTyWork isUnderRev (noLoc $ PVar x) omega patTy
       -- cs must be []
       addConstraint $ msubMult omega pmult
-      return (cs, PWild x', [] )
+      return (req, cs, PWild x', [] )
 
 
 solveInferredConstraint :: MonadTypeCheck m => Bool -> [MetaTyVar] -> [TyConstraint] -> [InferredConstraint] -> m [TyConstraint]
