@@ -31,7 +31,10 @@ import           Control.Arrow                         (left)
 full :: P m a -> P m a
 full p = sp *> p <* P.eof
 
-#if MIN_VERSION_megaparsec(7,0,0)
+#if MIN_VERSION_megaparsec(9,0,0)
+pprError :: (P.Stream s, P.VisualStream s, P.TraversableStream s, P.ShowErrorComponent e) => P.ParseErrorBundle s e -> String
+pprError = P.errorBundlePretty
+#elif MIN_VERSION_megaparsec(7,0,0)
 pprError :: (P.Stream s, P.ShowErrorComponent e) => P.ParseErrorBundle s e -> String
 pprError = P.errorBundlePretty
 #else
