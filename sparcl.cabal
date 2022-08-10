@@ -6,14 +6,13 @@ synopsis:       A language for partial reversible computation with linear types
 description:    
 author:         Kazutaka Matsuda
 maintainer:     kztk@ecei.tohoku.ac.jp
-copyright:      2018 Kazutaka Matsuda
+copyright:      2018-2020, 2022 Kazutaka Matsuda
 license:        BSD-3-Clause
 license-file:   LICENSE
 build-type:     Simple
 
 extra-source-files:
     README.md
---    ChangeLog.md
 
 common deps
   build-depends:
@@ -21,20 +20,19 @@ common deps
 --      ghc  >=8.4 && <8.8,
 --      hint >= 0.8 && <1,
       exceptions >= 0.10 && <0.11, 
-      time, 
-      template-haskell, 
-      mtl,
---      megaparsec >= 6.0 && <7, 
-      megaparsec >= 6.0 && <9,
-      containers, 
-      directory, 
-      filepath, 
-      array, 
-      haskeline, 
-      deepseq,
+      time ^>= 1.8 || ^>= 1.9, 
+      template-haskell ^>= 2.13 || ^>= 2.14 || ^>= 2.15 || ^>= 2.16 || ^>= 2.18,  
+      mtl ^>= 2.2,
+      megaparsec >= 6.0 && <10,
+      containers ^>= 0.6 || ^>= 0.5, 
+      directory ^>= 1.3, 
+      filepath ^>= 1.4, 
+      array ^>= 0.5, 
+      haskeline >= 0.7.5, 
+      deepseq ^>= 1.4,
       clock >= 0.6 && < 0.9, 
-      fail, 
-      ansi-wl-pprint
+      fail ^>= 4.9, 
+      ansi-wl-pprint ^>= 0.6
 
   ghc-options: 
       -Wall 
