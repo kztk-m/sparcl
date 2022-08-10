@@ -158,6 +158,17 @@ checkPatTy :: MonadTypeCheck m =>
               m ([TyConstraint], LPat 'TypeCheck, [(Name, MonoTy, Multiplication)])
 checkPatTy = checkPatTyWork False
 
+checkGADTConstructorInRev :: MonadTypeCheck m => SrcSpan -> Name -> m ()
+checkGADTConstructorInRev loc c = do
+  ConTy _ ys constr args _ <- askConType loc c
+  unless (null ys && null constr && all (isMultiplicityOne . snd) args)  $
+        -- FIXME: is it too conservative? Can we allow constructors that comes with existential quantifications?
+        reportError $ Other $ hsep [ "A GADT-style constructor", hcat [text "'", ppr c, text "'"], "is not allowed in the reversible context." ]
+  where
+    isMultiplicityOne (TyMult One) = True
+    isMultiplicityOne _            = False
+
+
 checkPatTyWork ::
   MonadTypeCheck m =>
   Bool ->
@@ -172,8 +183,13 @@ checkPatTyWork isUnderRev (Loc loc pat) pmult patTy = do
 
     go (PCon c ps) = do
       ConTy xs ys q_ args_ ret_ <- askConType loc c
+
+      -- Reject GADT-style constructors in rev.
+      when isUnderRev $ checkGADTConstructorInRev loc c
+
       uvars <- mapM (const newMetaTyVar) xs
       evars <- mapM newSkolemTyVar ys
+
 
       let tbl = zip xs (map TyMetaV uvars) ++ zip ys (map TyVar evars)
       let q     = map (substTyC tbl) q_
@@ -702,6 +718,10 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
 
     go (RCon c) = do
       tyOfC_ <- instantiate =<< askType loc c
+
+      -- Reject GADT-style constructors
+      checkGADTConstructorInRev loc c
+
       let tyOfC = addRev tyOfC_
       tryUnify tyOfC expectedTy
       return (RCon (c, tyOfC), M.empty)
