@@ -1,6 +1,8 @@
 {-# OPTIONS_GHC -fprint-potential-instances #-}
-{-# LANGUAGE TemplateHaskell  #-}
-{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE CPP                #-}
+{-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE TemplateHaskell    #-}
+{-# LANGUAGE TypeApplications   #-}
 
 module Language.Sparcl.REPL where
 
@@ -64,10 +66,16 @@ data Conf =
 
 -- To avoid orphan instances
 newtype MyInputT m a = MyInputT { runMyInputT :: HL.InputT m a }
-  deriving (Functor, Applicative, Monad, MonadIO, HL.MonadException, MonadTrans)
+  deriving (Functor, Applicative, Monad, MonadIO, MonadTrans)
+#if MIN_VERSION_haskeline(0,8,0)
+  deriving (MonadThrow, MonadCatch, MonadMask)
+#else
+  deriving HL.MonadException
+#endif
 
-instance HL.MonadException m => MonadThrow (MyInputT m) where
-  throwM = HL.throwIO
+#if !MIN_VERSION_haskeline(0,8,0)
+instance MonadThrow m => MonadThrow (MyInputT m) where
+  throwM = throwM
 
 instance HL.MonadException m => MonadCatch (MyInputT m) where
   catch = HL.catch
@@ -98,6 +106,8 @@ instance (HL.MonadException m) => MonadMask (MyInputT m) where
 
       generalBracket' :: IO a -> (a -> ExitCase b -> IO c) -> (a -> IO b) -> IO (b, c)
       generalBracket' = generalBracket
+#endif
+
 
 
 -- newtype REPL a = REPL { unREPL :: Rd.ReaderT Conf (Hint.InterpreterT (MyInputT IO)) a }
