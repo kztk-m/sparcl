@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP             #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
@@ -55,11 +56,32 @@ instance HsName HName where
 
 instance MiniHaskellPat HName TH.Pat where
   pvar n = TH.VarP (hLhsName n)
+
+#if MIN_VERSION_template_haskell(2,18,0)
+  pcon n = TH.ConP (hRhsName n) []
+#else
   pcon n = TH.ConP (hRhsName n)
+#endif
+
   ptuple = TH.TupP
 
 instance MiniHaskellConstraint HName TH.Type TH.Pred where
   tyeq t1 t2 = TH.EqualityT `TH.AppT` t1 `TH.AppT` t2
+
+plainTV =
+#if MIN_VERSION_template_haskell(2,18,0)
+    \n -> TH.PlainTV n ()
+#else
+    TH.PlainTV
+#endif
+
+plainTVSpecific =
+#if MIN_VERSION_template_haskell(2,18,0)
+    \n -> TH.PlainTV n TH.SpecifiedSpec
+#else
+    TH.PlainTV
+#endif
+
 
 instance MiniHaskellExp TH.Q HName TH.Pat TH.Exp TH.Dec TH.Stmt TH.Type TH.Pred where
   var n = TH.varE (hRhsName n)
@@ -86,22 +108,32 @@ instance MiniHaskellExp TH.Q HName TH.Pat TH.Exp TH.Dec TH.Stmt TH.Type TH.Pred 
   sigd n t = return $ TH.SigD (hLhsName n) t
 
   datad n tvs cs = return $
-    TH.DataD [] (hLhsName n) [TH.PlainTV $ hLhsName tv | tv <- tvs] Nothing
+    TH.DataD [] (hLhsName n) [plainTV $ hLhsName tv | tv <- tvs] Nothing
     [ if null ns && null q then
         TH.NormalC (hLhsName c) [ (TH.Bang TH.NoSourceUnpackedness TH.SourceStrict, t) | t <- ts]
       else
-        TH.ForallC (map (TH.PlainTV . hLhsName) ns) q $
+        TH.ForallC (map (plainTVSpecific . hLhsName) ns) q $
         TH.NormalC (hLhsName c) [ (TH.Bang TH.NoSourceUnpackedness TH.SourceStrict, t) | t <- ts]
     | (c,ns, q, ts) <- cs ]
     []
   typed n tvs t = return $
-    TH.TySynD (hLhsName n) [TH.PlainTV $ hLhsName tv | tv <- tvs ] t
+    TH.TySynD (hLhsName n) [plainTV $ hLhsName tv | tv <- tvs ] t
 
 
   list = return . TH.ListE
-  tuple = return . TH.TupE
+  tuple =
+#if MIN_VERSION_template_haskell(2,16,0)
+    return . TH.TupE . fmap Just
+#else
+    return . TH.TupE
+#endif
 
-  do_ = return . TH.DoE
+  do_ =
+#if MIN_VERSION_template_haskell(2,18,0)
+    return . TH.DoE Nothing
+#else
+    return . TH.DoE
+#endif
 
   lets = return . TH.LetS
   nobinds = return . TH.NoBindS
@@ -116,7 +148,7 @@ instance MiniHaskellType HName TH.Type where
   tytuple ts = foldl TH.AppT (TH.TupleT (length ts)) ts
   tylist t   = TH.ListT `TH.AppT` t
   tyforall ns =
-    TH.ForallT [TH.PlainTV (hLhsName tv) | tv <- ns] []
+    TH.ForallT [plainTVSpecific (hLhsName tv) | tv <- ns] []
 
 -- ty2ty :: C.Ty -> TH.Type
 -- ty2ty (C.TyCon n ts)
