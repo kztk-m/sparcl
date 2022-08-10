@@ -87,7 +87,7 @@ Skolemized variables cannot escape in the resulting type, and use map.
 data ConTy = ConTy ![TyVar]        -- universal variables
                    ![TyVar]        -- existential variables
                    ![TyConstraint] -- constraints
-                   ![(Ty, Ty)]     -- constructor's arugument types (a pair of a type and a multipliticy)
+                   ![(Ty, Ty)]     -- constructor's argument types (a pair of a type and a multiplicity)
                    !Ty             -- constructor's return types
 
 instance Pretty ConTy where
@@ -121,14 +121,14 @@ data TyVar = BoundTv  !Name
   deriving Show
 
 instance Eq TyVar where
-  BoundTv  n   == BoundTv  m   = n == m
+  BoundTv  n   == BoundTv  m       = n == m
   SkolemTv _ i _ == SkolemTv _ j _ = i == j
-  _ == _ = False
+  _ == _                           = False
 
 instance Ord TyVar where
-  BoundTv n <= BoundTv m = n <= m
-  BoundTv _ <= _         = True
-  SkolemTv _ _ _ <= BoundTv _  = False
+  BoundTv n <= BoundTv m           = n <= m
+  BoundTv _ <= _                   = True
+  SkolemTv _ _ _ <= BoundTv _      = False
   SkolemTv _ i _ <= SkolemTv _ j _ = i <= j
 
 
