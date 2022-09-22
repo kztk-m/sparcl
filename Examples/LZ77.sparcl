@@ -1,0 +1,188 @@
+def (.) f g = \x -> f (g x)
+fixity . 90 right
+
+def ($) = \f x -> f x
+fixity $ 0 right
+
+sig fst : forall a b. (a, b) -> a
+def fst (x, _) = x
+
+sig snd : forall a b. (a, b) -> b
+def snd (_, x) = x
+
+sig invert : forall a b. (rev a -o rev b) -> rev b -o rev a
+def invert f = let (x, y) <- unlift f in lift y x
+
+sig fwd : forall a b. (rev a -o rev b) -> a -> b
+def fwd = fst . unlift
+
+sig bwd : forall a b. (rev a -o rev b) -> b -> a
+def bwd = snd . unlift
+
+sig const : (a # p -> a # q -> Bool) -> a -> rev a
+def const eq c =
+  lift (\() -> c)
+       (\c' -> let True <- eq c c' in ())
+       (rev ())
+
+sig delete : (a # p -> a # q -> Bool) -> a -> rev a -o rev ()
+def delete eq c = invert (\(rev ()) -> const eq c)
+
+sig and : Bool -> Bool -> Bool
+def and True True = True
+      | _    _    = False
+
+sig eqPair : (a # p -> a # q -> Bool) -> (b # s -> b # t -> Bool) -> (a, b) -> (a, b) -> Bool
+def eqPair eqA eqB (a1, b1) (a2, b2) =
+  case eqA a1 a2 of
+  | True -> eqB b1 b2
+  | False -> False
+  end
+
+type Symbol = Char
+data LZPair = Lit Symbol | Pair (Int, Int)
+
+sig isLit : LZPair -> Bool
+def isLit (Lit _) = True
+        | _       = False
+
+data List a = Cons a (List a) | Nil
+
+sig null : List a -> Bool
+def null Nil = True
+       | _   = False
+
+sig head : List a -> a
+def head (Cons x _) = x
+
+sig length : List a -> Int
+def length Nil        = 0
+         | (Cons _ t) = 1 + length t
+
+sig take : Int -> List a -> List a
+def take _ Nil        = Nil
+       | n (Cons h t) =
+         case eqInt n 0 of
+         | True -> Nil
+         | False -> Cons h (take (n-1) t)
+         end
+
+sig repeatTake : Int -> List a -> List a
+def repeatTake n l = goRepeatTake n l l
+  where
+    def goRepeatTake n l1 Nil        = goRepeatTake n l1 l1
+                   | n l1 (Cons h t) =
+                     case eqInt 0 n of
+                     | True -> Nil
+                     | False -> Cons h (goRepeatTake (n - 1) l1 t)
+                     end
+  end
+
+sig revTake : Int -> List a -> List a
+def revTake n l = goRevTake n l Nil
+  where
+    def goRevTake n Nil        acc = acc
+                | n (Cons h t) acc =
+                  case eqInt 0 n of
+                  | True -> acc
+                  | False -> goRevTake (n - 1) t (Cons h acc)
+                  end
+  end
+
+sig revApp : List a -> List a -> List a
+def revApp Nil        l = l
+         | (Cons h t) l = revApp t (Cons h l)
+
+sig eqList : (a # p -> a # q -> Bool) -> List a -> List a -> Bool
+def eqList eq Nil Nil = True
+         | eq (Cons h1 t1) (Cons h2 t2) =
+           case eq h1 h2 of
+           | True  -> eqList eq t1 t2
+           | False -> False
+           end
+         | eq _ _     = False
+
+data Maybe a = Nothing | Just a
+
+sig isNothing : Maybe a -> Bool
+def isNothing Nothing = True
+            | _       = False
+
+sig eqMaybe : (a # p -> a # q -> Bool) -> Maybe a -> Maybe a -> Bool
+def eqMaybe eq Nothing  Nothing  = True
+          | eq (Just x) (Just y) = eq x y
+          | eq _        _        = False
+
+sig winLength : Int
+def winLength = 2048
+
+sig lz77 : rev (List Symbol) -o rev (List LZPair)
+def lz77 = goLz77 Nil
+  where
+    def goLz77 window (rev Nil)   = rev Nil with null
+             | window (rev input) =
+      revdo Cons h t <- input;
+            pair     <- const eqMaybeIntPair $ maxMatch window (Cons h t);
+      in
+      case pair of
+      | rev Nothing ->
+        revdo h <- h;
+              lzRest <- goLz77 (take winLength (Cons h window)) t;
+        in
+        rev Cons (rev Lit h) lzRest
+        with isLit . head
+      | rev Just (d, l) ->
+        revdo l <- l;
+              (match, rest) <- split l (rev Cons h t);
+        in
+        revdo match <- match;
+              lzRest <- goLz77 (take winLength (revApp match window)) rest;
+        in
+        revdo p <- rev (d, l);
+              () <- delete (eqList eqChar) (getMatch window p) match;
+        in
+        rev Cons (rev Pair p) lzRest
+      end
+    def eqMaybeIntPair = eqMaybe (eqPair eqInt eqInt)
+  end
+
+sig maxMatch : List Symbol -> List Symbol -> Maybe (Int, Int)
+def maxMatch window input =
+  let (d, l) <- goMaxMatch (0, 0) Nil window input in
+  case eqInt 0 l of
+  | True  -> Nothing
+  | False -> Just (d, l)
+  end
+  where
+    def goMaxMatch bestMatch matchBuf Nil        input = bestMatch
+                 | bestMatch matchBuf (Cons h t) input =
+                   let matchBuf <- Cons h matchBuf in
+                   let newMatch <- updateMatch bestMatch matchBuf input in
+                   goMaxMatch newMatch matchBuf t input
+
+    def updateMatch (d, l) matchBuf input =
+      let newLength <- length (createMatch matchBuf matchBuf input) in
+      case ltInt l newLength of
+      | True -> (length matchBuf, newLength)
+      | False -> (d, l)
+      end
+
+    def createMatch matchBuf Nil          input        = createMatch matchBuf matchBuf input
+                  | matchBuf _            Nil          = Nil
+                  | matchBuf (Cons h1 t1) (Cons h2 t2) =
+                    case eqChar h1 h2 of
+                    | True -> Cons h1 (createMatch matchBuf t1 t2)
+                    | False -> Nil
+                    end
+  end
+
+sig getMatch : List Symbol -> (Int, Int) -> List Symbol
+def getMatch window (d, l) = repeatTake l (revTake d window)
+
+sig split : Int -> rev (List Symbol) -o rev (List Symbol, List Symbol)
+def split _ (rev Nil)      = rev (rev Nil, rev Nil) with \(x, y) -> and (null x) (null y)
+        | n (rev Cons h t) =
+          case eqInt 0 n of
+          | True -> rev (rev Nil, rev Cons h t)
+          | False -> let rev (hs, ts) <- split (n - 1) t in rev (rev Cons h hs, ts)
+          end
