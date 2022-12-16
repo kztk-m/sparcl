@@ -1,0 +1,114 @@
+{-
+An example taken from:
+
+    Torben Æ. Mogensen: Report on an Implementation of a
+    Semi-inverter. Ershov Memorial Conference 2006: 322-334
+
+-}
+
+data Bit = B0 | B1 
+data List a = Nil | Cons a (List a) 
+
+type LSB = List Bit 
+
+{-
+In Haskell, the function can be written as below.
+
+add :: Bit -> [Bit] -> [Bit] -> [Bit]
+add B0 as [] = as
+add B1 as [] = inc as
+add c (a:as) (b:bs) =
+   let (s,c') = add3 a b c
+   in s : add c' as bs
+
+add3 : Bit -> Bit -> Bit -> (Bit, Bit)
+add3 a b c = {- full adder -}
+-}
+
+sig inc : rev (List Bit) -o rev (List Bit) 
+def inc 
+   (rev Nil)       = rev Cons (rev B1) (rev Nil)
+       with \r -> case r of Cons B1 Nil -> True | _ -> False end 
+ | (rev Cons B0 x) = rev Cons (rev B1) x 
+       with \r -> case r of Cons B1 (Cons _ _) -> True | _ -> False end
+ | (rev Cons B1 x) = rev Cons (rev B0) (inc x) 
+       with \r -> case r of Cons B0 _ -> True | _ -> False end 
+
+sig liftBitList : List Bit -> rev (List Bit) 
+def liftBitList 
+    Nil = rev Nil 
+  | (Cons B0 xs) = rev Cons (rev B0) (liftBitList xs) 
+  | (Cons B1 xs) = rev Cons (rev B1) (liftBitList xs) 
+
+sig eqBitList : List Bit -> List Bit -> Bool 
+def eqBitList 
+    Nil Nil = True 
+  | (Cons B0 as) (Cons B0 bs) = eqBitList as bs 
+  | (Cons B1 as) (Cons B1 bs) = eqBitList as bs 
+  | _ _ = False 
+
+sig addBitU : Bit -> List Bit -> List Bit 
+def addBitU B0 as = as
+          | B1 as = fwd inc as
+
+-- Assumption: any sublist of as must be Nil if it represents 0 
+sig add : Bit -> rev (List Bit) -o List Bit -> rev (List Bit) 
+def add B0 as Nil = as 
+      | B1 as Nil = inc as 
+      | c (rev Nil) (Cons b bs) = liftBitList (addBitU c (Cons b bs))
+        -- this does not overlap with the second branch for any fixed c,
+        -- provided that Cons a as cannot represent 0 
+        with \r -> eqBitList r (addBitU c (Cons b bs))
+      | c (rev Cons a as) (Cons b bs) = 
+        -- NB: We need CPS here
+        let rev (s, r) <- add3k c a b (\c' -> add c' as bs) in 
+        rev Cons s r 
+
+sig isB0 : Bit -> Bool 
+def isB0 B0 = True 
+       | B1 = False 
+
+sig isB1 : Bit -> Bool 
+def isB1 B0 = False 
+       | B1 = True 
+
+sig fst : (a , b) -> a 
+def fst (a, b) = a 
+
+sig snd : (a, b) -> b
+def snd (a, b) = b 
+
+def (.) f g x = f (g x)
+
+sig add3k : Bit -> rev Bit -o Bit -> (Bit -> rev r) -o rev (Bit, r) 
+def add3k 
+    B0 (rev B0) B0 k = rev (rev B0 , k B0) with isB0 . fst 
+  | B0 (rev B1) B0 k = rev (rev B1 , k B0) with isB1 . fst 
+  | B0 (rev B0) B1 k = rev (rev B1 , k B0) with isB1 . fst 
+  | B0 (rev B1) B1 k = rev (rev B0 , k B1) with isB0 . fst
+  | B1 (rev B0) B0 k = rev (rev B1 , k B0) with isB1 . fst 
+  | B1 (rev B1) B0 k = rev (rev B0 , k B1) with isB0 . fst 
+  | B1 (rev B0) B1 k = rev (rev B0 , k B1) with isB0 . fst 
+  | B1 (rev B1) B1 k = rev (rev B1 , k B1) with isB1 . fst 
+
+def fwd h = case unlift h of
+            | (x, y) -> x
+            end
+
+def bwd h = case unlift h of
+            | (x, y) -> y
+            end
+
+def n0 = Nil 
+def n1 = fwd inc n0 
+def n2 = fwd inc n1 
+def n3 = fwd inc n2 
+def n4 = fwd inc n3 
+def n5 = fwd inc n4
+def n6 = fwd inc n5 
+def n7 = fwd inc n6
+
+def add43 = fwd (\as -> add B0 as n3) n4
+def sub73 = bwd (\as -> add B0 as n3) n7 
+
+def add5 as = add B0 as n5
