@@ -74,8 +74,8 @@ newtype MyInputT m a = MyInputT { runMyInputT :: HL.InputT m a }
 #endif
 
 #if !MIN_VERSION_haskeline(0,8,0)
-instance MonadThrow m => MonadThrow (MyInputT m) where
-  throwM = throwM
+instance HL.MonadException m => MonadThrow (MyInputT m) where
+  throwM = HL.throwIO
 
 instance HL.MonadException m => MonadCatch (MyInputT m) where
   catch = HL.catch
