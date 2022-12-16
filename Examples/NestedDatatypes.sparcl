@@ -1,0 +1,59 @@
+data Tree a = Node (Tree (a,a)) | Leaf a 
+
+-- The type signature is necessary for this to typecheck. 
+sig depth : Tree a -> Int 
+def depth (Node t) = 1 + depth t 
+        | (Leaf _)  = 0 
+
+-- Ditto. 
+sig mapTree : (p <= q) => (a # p -> b) -> Tree a # q -> Tree b 
+def mapTree f (Node t) = Node (mapTree (\(a,b) -> (f a, f b)) t)
+          | f (Leaf x) = Leaf (f x) 
+
+def ex0 = Node (Node (Node (Leaf (((1,2),(3,4)), ((5,6),(7,8))))))
+
+-- mapTree (\x -> x + 1) ex0 works fine 
+
+-- Example taken from https://scrapbox.io/haskell-and-crypto/Nested_datatype,_polymorphic_recursion
+
+sig sumTree : Tree Int -o Int 
+def sumTree xs = go (\x -> x) xs 
+  where     
+    sig go : (a -o Int) -> Tree a -o Int 
+    def go k (Leaf a) = k a 
+         | k (Node t) = go (\(a,b) -> k a + k b) t 
+  end
+
+sig flipTree : Tree a -o Tree a 
+def flipTree = go (\x -> x) 
+  where 
+    -- Currently, we have no scoped type variables     
+    sig go : (a -o a) -> Tree a -o Tree a 
+    def go f (Leaf a) = Leaf (f a) 
+         | f (Node t) = Node (go (\(a, b) -> (f b, f a)) t) 
+  end 
+
+-- Currently, we don't provide div and mod to implement index 
+
+sig build : a -> Int -> Tree a 
+def build a n = 
+  case eqInt n 0 of 
+  | True  -> Leaf a
+  | False -> Node (build (a,a) (n-1))
+  end 
+
+data List a = Nil | Cons a (List a) 
+
+sig builds : List a -> Int -> Tree a 
+def builds xs n = go (\(Cons x xs) -> (x, xs)) n xs 
+  where 
+    sig go : (List a -> (b, List a)) -> Int -> List a -> Tree b 
+    def go f n xs = case eqInt n 0 of
+                    | True  -> let (r , _) <- f xs in Leaf r 
+                    | False -> Node (go (\xs -> let (a, xs') <- f xs in let (b, xs'') <- f xs' in ((a,b), xs'')) (n-1) xs) 
+                    end 
+  end
+
+
+
+  
