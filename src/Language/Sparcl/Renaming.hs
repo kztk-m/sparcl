@@ -21,6 +21,7 @@ import           Data.Void
 import           Data.Graph                     as G
 import           Data.List                      (partition)
 
+import           Control.Monad                  (when, unless, forM, liftM2)
 import           Control.Monad.Except
 import           Control.Monad.Reader
 import           Control.Monad.State

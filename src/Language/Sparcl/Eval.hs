@@ -6,6 +6,7 @@ import           Language.Sparcl.Core.Syntax
 import           Language.Sparcl.Exception
 import           Language.Sparcl.Value
 
+import           Control.Monad               ((>=>), unless, zipWithM)
 import           Control.Monad.Except
 import           Data.Maybe                  (fromMaybe)
 -- import Control.Monad.State

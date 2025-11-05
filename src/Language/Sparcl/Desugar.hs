@@ -8,6 +8,7 @@ import           Data.Function                  (on)
 import           Data.List                      (groupBy)
 import           Data.Void
 
+import           Control.Monad
 import           Control.Monad.Reader
 import           Control.Monad.State
 

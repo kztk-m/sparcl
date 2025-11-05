@@ -12,6 +12,7 @@ module Language.Sparcl.Algorithm.SAT (
 import qualified Data.IntMap.Strict     as IM
 import qualified Data.Map               as M
 
+import           Control.Monad          (MonadPlus(..))
 import           Control.Monad.State
 import           Control.Monad.Writer
 import           Language.Sparcl.Pretty hiding ((<$>))

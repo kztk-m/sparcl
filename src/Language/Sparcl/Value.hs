@@ -12,6 +12,7 @@ import           Language.Sparcl.Literal
 import           Language.Sparcl.Name
 
 import           Control.Monad.Fail
+import           Control.Monad.Fix         (MonadFix(..))
 
 data Value = VCon !Name ![Value]
            | VLit !Literal

@@ -5,6 +5,7 @@ module Language.Sparcl.Typing.Typing (
   inferTopDecls
   ) where
 
+import           Control.Monad 
 import           Control.Monad.Except
 import           Data.Void
 -- import Control.Monad.Writer

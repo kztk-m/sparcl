@@ -5,6 +5,7 @@ module Language.Sparcl.CodeGen.Haskell where
 import           Data.Char                      (isLower, isNumber, isUpper,
                                                  ord)
 
+import           Control.Monad                  (forM, unless, liftM2)
 import           Control.Monad.Cont             hiding (lift)
 import           Control.Monad.State            hiding (lift)
 
