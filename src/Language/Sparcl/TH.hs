@@ -69,7 +69,9 @@ instance MiniHaskellConstraint HName TH.Type TH.Pred where
   tyeq t1 t2 = TH.EqualityT `TH.AppT` t1 `TH.AppT` t2
 
 plainTV =
-#if MIN_VERSION_template_haskell(2,18,0)
+#if MIN_VERSION_template_haskell(2,21,0)
+    \n -> TH.PlainTV n TH.BndrInvis
+#elif MIN_VERSION_template_haskell(2,18,0)
     \n -> TH.PlainTV n ()
 #else
     TH.PlainTV
