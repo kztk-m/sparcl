@@ -1,0 +1,28 @@
+-- Bug 1. Existential quantifier scopes
+data Ex where
+  sig Ex : a -o Ex
+end
+
+-- This is rejected by the interpreter saying that the existential
+-- variable escapes its scope, but it should be OK since it is
+-- repackaged in another Ex.
+sig idEx : Ex -o Ex
+def idEx (Ex a) = Ex a
+
+{-
+-- Bug 2. Unrestricted constructors
+data MyUn a where
+  sig MyU : a -> MyUn a
+end
+
+-- It is my understanding that both of the following functions should
+-- be valid, but instead both fail.
+
+-- This is rejected by the typechecker, saying Omega <= One.
+sig myFun : rev (MyUn a) -o rev ((), a)
+def myFun (rev (MyU x)) = rev (rev (), x)
+
+-- This code crashes when interpreted.
+sig myFun' : rev (MyUn a) -o rev ()
+def myFun' (rev (MyU _)) = rev ()
+-}
