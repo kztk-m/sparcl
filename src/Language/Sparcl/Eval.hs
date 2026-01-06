@@ -6,7 +6,7 @@ import           Language.Sparcl.Core.Syntax
 import           Language.Sparcl.Exception
 import           Language.Sparcl.Value
 
-import           Control.Monad               ((>=>), unless, zipWithM)
+import           Control.Monad               ((>=>), unless, zipWithM, when)
 import           Control.Monad.Except
 import           Data.Maybe                  (fromMaybe)
 -- import Control.Monad.State
@@ -209,7 +209,7 @@ evalCaseB env vres b0 alts = do
             VRes _ b <- {- trace ("Evaluating bodies") $ -} evalU (extendsEnv binds' env) e
             hpBr <- {- trace ("vres = " ++ show (ppr vres)) $ -} b vres
             v0 <- {- trace ("hpBr = " ++ show (pprHeap hpBr)) $ -} fillPat p <$> zipWithM (\x a -> (x,) <$> lookupHeap a hpBr) xs as
-            unless (any ($ v0) checker) $
+            () <- when (any ($ v0) checker) $
               rtError $ text "Assertion failed (bwd)"
             return (v0, removesHeap as hpBr)
         else go (mkAssert p:checker) pes
