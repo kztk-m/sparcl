@@ -186,3 +186,9 @@ def split _ (rev Nil)      = rev (rev Nil, rev Nil) with \(x, y) -> and (null x)
           | True -> rev (rev Nil, rev Cons h t)
           | False -> let rev (hs, ts) <- split (n - 1) t in rev (rev Cons h hs, ts)
           end
+
+def inputList = Cons 'a' (Cons 'a' (Cons 'a' (Cons 'b' (Cons 'b' (Cons 'a' (Cons 'a' Nil))))))
+
+def outputList = fwd lz77 inputList 
+
+def inputList' = bwd lz77 outputList 
