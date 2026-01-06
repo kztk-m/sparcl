@@ -1,0 +1,13 @@
+data Either a b = Left a | Right b 
+
+sig isLeft : Either a b -> Bool 
+def isLeft (Left _) = True 
+         | (Right _) = False 
+
+sig f : rev a -o rev (Either a a) 
+def f (rev x) = rev Left  x with isLeft
+    | (rev y) = rev Right y 
+
+-- Should cause a runtime error 
+sig err : Int 
+def err = let (fwd, bwd) <- unlift f in bwd (Right 1) 
