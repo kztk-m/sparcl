@@ -1,12 +1,12 @@
 cabal-version: 2.2
 
 name:           sparcl
-version:        0.2.0.0
+version:        0.2.1
 synopsis:       A language for partial reversible computation with linear types
 description:    
 author:         Kazutaka Matsuda
 maintainer:     kztk@ecei.tohoku.ac.jp
-copyright:      2018-2020, 2022 Kazutaka Matsuda
+copyright:      2018-2020, 2022, 2025, 2026 Kazutaka Matsuda
 license:        BSD-3-Clause
 license-file:   LICENSE
 build-type:     Simple
