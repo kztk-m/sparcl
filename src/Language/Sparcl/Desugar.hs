@@ -143,6 +143,11 @@ makeTupleExpC :: [C.Exp Name] -> C.Exp Name
 makeTupleExpC [e] = e
 makeTupleExpC es  = C.Con (nameTuple (length es)) es
 
+makeRTupleExpC :: [C.Exp Name] -> C.Exp Name
+makeRTupleExpC [e] = e
+makeRTupleExpC es  = C.RCon (nameTuple (length es)) es
+
+
 makeTuplePatS :: [S.LPat 'TypeCheck] -> S.LPat 'TypeCheck
 makeTuplePatS [p] = p
 makeTuplePatS ps  = noLoc (S.PCon (nameTuple len, T.conTy2Ty $ tupleConTy len) ps)
@@ -344,7 +349,7 @@ desugarAlts alts = do
           -- Notice that all @cp@ and @length sub@ are the same in @ralts@.
           withNewNames len $ \xs -> do
             let outP = fillCPat cp [C.PVar x | x <- xs]
-            let re0 = makeTupleExpC [ C.Var x | x <- xs ]
+            let re0 = makeRTupleExpC [ C.Var x | x <- xs ]
 
             pes <- forM ralts $ \(_, sub, c) -> do
               sub' <- mapM desugarPat sub
