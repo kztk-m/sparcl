@@ -5,7 +5,7 @@ version:        0.2.2
 synopsis:       A language for partial reversible computation with linear types
 description:    
 author:         Kazutaka Matsuda
-maintainer:     kztk@ecei.tohoku.ac.jp
+maintainer:     kztk@tohoku.ac.jp
 copyright:      2018-2020, 2022, 2025, 2026 Kazutaka Matsuda
 license:        BSD-3-Clause
 license-file:   LICENSE
