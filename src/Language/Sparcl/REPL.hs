@@ -531,7 +531,7 @@ readExp str = do
   debugPrint 1 $ text "Desugaring expression..."
   desugaredExp <- runTC $ runDesugar $ desugarExp typedExp
   debugPrint 1 $ text "Desugaring Ok."
-  debugPrint 2 $ text "Desugared:" </> align (ppr desugaredExp)
+  debugPrint 2 $ nest 2 $ vsep [text "Desugared:",  align (ppr desugaredExp)] 
 
   desugaredExp' <- liftIO $ evaluate desugaredExp
   ty'         <- liftIO $ evaluate ty
