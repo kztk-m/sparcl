@@ -12,5 +12,7 @@ t.out
 *~
 dist-newstyle/
 
+.vscode
+
 notes/Typing.md
 impl_old.zip
