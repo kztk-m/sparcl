@@ -1,141 +1,144 @@
 cabal-version: 2.2
-
-name:           sparcl
-version:        0.2.2
-synopsis:       A language for partial reversible computation with linear types
-description:    
-author:         Kazutaka Matsuda
-maintainer:     kztk@tohoku.ac.jp
-copyright:      2018-2020, 2022, 2025, 2026 Kazutaka Matsuda
-license:        BSD-3-Clause
-license-file:   LICENSE
-build-type:     Simple
-
+name: sparcl
+version: 0.2.3
+synopsis: A language for partial reversible computation with linear types
+description:
+author: Kazutaka Matsuda
+maintainer: kztk@tohoku.ac.jp
+copyright: 2018-2020, 2022, 2025, 2026 Kazutaka Matsuda
+license: BSD-3-Clause
+license-file: LICENSE
+build-type: Simple
 extra-source-files:
-    README.md
+  README.md
 
 common deps
   build-depends:
-      base >=4.7 && <5,
---      ghc  >=8.4 && <8.8,
---      hint >= 0.8 && <1,
-      exceptions >= 0.10 && <0.11, 
-      time >= 1.8 && <1.13, 
-      template-haskell >= 2.13 && < 2.24,  
-      mtl ^>= 2.2 || ^>= 2.3,
-      megaparsec >= 6.0 && <10,
-      containers ^>= 0.5 || ^>= 0.6 || ^>= 0.7, 
-      directory ^>= 1.3, 
-      filepath ^>= 1.4 || ^>= 1.5, 
-      array ^>= 0.5, 
-      haskeline >= 0.7.5, 
-      deepseq ^>= 1.4 || ^>= 1.5, 
-      clock >= 0.6 && < 0.9, 
-      fail ^>= 4.9, 
-      prettyprinter ^>= 1.7, 
-      prettyprinter-ansi-terminal ^>= 1.1.2 || ^>= 1.1.3
+    --      ghc  >=8.4 && <8.8,
+    --      hint >= 0.8 && <1,
+    array ^>=0.5,
+    base >=4.7 && <5,
+    clock >=0.6 && <0.9,
+    containers ^>=0.5 || ^>=0.6 || ^>=0.7,
+    deepseq ^>=1.4 || ^>=1.5,
+    directory ^>=1.3,
+    exceptions >=0.10 && <0.11,
+    fail ^>=4.9,
+    filepath ^>=1.4 || ^>=1.5,
+    haskeline >=0.7.5,
+    megaparsec >=6.0 && <10,
+    mtl ^>=2.2 || ^>=2.3,
+    prettyprinter ^>=1.7,
+    prettyprinter-ansi-terminal ^>=1.1.2 || ^>=1.1.3,
+    template-haskell >=2.13 && <2.24,
+    time >=1.8 && <1.13,
 
-  ghc-options: 
-      -Wall 
+  ghc-options:
+    -Wall
 
-  if impl(ghc >= 8.8)
-      ghc-options:
-          -fwrite-ide-info 
-          -hiedir=.hie
-
+  if impl(ghc >=8.8)
+    ghc-options:
+      -fwrite-ide-info
+      -hiedir=.hie
   default-language: Haskell2010
-
   default-extensions:
-     FlexibleContexts, FlexibleInstances, 
-     MultiParamTypeClasses, FunctionalDependencies, 
-     MultiWayIf, LambdaCase, TupleSections, 
-     RankNTypes, GADTs, ScopedTypeVariables, 
-     TypeApplications, TypeOperators, 
-     KindSignatures, DataKinds, 
-     BangPatterns, PatternSynonyms, 
-     DeriveFunctor, DeriveFoldable, DeriveTraversable, 
-     GeneralizedNewtypeDeriving
-
+    BangPatterns
+    DataKinds
+    DeriveFoldable
+    DeriveFunctor
+    DeriveTraversable
+    FlexibleContexts
+    FlexibleInstances
+    FunctionalDependencies
+    GADTs
+    GeneralizedNewtypeDeriving
+    KindSignatures
+    LambdaCase
+    MultiParamTypeClasses
+    MultiWayIf
+    PatternSynonyms
+    RankNTypes
+    ScopedTypeVariables
+    TupleSections
+    TypeApplications
+    TypeOperators
 
 library
   import: deps
-  exposed-modules:  
-      Language.Sparcl.Class
-      Language.Sparcl.DebugPrint
-      Language.Sparcl.Algorithm.SAT 
-      Language.Sparcl.SrcLoc
-      Language.Sparcl.Name
-      Language.Sparcl.Pass
-      Language.Sparcl.Literal
-      Language.Sparcl.Multiplicity
-      Language.Sparcl.FreeTyVars
-      Language.Sparcl.Pretty
-      Language.Sparcl.Typing.Type
-      Language.Sparcl.Surface.Syntax
-      Language.Sparcl.Surface.Parser.Helper
-      Language.Sparcl.Surface.Parser.Id
-      Language.Sparcl.Surface.Parser.Exp
-      Language.Sparcl.Surface.Parsing
-      Language.Sparcl.Renaming
-      Language.Sparcl.Typing.TCMonad
-      Language.Sparcl.Typing.Typing
-      Language.Sparcl.Exception
-      Language.Sparcl.Core.Syntax  
-      Language.Sparcl.Desugar
-      Language.Sparcl.Value
-      Language.Sparcl.Eval
-      Language.Sparcl.Module
-      Language.Sparcl.Command 
-      Language.Sparcl.REPL
-      Language.Sparcl.CodeGen.Haskell
-      Language.Sparcl.TH
+  exposed-modules:
+    Language.Sparcl.Algorithm.SAT
+    Language.Sparcl.Class
+    Language.Sparcl.CodeGen.Haskell
+    Language.Sparcl.Command
+    Language.Sparcl.Core.Syntax
+    Language.Sparcl.DebugPrint
+    Language.Sparcl.Desugar
+    Language.Sparcl.Eval
+    Language.Sparcl.Exception
+    Language.Sparcl.FreeTyVars
+    Language.Sparcl.Literal
+    Language.Sparcl.Module
+    Language.Sparcl.Multiplicity
+    Language.Sparcl.Name
+    Language.Sparcl.Pass
+    Language.Sparcl.Pretty
+    Language.Sparcl.REPL
+    Language.Sparcl.Renaming
+    Language.Sparcl.SrcLoc
+    Language.Sparcl.Surface.Parser.Exp
+    Language.Sparcl.Surface.Parser.Helper
+    Language.Sparcl.Surface.Parser.Id
+    Language.Sparcl.Surface.Parsing
+    Language.Sparcl.Surface.Syntax
+    Language.Sparcl.TH
+    Language.Sparcl.Typing.TCMonad
+    Language.Sparcl.Typing.Type
+    Language.Sparcl.Typing.Typing
+    Language.Sparcl.Value
 
   other-modules:
-
   hs-source-dirs:
-      src
+    src
 
 benchmark typing
   import: deps
   type: exitcode-stdio-1.0
-  main-is: Bench.hs 
-
+  main-is: Bench.hs
   hs-source-dirs:
-    bench 
+    bench
 
-  ghc-options:
-    -fprof-auto -O2 
-
-  build-depends: 
-    sparcl 
-
-
-executable sparcl-exe  
-  import: deps 
-  main-is: Main.hs
-
-  other-modules:
-
-  hs-source-dirs:
-      app
   ghc-options:
     -fprof-auto
-    -- -threaded -rtsopts -with-rtsopts=-N
+    -O2
+
   build-depends:
-    sparcl,
-    sparcl-runtime
+    sparcl
 
-test-suite sparcl-test
-  import: deps 
-  type: exitcode-stdio-1.0
-  main-is: Spec.hs
-
+executable sparcl-exe
+  import: deps
+  main-is: Main.hs
   other-modules:
   hs-source-dirs:
-      test
+    app
+
   ghc-options:
-    -- -threaded -rtsopts -with-rtsopts=-N
+    -fprof-auto
+
+  -- -threaded -rtsopts -with-rtsopts=-N
   build-depends:
     sparcl,
-    sparcl-runtime
+    sparcl-runtime,
 
+test-suite sparcl-test
+  import: deps
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  other-modules:
+  hs-source-dirs:
+    test
+
+  ghc-options:
+  -- -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+    sparcl,
+    sparcl-runtime,
