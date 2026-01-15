@@ -1,4 +1,5 @@
 {-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE ViewPatterns    #-}
 module Language.Sparcl.Desugar (
   desugarExp, desugarTopDecls,
   runDesugar
@@ -60,6 +61,16 @@ desugarExp (Loc _ expr) = go expr
     go (S.Lit l)      = return $ C.Lit l
     go (S.App e1 e2)  =
       mkApp <$> desugarExp e1 <*> desugarExp e2
+
+    go (S.Abs ps e) | Just xs <- checkAllVars ps = do
+      e' <- desugarExp e
+      pure $ foldr C.Abs e' xs
+      where
+        checkAllVars :: [ S.LPat 'TypeCheck ] -> Maybe [Name]
+        checkAllVars []     = pure []
+        checkAllVars (x:xs) = liftA2 (:) (checkVar x) (checkAllVars xs)
+        checkVar (unLoc -> S.PVar (n, _)) = pure n
+        checkVar _                        = Nothing
 
     go (S.Abs ps e) = desugarRHS [(ps, S.Clause e (S.HDecls () []) Nothing)]
 
