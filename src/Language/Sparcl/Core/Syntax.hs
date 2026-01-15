@@ -18,7 +18,7 @@ import           Language.Sparcl.Typing.Type
 import qualified Language.Sparcl.Surface.Syntax as S
 
 
-import           Language.Sparcl.Pretty         as D 
+import           Language.Sparcl.Pretty         as D
 
 import qualified Data.Set                       as Set
 
@@ -121,7 +121,7 @@ instance Pretty n => Pretty (Exp n) where
     D.text "end"
     where
       pprPs (p, c, e) =
-        D.text "|" D.<+> D.align (D.text "rev" D.<+> pprPrec 1 p D.<+> D.text "->" D.<+> D.nest 2 (ppr c D.</> D.text "with" D.<+> D.align (ppr e)))
+        D.group $ D.text "|" D.<+> D.align (D.text "rev" D.<+> pprPrec 1 p D.<+> D.text "->" D.<> D.nest 2 (D.line <> ppr c D.<$> D.text "with" D.<+> D.align (ppr e)))
 
   pprPrec k (RPin e1 e2) = parensIf (k > 9) $
     D.text "pin" D.<+> pprPrec 10 e1 D.<+> pprPrec 10 e2
