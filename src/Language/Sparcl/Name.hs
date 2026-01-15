@@ -46,11 +46,11 @@ instance NFData Phase where
   rnf x = seq x ()
 
 instance Eq Name where
-  Local n1 == Local n2 = n1 == n2
+  Local n1 == Local n2                 = n1 == n2
   Original m1 n1 _ == Original m2 n2 _ = m1 == m2 && n1 == n2
-  Alpha i1 _ == Alpha i2 _ = i1 == i2
-  Generated i1 p1 == Generated i2 p2 = i1 == i2 && (p1 == p2)
-  _ == _ = False
+  Alpha i1 _ == Alpha i2 _             = i1 == i2
+  Generated i1 p1 == Generated i2 p2   = i1 == i2 && (p1 == p2)
+  _ == _                               = False
 
 instance Ord Name where
   compare (Local n1) (Local n2)                 = compare n1 n2
@@ -137,12 +137,15 @@ nameTuple n =
   let bn = System (NTuple n)
   in Original baseModule bn (Bare bn)
 
-checkNameTuple :: Name -> Maybe Int
-checkNameTuple (Original _ (System (NTuple m)) _) = Just m
-checkNameTuple _                                  = Nothing
+class NameCheck n where
+  checkNameTuple :: n -> Maybe Int
+  checkNameTyTuple :: n -> Maybe Int
 
-checkNameTyTuple :: Name -> Maybe Int
-checkNameTyTuple = checkNameTuple
+instance NameCheck Name where
+  checkNameTuple (Original _ (System (NTuple m)) _) = Just m
+  checkNameTuple _                                  = Nothing
+
+  checkNameTyTuple = checkNameTuple
 
 nameUnit :: Name
 nameUnit = nameTuple 0

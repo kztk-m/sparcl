@@ -72,7 +72,7 @@ fst3 (a, _, _) = a
 thd3 :: (a, b, c) -> c
 thd3 (_, _, e) = e
 
-instance Pretty n => Pretty (Exp n) where
+instance (NameCheck n, Pretty n) => Pretty (Exp n) where
   pprPrec _ (Lit l) = ppr l
   pprPrec _ (Var q) = ppr q
   pprPrec k (App e1 e2) = parensIf (k > 9) $
@@ -80,9 +80,8 @@ instance Pretty n => Pretty (Exp n) where
   pprPrec k (Abs x e) = parensIf (k > 0) $ D.group $ D.align $
     D.text "\\" D.<> ppr x D.<+> D.nest 2 (D.text "->" D.<$> D.align (pprPrec 0 e))
 
-  -- pprPrec _ (Con c es)
-  --   | c == nameTuple (length es) =
-  --       D.parens (D.hsep $ D.punctuate D.comma $ map (pprPrec 0) es)
+  pprPrec _ (Con c es) | Just _ <- checkNameTuple c =
+    D.tupled (map (pprPrec 0) es)
 
   pprPrec _ (Con c []) =
     ppr c
@@ -111,6 +110,9 @@ instance Pretty n => Pretty (Exp n) where
   pprPrec k (Unlift e) = parensIf (k > 9) $
     D.text "unlift" D.<+> D.align (pprPrec 10 e)
 
+  pprPrec _ (RCon c es) | Just _ <- checkNameTuple c =
+    D.text "rev" D.<+> D.align (D.tupled (map (pprPrec 0) es))
+
   pprPrec k (RCon c es) = parensIf (k > 9) $
     D.text "rev" D.<+> ppr c D.<+>
      D.hsep (map (pprPrec 10) es)
@@ -131,9 +133,11 @@ data Pat n = PVar !n
            | PCon !n ![Pat n]
   deriving Show
 
-instance Pretty n => Pretty (Pat n) where
+instance (NameCheck n, Pretty n) => Pretty (Pat n) where
   pprPrec _ (PVar n) = ppr n
 
+  pprPrec _ (PCon c ps) | Just _ <- checkNameTuple c =
+    D.align (D.tupled (map (pprPrec 0) ps))
   pprPrec _ (PCon c []) = ppr c
   pprPrec k (PCon c ps) = parensIf (k > 0) $
     ppr c D.<> align (parens $ D.hsep $ punctuate comma $ map (pprPrec 1) ps)

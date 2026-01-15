@@ -12,7 +12,7 @@ import           Language.Sparcl.Literal
 import           Language.Sparcl.Name
 
 import           Control.Monad.Fail
-import           Control.Monad.Fix         (MonadFix(..))
+import           Control.Monad.Fix         (MonadFix (..))
 
 data Value = VCon !Name ![Value]
            | VLit !Literal
@@ -38,6 +38,8 @@ instance NFData Value where
 
 
 instance Pretty Value where
+  pprPrec _ (VCon c vs) | Just _ <- checkNameTuple c =
+    D.tupled (map (pprPrec 0) vs)
   pprPrec _ (VCon c []) = ppr c
   pprPrec k (VCon c vs) = parensIf (k > 9) $
     ppr c D.<+> D.hsep [ pprPrec 10 v | v <- vs ]
