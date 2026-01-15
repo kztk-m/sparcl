@@ -16,6 +16,6 @@ debugPrint :: (Has KeyDebugLevel Int m, MonadIO m) => Int -> Doc -> m ()
 debugPrint n s = do
   vlevel      <- ask (key @KeyDebugLevel)
   when (vlevel >= n) $
-    liftIO $ displayIO stderr $ renderPretty 0.9 120 $
+    liftIO $ hPutDocWith stderr 120 0.9 $
       dullcyan $ text ("[D" ++ show n ++ "]") <+> align s <> line
 

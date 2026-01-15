@@ -6,8 +6,8 @@ data Multiplicity = One | Omega
   deriving (Eq, Ord, Show)
 
 instance Pretty Multiplicity where
-  ppr One   = text "One"
-  ppr Omega = text "Omega"
+  ppr One   = ppr "One"
+  ppr Omega = ppr "Omega"
 
 
 instance Bounded Multiplicity where

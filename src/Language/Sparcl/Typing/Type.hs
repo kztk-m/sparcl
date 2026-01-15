@@ -133,7 +133,7 @@ instance Ord TyVar where
 
 instance Pretty TyVar where
   ppr (BoundTv n)       = ppr n
-  ppr (SkolemTv n i lv) = ppr n D.<> D.text "_" D.<> D.int i D.<> D.text "@" D.<> ppr lv
+  ppr (SkolemTv n i lv) = ppr n D.<> D.text "_" D.<> ppr i D.<> D.text "@" D.<> ppr lv
 
 
 instance FreeTyVars Ty TyVar where

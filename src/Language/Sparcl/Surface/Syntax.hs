@@ -323,7 +323,7 @@ newtype Prec  = Prec Int
   deriving (Eq, Ord, Show)
 
 instance Pretty Prec where
-  ppr (Prec k) = D.int k
+  ppr (Prec k) = ppr k
 
 instance Bounded Prec where
   minBound = Prec 0

@@ -280,7 +280,7 @@ type BMap = M.Map String BenchInfo
 pprBi :: BenchInfo -> Doc
 pprBi bi =
   let elapsedInNanoSecs :: Double = fromIntegral (biTotal bi) / (10 ** 6)
-  in text "#happened" <+> int (biCount bi) <+> text "/" <+> text "elapsed(ms)" <+> text (printf "%2.4f" elapsedInNanoSecs)
+  in text "#happened" <+> ppr (biCount bi) <+> text "/" <+> text "elapsed(ms)" <+> text (printf "%2.4f" elapsedInNanoSecs)
 
 pprBMap :: BMap -> Doc
 pprBMap bm =

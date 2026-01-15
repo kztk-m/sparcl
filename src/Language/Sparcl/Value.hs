@@ -106,7 +106,7 @@ newAddrs n f = do
 
 lookupHeap :: Addr -> Heap -> Eval Value
 lookupHeap n heap = case M.lookup n heap of
-  Nothing -> rtError $ D.text "Undefined addr" D.<+> D.int n D.<+> D.text "in" D.<+> pprHeap heap
+  Nothing -> rtError $ D.text "Undefined addr" D.<+> D.ppr n D.<+> D.text "in" D.<+> pprHeap heap
   Just v  -> return v
 
 extendHeap :: Addr -> Value -> Heap -> Heap

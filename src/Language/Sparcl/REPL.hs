@@ -3,6 +3,7 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE TemplateHaskell    #-}
 {-# LANGUAGE TypeApplications   #-}
+{-# LANGUAGE OverloadedStrings  #-}
 
 module Language.Sparcl.REPL where
 
@@ -28,7 +29,6 @@ import           System.Directory                (getCurrentDirectory,
                                                   getHomeDirectory)
 import qualified System.FilePath                 as FP ((</>))
 import           System.IO                       (stdout)
-import qualified Text.PrettyPrint.ANSI.Leijen    as D
 
 import           Language.Sparcl.Class
 import           Language.Sparcl.Command
@@ -326,12 +326,12 @@ startREPL vl searchPath inputFile = do
 
 commandSpec :: [CommandSpec (REPL ())]
 commandSpec = [
-  NoArgCommand  ":quit"    (return ())  (D.text "Quit REPL."),
-  StringCommand ":load"      procLoad     "FILEPATH"  (D.text "Load a program."),
-  NoArgCommand  ":reload"    procReload   (D.text "Reload the last program."),
-  StringCommand ":verbosity" procVerbosity "[0-3]" (D.text "Change the current verbosity."),
-  NoArgCommand  ":help"      procHelp     (D.text "Show this help."),
-  StringCommand ":type"      procType     "EXP" (D.text "Print the expression's type.")
+  NoArgCommand  ":quit"    (return ())  (text "Quit REPL."),
+  StringCommand ":load"      procLoad     "FILEPATH"  (text "Load a program."),
+  NoArgCommand  ":reload"    procReload   (text "Reload the last program."),
+  StringCommand ":verbosity" procVerbosity "[0-3]" (text "Change the current verbosity."),
+  NoArgCommand  ":help"      procHelp     (text "Show this help."),
+  StringCommand ":type"      procType     "EXP" (text "Print the expression's type.")
   ]
 
 procHelp :: REPL ()
@@ -415,7 +415,7 @@ resetModule = do
 
 reportTypeInfo :: ModuleInfo Value -> REPL ()
 reportTypeInfo m = do
-  liftIO $ displayIO stdout $ renderPretty 0.9 100 $
+  liftIO $ hPutDocWith stdout 100 0.9 $
     vcat [vcat $ map (\(n, t) -> fillBreak 8 (ppr n <+> text ":") <+> align (ppr t)) (M.toList $ miTypeTable m),
           text "Ok." ]
     <> line
@@ -450,7 +450,7 @@ procLoad fp = do
     trimTrailingSpace = reverse . dropWhile isSpace . reverse
 
     findDQ :: String -> String
-    findDQ []      = rtError $ D.text "No matching quote."
+    findDQ []      = rtError $ text "No matching quote."
     findDQ ('"':_) = []
     findDQ (c:s)   = c:findDQ s
 
@@ -485,7 +485,7 @@ procType str = do
   case res of
     Nothing -> waitCommand
     Just ty -> do
-      liftIO $ D.displayIO stdout (D.renderPretty 0.8 120 $ ppr ty)
+      liftIO $ hPutDocWith stdout 120 0.8 $ ppr ty
       liftIO $ putStrLn ""
       waitCommand
 
@@ -507,7 +507,7 @@ readExp str = do
   opTable   <- ask (key @KeyOp)
 
   debugPrint 1 $ text "Parsing expression..."
-  parsedExp       <- either (staticError . D.text) return $ parseExp' "<*repl*>" str
+  parsedExp       <- either (staticError . text) return $ parseExp' "<*repl*>" str
   debugPrint 1 $ text "Parsing Ok."
   debugPrint 1 $ text "Renaming expression..."
   (renamedExp, _) <- either nameError return $ runRenaming nameTable opTable (renameExp 0 M.empty parsedExp)

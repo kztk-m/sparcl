@@ -20,7 +20,7 @@ data SystemName = NTuple !Int | KArrow | NArrow | NBang | NRev
   deriving (Eq, Ord, Show)
 
 instance Pretty SystemName where
-  ppr (NTuple n) = text "<Tup" <+> int n <> text ">"
+  ppr (NTuple n) = text "<Tup" <+> ppr n <> text ">"
   ppr NArrow     = text "->" -- NB: ternaly (Multiplicity -> Type -> Type -> Type) instead of binary
   ppr KArrow     = text "->"
   ppr NBang      = text "!"  -- TODO: will be removed
@@ -94,7 +94,7 @@ instance Pretty SurfaceName where
 -- Basically, the method pretty-print names as the original without additional
 -- information introduced in the system.
 instance Pretty Name where
-  ppr (Generated  i p) = text "_" <> text (case p of { Desugaring -> "d" ; CodeGen -> "c"}) <> int i
+  ppr (Generated  i p) = text "_" <> text (case p of { Desugaring -> "d" ; CodeGen -> "c"}) <> ppr i
   ppr (Alpha _i   n)   = ppr n
   ppr (Local n)        = ppr n
   ppr (Original _ _ o) = ppr o

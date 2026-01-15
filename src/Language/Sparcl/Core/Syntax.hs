@@ -18,8 +18,7 @@ import           Language.Sparcl.Typing.Type
 import qualified Language.Sparcl.Surface.Syntax as S
 
 
-import           Language.Sparcl.Pretty
-import qualified Text.PrettyPrint.ANSI.Leijen   as D
+import           Language.Sparcl.Pretty         as D 
 
 import qualified Data.Set                       as Set
 
