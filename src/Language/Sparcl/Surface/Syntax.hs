@@ -261,7 +261,7 @@ instance (AllPretty p) => Pretty (Exp p) where
         D.text "let"
           D.<+> D.align (ppr p <+> text "<-" <+> ppr e1 <+> D.text "in")
           D.</> pprPrec 0 e2
-  pprPrec _ (RCon c) = ppr c
+  pprPrec _ (RCon c) = D.text "rev" <+> ppr c
   pprPrec k (RDO as r) =
     parensIf (k > 0) $
       D.text "revdo"

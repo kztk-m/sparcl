@@ -553,6 +553,9 @@ simpleExpr startLoc =
       i <- L.decimal
       _ <- P.char '_'
       n <- L.decimal
+      when (n <= 0) $ fail "n of &i_n must be positive"
+      when (i < 0) $ fail "i of &i_n must be non-negative"
+      when (i >= n) $ fail "&i_n must satisfy i < n"
       withEndSp $ WProj i n
 
 tupleExpr :: (Monad m) => P m (LExp 'Parsing)
@@ -560,7 +563,10 @@ tupleExpr = do
   p <- P.optional (keyword "rev")
   es <- parens (expr `P.sepBy` comma)
   case p of
-    Just _ -> pure $ mkTupleExpR es
+    Just _ ->
+      case es of
+        [_] -> fail "A reversible single tuple is not allowed, and is not often intended."
+        _ -> pure $ mkTupleExpR es
     Nothing -> pure $ mkTupleExp es
 
 wTupleExpr :: (Monad m) => P m (LExp 'Parsing)
