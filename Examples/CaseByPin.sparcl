@@ -1,0 +1,86 @@
+-- pin is as powerful as reversible case expression. 
+
+data List a = Nil | Cons a (List a) 
+
+def fwd f = case unlift f of (x, _) -> x end 
+def bwd f = case unlift f of (_, x) -> x end 
+
+
+sig (.) : (q <= s, q <= t, p <= t) => (b # q -> c) # r -> (a # p -> b) # s -> a # t -> c 
+def (.) f g x = f (g x) 
+
+-- ($) is useful for reducing paretheses. 
+def ($) = \f x -> f x 
+fixity $ 0 right 
+
+def invert h = 
+    case unlift h of 
+      (f, g) -> lift g f 
+    end  
+
+def const eq c = lift (\_ -> c) (\c' -> case eq c c' of True -> () end) (rev ())
+
+sig eqBool : Bool -o Bool -o Bool 
+def eqBool True True = True 
+         | True False = False 
+         | False True = False 
+         | False False = True 
+
+sig constBool : Bool -> rev Bool
+def constBool = const eqBool 
+
+sig annotate : (a -> Bool) -> rev a -o rev (a, Bool) 
+def annotate p x = pin x (constBool . p)
+
+sig assert : (a -> Bool) -> rev (a, Bool) -o rev a 
+def assert p = invert (annotate p)
+
+sig revif : (a -> Bool) -> (b -> Bool) -> &(rev a -o rev b, rev a -o rev b) -o rev a -o rev b 
+def revif p q tf x = 
+    let rev (x, b) <- annotate p x in 
+    let rev (b, y) <- pin b $ \b -> case b of 
+            | True  -> &0_2 tf x 
+            | False -> &1_2 tf x end in 
+    let rev z <- assert q (rev (y , b)) in 
+    z 
+
+sig null : List a -> Bool 
+def null Nil = True 
+       | (Cons _ _) = False 
+
+sig revfoldr : 
+     &(s -> rev s' -o rev r , rev a -o (s -> rev s' -o rev r) -o s -> rev s' -o rev r)
+     -> (s -> r -> Bool) -> (s -> r -> Bool) -> rev (List a) -o s -> rev s' -o rev r 
+def revfoldr cn p1 p2 ls state revs = 
+    let rev (ls, b) <- annotate null ls in 
+    let rev (b , y) <- pin b $ \b -> case b of 
+        | True  -> 
+            let rev () <- invert (\(rev ()) -> rev Nil) ls in 
+            &0_2 cn state revs 
+        | False -> 
+            let rev (x , y) <- invert (\(rev (a , b)) -> rev Cons a b) ls in 
+            &1_2 cn x (revfoldr cn p1 p2 y) state revs 
+        end in 
+    assert (\y -> case p1 state y of 
+                | True -> True 
+                | False -> case p2 state y of 
+                    | True -> False 
+                    end
+                end  
+                ) (rev (y , b))
+
+def tail (Cons _ xs) = xs 
+
+
+def reverse xs = 
+    revfoldr &(\_ x -> x , \a k p acc -> k (p . tail) (rev Cons a acc)) (\p r -> p r) (\_ _ -> True) xs null (rev Nil)
+
+def mkList n = case eqInt n 0 of 
+    | True -> Nil 
+    | False -> Cons n (mkList (n-1))
+    end 
+
+def exampleList = mkList 20
+
+def revExampleList = fwd reverse exampleList 
+def revrevExampleList = fwd reverse exampleList
