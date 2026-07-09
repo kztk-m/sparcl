@@ -599,13 +599,13 @@ readModule fp interp = do
     debugPrint 2 $ text "Desugared:" <> line <> align (vcat (map (\(x,_,e) -> ppr (x,e)) bind))
 
 
-    loadPath <- ask (key @KeyLoadPath)
-    let hsFile = loadPath FP.</> targetFilePath currentModule
+    -- loadPath <- ask (key @KeyLoadPath)
+    -- let hsFile = loadPath FP.</> targetFilePath currentModule
 
-    liftIO $ do let dir = FP.takeDirectory hsFile
-                Dir.createDirectoryIfMissing True dir
-                writeFile hsFile $
-                  show $ toDocTop currentModule exports imports dataDecls' typeDecls' bind
+    -- liftIO $ do let dir = FP.takeDirectory hsFile
+    --             Dir.createDirectoryIfMissing True dir
+    --             writeFile hsFile $
+    --               show $ toDocTop currentModule exports imports dataDecls' typeDecls' bind
 
     -- for de
 
@@ -627,7 +627,7 @@ readModule fp interp = do
           miTypeTable = M.fromList nts,
           miConTable  = newCTypeTable,
           miValueTable = M.fromList newValueEnv,
-          miHsFile     = hsFile
+          miHsFile     = "" -- hsFile
           }
 
     newMod' <- case exports of

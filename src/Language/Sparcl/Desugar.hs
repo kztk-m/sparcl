@@ -83,6 +83,14 @@ desugarExp (Loc _ expr) = go expr
     -- go (S.Con (c,_ty) es) =
     --   C.Con c <$> mapM desugarExp es
 
+    go (S.WTup es) = do 
+      es' <- mapM desugarExp es 
+      pure $ C.WTup es' 
+
+    go (S.WProj i n) = do 
+      withNewName $ \x -> 
+        pure $ C.Abs x (C.WProj i n (C.Var x))
+
     go (S.Case e alts) = do
       e'  <- desugarExp e
       rs' <- desugarAlts alts
@@ -206,7 +214,7 @@ liftO2 _ _        _        = More
 -- @punchHoleAffine n e@ checks if @n@ occurs at most once in @e@, and
 -- returned a holed expression if so.
 
-punchHoleAffine :: Eq n => n -> C.Exp n -> Maybe (C.Exp n -> C.Exp n)
+punchHoleAffine :: forall n. Eq n => n -> C.Exp n -> Maybe (C.Exp n -> C.Exp n)
 punchHoleAffine n = conv . go
   where
     conv More     = Nothing
@@ -216,6 +224,7 @@ punchHoleAffine n = conv . go
     list :: Monad f => [Occ (f a)] -> Occ (f [a])
     list = foldr (liftO2 $ liftM2 (:)) (None $ pure [])
 
+    go :: C.Exp n -> Occ (C.Exp n -> C.Exp n)
     go (C.Var x) | x == n    = Once id
                  | otherwise = None (const $ C.Var x)
 
@@ -228,6 +237,11 @@ punchHoleAffine n = conv . go
 
     go (C.Con c es) =
       fmap (C.Con c) <$> list (map go es)
+
+    go (C.WProj i nn e) = 
+      fmap (C.WProj i nn) <$> go e 
+
+    go (C.WTup es) = fmap C.WTup <$> list (map go es) 
 
     go (C.Case _ _) = More
     go (C.Let _ _) = More

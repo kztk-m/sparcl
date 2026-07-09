@@ -32,6 +32,8 @@ data Exp n
   | Let  !(Bind n) !(Exp n)
   | Lift !(Exp n) !(Exp n)
   | Unlift !(Exp n)
+  | WTup ![Exp n] 
+  | WProj !Int !Int !(Exp n) 
 
   | RCon !n ![Exp n]
   | RCase !(Exp n) ![ (Pat n, Exp n, Exp n ) ]
@@ -57,6 +59,9 @@ freeVars = Set.toList . ($ Set.empty) . go Set.empty
                      in gather (go bound' . thd3) bs . go bound' e
       Lift e1 e2  -> go bound e1 . go bound e2
       Unlift e    -> go bound e
+
+      WTup es -> gather (go bound) es 
+      WProj _ _ e -> go bound e 
 
       RCon _ es -> gather (go bound) es
       RCase e alts -> go bound e . gather (goRAlt bound) alts
@@ -90,6 +95,12 @@ instance (NameCheck n, Pretty n) => Pretty (Exp n) where
     ppr c <> align (parens $ hsep $ punctuate comma $ map (pprPrec 0) es)
     -- parensIf (k > 9) $
     -- ppr c D.<+> D.hsep (map (pprPrec 10) es)
+
+  pprPrec _ (WTup es) = 
+    D.text "&" <> D.tupled (map (pprPrec 0) es)
+
+  pprPrec _ (WProj i n e) = 
+    D.text "&" <> ppr i <> D.text "_" <> ppr n <+> pprPrec 10 e 
 
   pprPrec k (Case e ps) = parensIf (k > 0) $ D.group $ D.align $
     D.text "case" D.<+> pprPrec 0 e D.<+> D.text "of" D.<$>

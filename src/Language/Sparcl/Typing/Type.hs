@@ -187,6 +187,9 @@ instance Pretty Ty where
   pprPrec _ (TyCon c ts)
     | c == nameTyTuple (length ts) =
         D.parens $ D.hsep $ D.punctuate D.comma $ map (pprPrec 0) ts
+    | c == nameTyWTuple (length ts) = 
+        D.text "&" <> D.parens (D.hsep $ D.punctuate D.comma $ map (pprPrec 0) ts)
+
   pprPrec k (TyCon c [t])
     | c == nameTyBang =
         parensIf (k > 1) $ D.text "!" D.<> pprPrec 1 t

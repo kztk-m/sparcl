@@ -145,6 +145,12 @@ renameExp level localnames (Loc loc expr) = first (Loc loc) <$> go expr
         return (p', e', fv S.\\ bvP)
       return (Let1 p' e1' e2', fv1 `S.union` fv2)
 
+    go (WProj i n) = pure (WProj i n , S.empty) 
+
+    go (WTup es) = do 
+      (es' , fvs) <- unzip <$> mapM (renameExp level localnames) es 
+      pure (WTup es', S.unions fvs) 
+
     go (Con c) = do
       c' <- resolveImportedName loc c
       return (Con c', S.empty)

@@ -57,6 +57,17 @@ evalU env expr = case expr of
     v0 <- evalU env e0
     evalCase env v0 pes
 
+  WTup es -> do 
+    vs <- mapM (evalU env) es 
+    pure $ VCon (nameWTuple (length es)) vs 
+
+  WProj i _ e -> do 
+    v <- evalU env e 
+    case v of 
+      -- FIXME: too loose. 
+      VCon _ vs -> pure $ vs !! i 
+      _         -> rtError $ text "Expected &(...)"
+
   Lift ef eb -> do
     VFun vf <- evalU env ef
     VFun vb <- evalU env eb
