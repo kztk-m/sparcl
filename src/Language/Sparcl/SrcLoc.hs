@@ -15,7 +15,7 @@ instance Pretty SrcLoc where
 
 pprMaybeFilePath :: Maybe FilePath -> D.Doc
 pprMaybeFilePath Nothing  = D.ppr "*unknown source*"
-pprMaybeFilePath (Just s) = D.ppr s
+pprMaybeFilePath (Just s) = D.text s
 
 
 data SrcSpan = SrcSpan !(Maybe FilePath) !Int !Int !Int !Int
@@ -23,16 +23,16 @@ data SrcSpan = SrcSpan !(Maybe FilePath) !Int !Int !Int !Int
              deriving (Eq, Ord, Show)
 
 instance Pretty SrcSpan where
-  ppr NoLoc = D.angles $ D.ppr "<*unknown place*>"
+  ppr NoLoc = D.angles $ D.text "<*unknown place*>"
   ppr (SrcSpan fp r1 c1 r2 c2) =
     D.hcat [pprMaybeFilePath fp,
              D.colon, pprPos ]
     where
       pprPos
         | r1 == r2 && c1 == c2 = D.hcat [ D.ppr r1, D.colon, D.ppr c1]
-        | r1 == r2 && c1 /= c2 = D.hcat [ D.ppr r1, D.colon, D.ppr c1, D.ppr "-", D.ppr c2 ]
+        | r1 == r2 && c1 /= c2 = D.hcat [ D.ppr r1, D.colon, D.ppr c1, D.text "-", D.ppr c2 ]
         | otherwise            = D.hcat [ D.parens (D.hcat [D.ppr r1, D.colon, D.ppr c1]),
-                                          D.ppr "-",
+                                          D.text "-",
                                           D.parens (D.hcat [D.ppr r2, D.colon, D.ppr c2])]
 
 
