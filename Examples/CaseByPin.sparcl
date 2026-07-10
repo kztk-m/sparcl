@@ -48,6 +48,7 @@ sig null : List a -> Bool
 def null Nil = True 
        | (Cons _ _) = False 
 
+{-
 sig revfoldr : 
      &(s -> rev s' -o rev r , rev a -o (s -> rev s' -o rev r) -o s -> rev s' -o rev r)
      -> (s -> r -> Bool) -> (s -> r -> Bool) -> rev (List a) -o s -> rev s' -o rev r 
@@ -68,6 +69,48 @@ def revfoldr cn p1 p2 ls state revs =
                     end
                 end  
                 ) (rev (y , b))
+-}
+
+sig caseList : 
+     rev (List a) -o 
+     &(rev r , rev a -o rev (List a) -o rev r) -o 
+     (r -> Bool) -> (r -> Bool) -> rev r 
+def caseList ls cn p1 p2 =
+    let rev (ls, b) <- annotate null ls in 
+    let rev (b , y) <- pin b $ \b -> case b of 
+        | True  -> 
+            let rev () <- invert (\(rev ()) -> rev Nil) ls in 
+            &0_2 cn 
+        | False -> 
+            let rev (x , y) <- invert (\(rev (a , b)) -> rev Cons a b) ls in 
+            &1_2 cn x y
+        end in 
+    assert (\y -> case p1 y of 
+                | True -> True 
+                | False -> case p2 y of 
+                    | True -> False 
+                    end
+                end  
+                ) (rev (y , b))
+
+sig revfoldr : 
+     &(s -> rev s' -o rev r , rev a -o (s -> rev s' -o rev r) -o s -> rev s' -o rev r)
+     -> (s -> r -> Bool) -> (s -> r -> Bool) -> rev (List a) -o s -> rev s' -o rev r 
+def revfoldr cn p1 p2 ls state revs = 
+    caseList ls &( &0_2 cn state revs , \x xs -> &1_2 cn x (revfoldr cn p1 p2 xs) state revs) (p1 state) (p2 state)
+
+sig trap : a -o r 
+def trap a = trap a 
+
+sig zipR : rev (List a) -o rev (List b) -o rev (List (a, b)) 
+def zipR xs ys = caseList xs 
+    &( 
+        -- nil case 
+        caseList ys &( rev Nil , \y ys -> trap (y, ys)) (\_ -> True) (\_ -> False)
+        , 
+        -- cons case 
+        \x xs -> caseList ys &( trap (x , xs), \y ys -> rev Cons (rev (x, y)) (zipR xs ys)) (\_ -> False) (\_ -> True)
+    ) null (\_ -> True) 
 
 def tail (Cons _ xs) = xs 
 
@@ -83,4 +126,7 @@ def mkList n = case eqInt n 0 of
 def exampleList = mkList 20
 
 def revExampleList = fwd reverse exampleList 
-def revrevExampleList = fwd reverse exampleList
+def revrevExampleList = bwd reverse revExampleList
+
+def zipExampleList = fwd (\(rev (a, b)) -> zipR a b) (exampleList, revExampleList)
+def zzipExampleList = bwd (\(rev (a, b)) -> zipR a b) zipExampleList
