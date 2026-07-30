@@ -67,8 +67,6 @@ library
   import: deps
   exposed-modules:
     Language.Sparcl.Algorithm.SAT
-    -- Language.Sparcl.Class
-    Language.Sparcl.CodeGen.Haskell
     Language.Sparcl.Command
     Language.Sparcl.Core.Syntax
     Language.Sparcl.DebugPrint
@@ -90,7 +88,6 @@ library
     Language.Sparcl.Surface.Parser.Id
     Language.Sparcl.Surface.Parsing
     Language.Sparcl.Surface.Syntax
-    -- Language.Sparcl.TH
     Language.Sparcl.Typing.TCMonad
     Language.Sparcl.Typing.Type
     Language.Sparcl.Typing.Constraint

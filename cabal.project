@@ -1,5 +1,5 @@
 packages: .
-          runtime
+--          runtime
 
 -- Avoiding buggy behavior of Haskeline on M1 Mac 
 constraints: terminfo >= 0.4.1.5

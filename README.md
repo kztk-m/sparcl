@@ -182,6 +182,5 @@ Known Issues
 ------------
 
 * The importing feature is not thoroughly tested yet.
-* We are experimenting code generation for integration to other systems such as Haskell/GHC. This functionality is partially implemented and the system places such generated Haskell files under the directory `.sparcl`.
 * The primitive operations now have linear function types (such as `(+) : Int -o Int -o Int`), but they may have unrestricted function types (such as `(+) : Int -> Int -> Int`).
 * Pretty-printing for tuple values is suboptimal.
