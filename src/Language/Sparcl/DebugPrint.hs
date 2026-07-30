@@ -1,21 +1,27 @@
-module Language.Sparcl.DebugPrint
-  (
-    debugPrint,
-    KeyDebugLevel,
-  ) where
+module Language.Sparcl.DebugPrint (
+  debugPrint,
+  MonadDebug (..),
+) where
 
-import           Control.Monad          (when)
-import           Control.Monad.IO.Class
-import           Language.Sparcl.Class
-import           Language.Sparcl.Pretty hiding ((<$>))
-import           System.IO              (stderr)
+import Control.Monad (when)
+import Control.Monad.IO.Class
+import Control.Monad.Reader (ReaderT)
+import Control.Monad.Trans (lift)
 
-data KeyDebugLevel
+import Language.Sparcl.Pretty hiding ((<$>))
+import System.IO (stderr)
 
-debugPrint :: (Has KeyDebugLevel Int m, MonadIO m) => Int -> Doc -> m ()
+class (Monad m) => MonadDebug m where
+  askDebugLevel :: m Int
+
+instance (MonadDebug m) => MonadDebug (ReaderT r m) where
+  askDebugLevel = lift askDebugLevel
+
+debugPrint :: (MonadIO m, MonadDebug m) => Int -> Doc -> m ()
 debugPrint n s = do
-  vlevel      <- ask (key @KeyDebugLevel)
+  vlevel <- askDebugLevel
   when (vlevel >= n) $
-    liftIO $ hPutDocWith stderr 120 0.9 $
-      dullcyan $ text ("[D" ++ show n ++ "]") <+> align s <> line
-
+    liftIO $
+      hPutDocWith stderr 120 0.9 $
+        dullcyan $
+          text ("[D" ++ show n ++ "]") <+> align s <> line

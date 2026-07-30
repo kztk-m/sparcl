@@ -9,7 +9,7 @@ data Literal
   | LitDouble !Double
   | LitChar !Char
   | LitRational !Rational
-  deriving Show
+  deriving (Show, Eq)
 
 instance NFData Literal where
   rnf s = seq s ()

@@ -83,16 +83,16 @@ msub ts1 ts2 = [MSub t1 ts2 | t1 <- ts1]
 msubMult :: Multiplication -> Multiplication -> [TyConstraint]
 msubMult m1 m2 = msub (m2ty m1) (m2ty m2)
 
-tryUnify :: (MonadTypeCheck m) => Ty -> Ty -> m ()
+tryUnify :: Ty -> Ty -> TC ()
 tryUnify t1 t2 = whenChecking (CheckingEquality t1 t2) $ unify t1 t2
 
-instantiate :: (MonadTypeCheck m) => PolyTy -> m MonoTy
+instantiate :: PolyTy -> TC MonoTy
 instantiate t = do
   TyQual cs' t' <- instantiateQ t
   addConstraint cs'
   return t'
 
-instantiateQ :: (MonadTypeCheck m) => PolyTy -> m QualTy
+instantiateQ :: PolyTy -> TC QualTy
 instantiateQ (TyForAll ts qt) = do
   ms <- mapM (const newMetaTy) ts
   let subs = zip ts ms
@@ -100,13 +100,13 @@ instantiateQ (TyForAll ts qt) = do
   return $ substTyQ subs qt
 instantiateQ t = return $ TyQual [] t
 
-ensureRevTy :: (MonadTypeCheck m) => MonoTy -> m MonoTy
+ensureRevTy :: MonoTy -> TC MonoTy
 ensureRevTy ty = do
   argTy <- newMetaTy
   tryUnify (revTy argTy) ty
   return argTy
 
-ensureFunTy :: (MonadTypeCheck m) => MonoTy -> m (MonoTy, MonoTy, MonoTy)
+ensureFunTy :: MonoTy -> TC (MonoTy, MonoTy, MonoTy)
 ensureFunTy ty = do
   argTy <- newMetaTy
   m <- newMetaTy
@@ -114,7 +114,7 @@ ensureFunTy ty = do
   tryUnify (TyCon nameTyArr [m, argTy, resTy]) ty
   return (argTy, m, resTy)
 
-litTy :: (MonadTypeCheck m) => Literal -> m MonoTy
+litTy :: Literal -> TC MonoTy
 litTy (LitInt _) = return $ TyCon nameTyInt []
 litTy (LitChar _) = return $ TyCon nameTyChar []
 litTy (LitDouble _) = return $ TyCon nameTyDouble []
@@ -129,12 +129,11 @@ hasPRev (Loc _ p) = go p
     go _ = False
 
 checkPatsTyK ::
-  (MonadTypeCheck m) =>
   [LPat 'Renaming]
   -> [Multiplication]
   -> [MonoTy]
-  -> m a
-  -> m (a, [LPat 'TypeCheck], [(Name, MonoTy, Multiplication)])
+  -> TC a
+  -> TC (a, [LPat 'TypeCheck], [(Name, MonoTy, Multiplication)])
 checkPatsTyK ps ms ts comp = do
   (req, cs, ps', bind) <- checkPatsTy ps ms ts
   readConstraint >>= \r -> debugPrint 4 $ red $ "CC:" <+> ppr r
@@ -152,11 +151,10 @@ checkPatsTyK ps ms ts comp = do
   return (res, ps', bind)
 
 checkPatsTy ::
-  (MonadTypeCheck m) =>
   [LPat 'Renaming]
   -> [Multiplication]
   -> [MonoTy]
-  -> m (Bool, [TyConstraint], [LPat 'TypeCheck], [(Name, MonoTy, Multiplication)])
+  -> TC (Bool, [TyConstraint], [LPat 'TypeCheck], [(Name, MonoTy, Multiplication)])
 checkPatsTy [] [] [] = return (False, [], [], [])
 checkPatsTy (p : ps) (m : ms) (t : ts) = do
   (req_ps, cs_ps, ps', bind) <- checkPatsTy ps ms ts
@@ -165,14 +163,13 @@ checkPatsTy (p : ps) (m : ms) (t : ts) = do
 checkPatsTy _ _ _ = error "Cannot happen."
 
 checkPatTy ::
-  (MonadTypeCheck m) =>
   LPat 'Renaming
   -> Multiplication
   -> MonoTy
-  -> m (Bool, [TyConstraint], LPat 'TypeCheck, [(Name, MonoTy, Multiplication)])
+  -> TC (Bool, [TyConstraint], LPat 'TypeCheck, [(Name, MonoTy, Multiplication)])
 checkPatTy = checkPatTyWork False
 
-checkGADTConstructorInRev :: (MonadTypeCheck m) => SrcSpan -> Name -> m ()
+checkGADTConstructorInRev :: SrcSpan -> Name -> TC ()
 checkGADTConstructorInRev loc c = do
   ConTy _ ys constr args _ <- askConType loc c
   unless (null ys && null constr && all (isMultiplicityOne . snd) args) $
@@ -185,12 +182,11 @@ checkGADTConstructorInRev loc c = do
     isMultiplicityOne _ = False
 
 checkPatTyWork ::
-  (MonadTypeCheck m) =>
   Bool
   -> LPat 'Renaming
   -> Multiplication
   -> MonoTy
-  -> m (Bool, [TyConstraint], LPat 'TypeCheck, [(Name, MonoTy, Multiplication)])
+  -> TC (Bool, [TyConstraint], LPat 'TypeCheck, [(Name, MonoTy, Multiplication)])
 checkPatTyWork isUnderRev (Loc loc pat) pmult patTy = do
   (req, cs, pat', bind) <- atLoc loc $ go pat
   return (req, cs, Loc loc pat', bind)
@@ -263,11 +259,11 @@ checkPatTyWork isUnderRev (Loc loc pat) pmult patTy = do
       addConstraint $ msubMult omega pmult
       return (req, cs, PWild x', [])
 
-solveInferredConstraint :: (MonadTypeCheck m) => Bool -> [MetaTyVar] -> [TyConstraint] -> [InferredConstraint] -> m [TyConstraint]
+solveInferredConstraint :: Bool -> [MetaTyVar] -> [TyConstraint] -> [InferredConstraint] -> TC [TyConstraint]
 solveInferredConstraint raiseError ex given wanted =
   solveInferredConstraintWork raiseError ex [] given wanted
 
-solveInferredConstraintWork :: (MonadTypeCheck m) => Bool -> [MetaTyVar] -> [TyConstraint] -> [TyConstraint] -> [InferredConstraint] -> m [TyConstraint]
+solveInferredConstraintWork :: Bool -> [MetaTyVar] -> [TyConstraint] -> [TyConstraint] -> [InferredConstraint] -> TC [TyConstraint]
 solveInferredConstraintWork raiseError existentials givenSubP given_ wanted_ = do
   given <- mapM zonkTypeC given_
   wanted <- mapM zonkTypeIC wanted_
@@ -419,10 +415,10 @@ solveInferredConstraintWork raiseError existentials givenSubP given_ wanted_ = d
 -- unless (null rem) $
 --   reportError
 
-simplifyConstraintsNoRed :: (MonadTypeCheck m) => [TyConstraint] -> m [TyConstraint]
+simplifyConstraintsNoRed :: [TyConstraint] -> TC [TyConstraint]
 simplifyConstraintsNoRed cs = removeRedundantConstraint =<< simplifyConstraints cs
 
-simplifyConstraints :: (MonadTypeCheck m) => [TyConstraint] -> m [TyConstraint]
+simplifyConstraints :: [TyConstraint] -> TC [TyConstraint]
 simplifyConstraints constrs = whenChecking (CheckingConstraint constrs) $ go constrs
   where
     go cs = do
@@ -433,7 +429,7 @@ simplifyConstraints constrs = whenChecking (CheckingConstraint constrs) $ go con
         then go cs'
         else return cs'
 
-checkImplication :: (MonadTypeCheck m) => Bool -> [TyConstraint] -> [TyConstraint] -> m Bool
+checkImplication :: Bool -> [TyConstraint] -> [TyConstraint] -> TC Bool
 checkImplication doesRaiseError given wanted = logBench "imp" $ do
   let prop = toFormula given .&&. SAT.neg (toFormula wanted)
   debugPrint 4 $
@@ -454,7 +450,7 @@ checkImplication doesRaiseError given wanted = logBench "imp" $ do
     Nothing -> return True
 
 -- | Removal of redundant predicate
-removeRedundantConstraint :: (MonadTypeCheck m) => [TyConstraint] -> m [TyConstraint]
+removeRedundantConstraint :: [TyConstraint] -> TC [TyConstraint]
 removeRedundantConstraint cs_ = do
   cs <- mapM zonkTypeC cs_
   go [] cs
@@ -471,7 +467,7 @@ removeRedundantConstraint cs_ = do
 --   a = b as we have b <= a, c <= a, a <= b, d <= b from the constraint.
 --
 --   The function returns true if it yields at least one equality constraint.
-loopToEquiv :: forall m. (MonadTypeCheck m) => [TyConstraint] -> m Bool
+loopToEquiv :: [TyConstraint] -> TC Bool
 loopToEquiv constraints = do
   sccs <- makeSCC constraints
   -- liftIO $ print $ red $ text "CS:" <+> ppr constraints
@@ -479,7 +475,7 @@ loopToEquiv constraints = do
   --                                                                  G.CyclicSCC x  -> text "Cyc " <+> ppr x) sccs)
   foldM procSCCs False sccs
   where
-    procSCCs :: Bool -> G.SCC Ty -> m Bool
+    procSCCs :: Bool -> G.SCC Ty -> TC Bool
     procSCCs isE (G.AcyclicSCC _) = return isE
     procSCCs isE (G.CyclicSCC [_]) = return isE
     procSCCs _isE (G.CyclicSCC xs) =
@@ -490,10 +486,10 @@ loopToEquiv constraints = do
       debugPrint 2 $ text "Equating" <+> ppr (ty : tys)
       forM_ tys $ \ty' -> unify ty ty'
 
-    makeSCC :: [TyConstraint] -> m [G.SCC Ty]
+    makeSCC :: [TyConstraint] -> TC [G.SCC Ty]
     makeSCC xs = G.stronglyConnComp . map (\(k, vs) -> (k, k, vs)) . M.toList <$> makeLeMap xs
 
-    makeLeMap :: [TyConstraint] -> m (M.Map Ty [Ty])
+    makeLeMap :: [TyConstraint] -> TC (M.Map Ty [Ty])
     makeLeMap [] = return M.empty
     makeLeMap (c : cs) = do
       t <- makeLeMap cs
@@ -521,14 +517,14 @@ loopToEquiv constraints = do
 -- MEqMax t1' t2' t3' <- zonkTypeC c
 -- return $ M.insertWith (++) t2' [t1'] $ M.insertWith (++) t3' [t1'] t
 
-propagateConstantsToFixedpoint :: (MonadTypeCheck m) => [TyConstraint] -> m [TyConstraint]
+propagateConstantsToFixedpoint :: [TyConstraint] -> TC [TyConstraint]
 propagateConstantsToFixedpoint xs = do
   ys <- propagateConstants xs
   if length xs > length ys
     then propagateConstantsToFixedpoint ys
     else return ys
 
-propagateConstants :: (MonadTypeCheck m) => [TyConstraint] -> m [TyConstraint]
+propagateConstants :: [TyConstraint] -> TC [TyConstraint]
 propagateConstants [] = return []
 propagateConstants (c : cs) = do
   c' <- zonkTypeC c
@@ -565,7 +561,7 @@ propagateConstants (c : cs) = do
           [TyMult One] -> [t]
           ts' -> t : ts'
 
-constrainVars :: (MonadTypeCheck m) => [(Name, Multiplication)] -> UseMap -> m ()
+constrainVars :: [(Name, Multiplication)] -> UseMap -> TC ()
 constrainVars [] _ = return ()
 constrainVars ((x, q) : xqs) m = do
   -- let dx = hsep [ text "linearity of", dquotes (ppr x) <> text ", but it is used more than once" ]
@@ -580,7 +576,7 @@ constrainVars ((x, q) : xqs) m = do
 
 -- TODO: sig-expression is buggy.
 
-inferTy :: (MonadTypeCheck m) => LExp 'Renaming -> m (LExp 'TypeCheck, BodyTy, UseMap)
+inferTy :: LExp 'Renaming -> TC (LExp 'TypeCheck, BodyTy, UseMap)
 inferTy (Loc loc expr) = go expr
   where
     -- go (Sig e tySyn) = do
@@ -595,17 +591,17 @@ inferTy (Loc loc expr) = go expr
       (e', umap) <- checkTy (Loc loc e) ty
       return (e', ty, umap)
 
-checkTyM :: (MonadTypeCheck m) => LExp 'Renaming -> BodyTy -> Multiplication -> m (LExp 'TypeCheck, UseMap)
+checkTyM :: LExp 'Renaming -> BodyTy -> Multiplication -> TC (LExp 'TypeCheck, UseMap)
 checkTyM lexp ty m = do
   (lexp', umap) <- checkTy lexp ty
   return (lexp', raiseUse m umap)
 
-checkTy :: forall m. (MonadTypeCheck m) => LExp 'Renaming -> BodyTy -> m (LExp 'TypeCheck, UseMap)
+checkTy :: LExp 'Renaming -> BodyTy -> TC (LExp 'TypeCheck, UseMap)
 checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ atExp lexp $ go expr
   where
     -- first3 f (a,b,c) = (f a, b, c)
 
-    go :: Exp 'Renaming -> m (Exp 'TypeCheck, UseMap)
+    go :: Exp 'Renaming -> TC (Exp 'TypeCheck, UseMap)
     go (WTup es) = do
       let n = length es
       tys <- mapM (const newMetaTy) [1 .. n]
@@ -809,7 +805,7 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
             , mergeUseMap (foldr (M.delete . fst) umapAs xqs) umapE
             )
 
-checkGeneralizeTy :: (MonadTypeCheck m) => SrcSpan -> Bool -> MonoTy -> UseMap -> PolyTy -> m ()
+checkGeneralizeTy :: SrcSpan -> Bool -> MonoTy -> UseMap -> PolyTy -> TC ()
 checkGeneralizeTy loc isTopLevel ty um polyTy2
   | not isTopLevel
   , Just monoTy2 <- testMonoTy polyTy2 =
@@ -817,7 +813,7 @@ checkGeneralizeTy loc isTopLevel ty um polyTy2
   | otherwise =
       checkPolyTy loc ty um polyTy2
 
-checkPolyTy :: (MonadTypeCheck m) => SrcSpan -> MonoTy -> UseMap -> PolyTy -> m ()
+checkPolyTy :: SrcSpan -> MonoTy -> UseMap -> PolyTy -> TC ()
 checkPolyTy loc ty1_ um polyTy2 = atLoc loc $ do
   debugPrint 4 $ "PolyTy" <+> text (show polyTy2)
   ty1 <- zonkType ty1_
@@ -856,7 +852,7 @@ checkPolyTy loc ty1_ um polyTy2 = atLoc loc $ do
   unless (null q) $ do
     reportError $ ImplicationCheckFail given q
 
-tryGeneralizeTy :: (MonadTypeCheck m) => Bool -> MonoTy -> UseMap -> m PolyTy
+tryGeneralizeTy :: Bool -> MonoTy -> UseMap -> TC PolyTy
 tryGeneralizeTy isTopLevel ty_ u = do
   if isTopLevel
     then generalizeTy ty_ u
@@ -866,7 +862,7 @@ tryGeneralizeTy isTopLevel ty_ u = do
       return ty
 
 -- NB: @generalizeTy@ makes the current constraint empty
-generalizeTy :: (MonadTypeCheck m) => MonoTy -> UseMap -> m PolyTy
+generalizeTy :: MonoTy -> UseMap -> TC PolyTy
 generalizeTy ty_ um = do
   cs <- readConstraint
   setConstraint []
@@ -912,7 +908,7 @@ generalizeTy ty_ um = do
 --   refersTo (MSub m ms)  vs = any (`elem` vs) $ metaTyVars (m:ms)
 --   refersTo (TyEq t1 t2) vs = any (`elem` vs) $ metaTyVars [t1,t2]
 
-inferPolyTy :: (MonadTypeCheck m) => Bool -> LExp 'Renaming -> m (LExp 'TypeCheck, PolyTy, UseMap)
+inferPolyTy :: Bool -> LExp 'Renaming -> TC (LExp 'TypeCheck, PolyTy, UseMap)
 inferPolyTy isMultipleUse expr = do
   (expr', ty, umap) <- pushLevel $ inferTy expr
 
@@ -924,7 +920,7 @@ inferPolyTy isMultipleUse expr = do
 
   return (expr', polyTy, umapM)
 
-inferExp :: (MonadTypeCheck m) => LExp 'Renaming -> m (LExp 'TypeCheck, PolyTy)
+inferExp :: LExp 'Renaming -> TC (LExp 'TypeCheck, PolyTy)
 inferExp expr = do
   -- ty <- newMetaTy
   -- (expr', _, cs) <- checkTy expr ty
@@ -938,12 +934,11 @@ inferExp expr = do
   return (expr', polyTy)
 
 checkAltsTy ::
-  (MonadTypeCheck m) =>
   [(LPat 'Renaming, Clause 'Renaming)]
   -> MonoTy
   -> Multiplication
   -> BodyTy
-  -> m ([(LPat 'TypeCheck, Clause 'TypeCheck)], UseMap)
+  -> TC ([(LPat 'TypeCheck, Clause 'TypeCheck)], UseMap)
 checkAltsTy alts patTy q bodyTy =
   -- parallel $ map checkAltTy alts
   gatherAltUC =<< mapM checkAltTy alts
@@ -966,9 +961,8 @@ checkAltsTy alts patTy q bodyTy =
 --   return (p', c')
 
 gatherAltUC ::
-  (MonadTypeCheck m) =>
   [(a, UseMap)]
-  -> m ([a], UseMap)
+  -> TC ([a], UseMap)
 gatherAltUC [] = return ([], M.empty)
 gatherAltUC ((obj, umap) : triples) = go obj umap triples
   where
@@ -980,10 +974,9 @@ gatherAltUC ((obj, umap) : triples) = go obj umap triples
       return (s : ss, um2)
 
 inferDecls ::
-  (MonadTypeCheck m) =>
   Bool -- is top level
   -> Decls 'Renaming (LDecl 'Renaming)
-  -> m (Decls 'TypeCheck (LDecl 'TypeCheck), [(Name, PolyTy)], UseMap)
+  -> TC (Decls 'TypeCheck (LDecl 'TypeCheck), [(Name, PolyTy)], UseMap)
 inferDecls _ (Decls v _) = absurd v
 inferDecls isTopLevel (HDecls _ dss) = do
   (dss', bind, umap) <- go [] dss
@@ -996,11 +989,10 @@ inferDecls isTopLevel (HDecls _ dss) = do
       return (ds' : rest', bs', mergeUseMap umap umap')
 
 inferTopDecls ::
-  (MonadTypeCheck m) =>
   Decls 'Renaming (LDecl 'Renaming)
   -> [Loc (Name, [Name], [Loc (CDecl 'Renaming)])]
   -> [Loc (Name, [Name], LTy 'Renaming)]
-  -> m
+  -> TC
       ( Decls 'TypeCheck (LDecl 'TypeCheck)
       , [(Name, PolyTy)]
       , [C.DDecl Name]
@@ -1051,10 +1043,9 @@ inferTopDecls decls dataDecls typeDecls = do
               in  (cn, ConTy tvs xs' q' tyms' retTy)
 
 inferMutual ::
-  (MonadTypeCheck m) =>
   Bool --
   -> [LDecl 'Renaming]
-  -> m ([LDecl 'TypeCheck], [(Name, PolyTy)], UseMap)
+  -> TC ([LDecl 'TypeCheck], [(Name, PolyTy)], UseMap)
 inferMutual isTopLevel decls = do
   --  let nes = [ (n,e) | Loc _ (DDef n _) <- decls ]
   let ns = [n | Loc _ (DDef n _) <- decls]
@@ -1168,7 +1159,7 @@ inferMutual isTopLevel decls = do
       constrainVars xqs umap
       return ((ps', c'), foldr (M.delete . fst) umap' xqs)
 
-checkClauseTy :: (MonadTypeCheck m) => Clause 'Renaming -> Ty -> m (Clause 'TypeCheck, UseMap)
+checkClauseTy :: Clause 'Renaming -> Ty -> TC (Clause 'TypeCheck, UseMap)
 checkClauseTy (Clause e ws wi) expectedTy = do
   (ws', bind, umap) <- inferDecls False ws
   withVars bind $ do
@@ -1181,7 +1172,7 @@ checkClauseTy (Clause e ws wi) expectedTy = do
       Nothing -> return (Nothing, M.empty)
     return (Clause e' ws' wi', umap `mergeUseMap` umapE `mergeUseMap` umapWi)
 
-skolemize :: (MonadTypeCheck m) => PolyTy -> m ([TyVar], QualTy)
+skolemize :: PolyTy -> TC ([TyVar], QualTy)
 skolemize (TyForAll tvs ty) = do
   sks <- localIcLevel (const $ (-1)) $ mapM newSkolemTyVar tvs
   return (sks, substTyQ (zip tvs $ map TyVar sks) ty)
@@ -1410,13 +1401,13 @@ eliminateExistential vars cs =
 --     gatherMvInTyEq (TyEq t1 t2) = metaTyVars [t1,t2]
 --     gatherMvInTyEq _            = []
 
-eliminateExistentialL :: (MonadTypeCheck m) => [MetaTyVar] -> [TyConstraint] -> m [TyConstraint]
+eliminateExistentialL :: [MetaTyVar] -> [TyConstraint] -> TC [TyConstraint]
 eliminateExistentialL vars cs =
   logBenchN "qe" (length vars) $ do
     let cs' = eliminateExistential vars cs
     seq cs' (return cs')
 
-quantify :: (MonadTypeCheck m) => [MetaTyVar] -> QualTy -> m PolyTy
+quantify :: [MetaTyVar] -> QualTy -> TC PolyTy
 quantify mvs0 ty0 = do
   -- debugPrint 2 $ red $ text "Simpl:" <+> align (group (ppr (mvs0, ty0)) <> line <> text "-->" <> line <> group (ppr (mvs, ty)))
   -- liftIO $ print $ red $ "Generalization:" <+> ppr (zip mvs newBinders)

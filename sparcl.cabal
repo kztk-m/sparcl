@@ -67,7 +67,7 @@ library
   import: deps
   exposed-modules:
     Language.Sparcl.Algorithm.SAT
-    Language.Sparcl.Class
+    -- Language.Sparcl.Class
     Language.Sparcl.CodeGen.Haskell
     Language.Sparcl.Command
     Language.Sparcl.Core.Syntax
@@ -90,7 +90,7 @@ library
     Language.Sparcl.Surface.Parser.Id
     Language.Sparcl.Surface.Parsing
     Language.Sparcl.Surface.Syntax
-    Language.Sparcl.TH
+    -- Language.Sparcl.TH
     Language.Sparcl.Typing.TCMonad
     Language.Sparcl.Typing.Type
     Language.Sparcl.Typing.Typing
@@ -126,8 +126,7 @@ executable sparcl-exe
 
   -- -threaded -rtsopts -with-rtsopts=-N
   build-depends:
-    sparcl,
-    sparcl-runtime,
+    sparcl
 
 test-suite sparcl-test
   import: deps
