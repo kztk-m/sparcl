@@ -26,13 +26,20 @@ import           Language.Sparcl.Pretty      hiding ((<$>))
 --   Just  v -> return v
 
 
-evalUBind :: Env -> Bind Name -> Eval Env
-evalUBind env ds = do
+evalUBindWork :: Env -> Bind Name -> Eval (Env, [(Name,Value)]) 
+evalUBindWork env ds = do
     rec ev  <- mapM (\(n,_,e) -> do
                         v <- evalU env' e
                         return (n,v)) ds
         let env' = extendsEnv ev env
-    return env'
+    pure (env', ev) 
+
+
+evalUBind :: Env -> Bind Name -> Eval Env
+evalUBind env ds = fst <$> evalUBindWork env ds 
+
+evalUBindNoAcc :: Env -> Bind Name -> Eval [(Name,Value)]
+evalUBindNoAcc env ds = snd <$> evalUBindWork env ds 
 
 evalU :: Env -> Exp Name -> Eval Value
 evalU env expr = case expr of

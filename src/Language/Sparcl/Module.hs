@@ -20,15 +20,8 @@ import qualified Data.Set as S
 import Data.Function (on)
 import Data.Ratio ((%))
 
-import System.Directory as Dir (
-  createDirectoryIfMissing,
-  doesFileExist,
- )
-import qualified System.FilePath as FP (
-  takeDirectory,
-  (<.>),
-  (</>),
- )
+import System.Directory as Dir (doesFileExist)
+import qualified System.FilePath as FP ((<.>), (</>))
 
 import Control.Monad (forM, when)
 import Control.Monad.IO.Class
@@ -58,7 +51,6 @@ import Language.Sparcl.Surface.Parsing
 data ModuleInfo v = ModuleInfo
   { miModuleName :: !ModuleName
   , miModuleContext :: ModuleContext v
-  , miHsFile :: !FilePath
   }
 
 data ModuleContext v = ModuleContext
@@ -138,7 +130,6 @@ baseModuleInfo =
           , mcSynTable = synTable
           , mcValueTable = valueTable
           }
-    , miHsFile = "Language.Sparcl.Base"
     }
   where
     eqInt = base "eqInt"
@@ -544,7 +535,6 @@ interpDecls mCurrentModuleName decls interp = do
                 , mcConTable = newCTypeTable
                 , mcValueTable = M.fromList newValueEnv
                 }
-          , miHsFile = "" -- hsFile
           }
   pure newMod
 

@@ -422,7 +422,7 @@ procType str = do
 procExp :: String -> REPL ()
 procExp "" = waitCommand
 procExp str = do
-  res <- tryExec $ fromLoader $ valueOfExpressionStr str (\env bind -> pure $ M.toList $ runEval (evalUBind env bind))
+  res <- tryExec $ fromLoader $ valueOfExpressionStr str (\env bind -> pure $ runEval (evalUBindNoAcc env bind))
 
   case res of
     Nothing -> waitCommand
