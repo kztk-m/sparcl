@@ -383,6 +383,12 @@ exportNames ns m = do
 --           withImport baseModuleInfo $
 --             readModuleWork fp
 
+askTC :: Loader v TypingContext
+askTC = do
+  tc <- asks lcTC
+  dl <- askDebugLevel
+  pure (tc{tcDebugLevel = dl})
+
 readExp :: String -> Loader v (Loader v (Exp Name), Ty)
 readExp str = do
   nameTable <- asks (mcNameTable . lcModuleContext)
@@ -411,7 +417,7 @@ readExp str = do
 
   -- liftIO $ setEnvs tinfo typeTable synTable
   (typedExp, ty) <- do
-    tc <- asks lcTC
+    tc <- askTC
     liftIO $ execTCWith tc conTable typeTable synTable $ inferExp renamedExp
   debugPrint 1 $ text "Type checking Ok."
   ty' <- liftIO $ evaluate ty
@@ -419,7 +425,7 @@ readExp str = do
   let eComp = do
         debugPrint 1 $ text "Desugaring expression..."
         desugaredExp <- do
-          tc <- asks lcTC
+          tc <- askTC
           liftIO $ execTC tc $ runDesugar $ desugarExp typedExp
         debugPrint 1 $ text "Desugaring Ok."
         debugPrint 2 $ nest 2 $ vsep [text "Desugared:", align (ppr desugaredExp)]
@@ -491,13 +497,13 @@ interpDecls mCurrentModuleName decls interp = do
   debugPrint 2 $ text "under ty env" </> pprMap tyEnv
 
   (typedDecls, nts, _dataDecls', _typeDecls', newCTypeTable, newSynTable) <- do
-    tc <- asks lcTC
+    tc <- askTC
     liftIO $ execTCWith tc conEnv tyEnv synEnv $ inferTopDecls renamedDecls tyDecls synDecls
 
   debugPrint 1 $ text "Type checking Ok."
   debugPrint 1 $ text "Desugaring ..."
   bind <- do
-    tc <- asks lcTC
+    tc <- askTC
     liftIO $ execTC tc $ runDesugar $ desugarTopDecls typedDecls
 
   debugPrint 1 $ text "Desugaring Ok."
