@@ -81,10 +81,6 @@ msub ts1 ts2 = [MSub t1 ts2 | t1 <- ts1]
 msubMult :: Multiplication -> Multiplication -> [TyConstraint]
 msubMult m1 m2 = msub (m2ty m1) (m2ty m2)
 
-constrainLessThanOne :: Multiplication -> TC ()
-constrainLessThanOne m =
-  forM_ (m2ty m) $ \q -> unify q one
-
 tryUnify :: Ty -> Ty -> TC ()
 tryUnify t1 t2 = whenChecking (CheckingEquality t1 t2) $ unify t1 t2
 
@@ -251,7 +247,7 @@ checkPatTyWork isUnderRev (Loc loc pat) pmult patTy = do
       forM_ bind' $ \(x, _, m) ->
         -- TODO: Add good error messages.
         --- addConstraint $ msubMult m one
-        whenChecking (CheckingMultiplicities x MCLinearity (m2ty m) [one]) $ constrainLessThanOne m
+        whenChecking (CheckingMultiplicities x MCLinearity (m2ty m) [one]) $ constrainLessThan m one
 
       return (req, cs, PREV p', bind')
     go (PWild x) = do
@@ -263,7 +259,8 @@ checkPatTyWork isUnderRev (Loc loc pat) pmult patTy = do
       return (req, cs, PWild x', [])
 
 constrainLessThan :: Multiplication -> Multiplication -> TC ()
-constrainLessThan m1 (m2ty -> [TyMult One]) = constrainLessThanOne m1
+constrainLessThan m1 (m2ty -> []) =
+  forM_ (m2ty m1) $ \q -> unify q (TyMult One)
 constrainLessThan (m2ty -> [TyMult Omega]) m2 =
   forM_ (m2ty m2) $ \q -> unify (TyMult Omega) q
 constrainLessThan m1 m2 = addConstraint (msubMult m1 m2)
