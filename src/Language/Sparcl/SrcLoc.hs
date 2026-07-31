@@ -1,51 +1,84 @@
-module Language.Sparcl.SrcLoc where
+module Language.Sparcl.SrcLoc (SrcLoc (..), SrcSpan (..), Loc (..), noLoc, extend, retrieveAndRender) where
 
-import           Language.Sparcl.Pretty as D
+import Control.Exception
+import Control.Monad.Except (catchError)
+import Language.Sparcl.Pretty as D
+import System.IO (IOMode (ReadMode), hGetLine, withFile)
 
-data SrcLoc = SrcLoc { slFilename :: !(Maybe FilePath), slRow :: !Int, slCol :: !Int }
+data SrcLoc = SrcLoc {slFilename :: !(Maybe FilePath), slRow :: !Int, slCol :: !Int}
   deriving (Eq, Ord, Show)
 
 instance Pretty SrcLoc where
   ppr (SrcLoc m r c) =
-    D.angles $ D.hcat [pprMaybeFilePath m,
-                       D.colon,
-                       D.parens $ D.hcat [ D.ppr r,
-                                           D.comma,
-                                           D.ppr c ] ]
+    D.angles $
+      D.hcat
+        [ pprMaybeFilePath m
+        , D.colon
+        , D.parens $
+            D.hcat
+              [ D.ppr r
+              , D.comma
+              , D.ppr c
+              ]
+        ]
 
 pprMaybeFilePath :: Maybe FilePath -> D.Doc
-pprMaybeFilePath Nothing  = D.ppr "*unknown source*"
+pprMaybeFilePath Nothing = D.ppr "*unknown source*"
 pprMaybeFilePath (Just s) = D.text s
 
+data SrcSpan
+  = SrcSpan !(Maybe FilePath) !Int !Int !Int !Int
+  | NoLoc
+  deriving (Eq, Ord, Show)
 
-data SrcSpan = SrcSpan !(Maybe FilePath) !Int !Int !Int !Int
-             | NoLoc
-             deriving (Eq, Ord, Show)
+retrieveAndRender :: SrcSpan -> IO (Maybe Doc)
+retrieveAndRender NoLoc = pure Nothing
+retrieveAndRender (SrcSpan Nothing _ _ _ _) = pure Nothing
+retrieveAndRender (SrcSpan (Just fp) lstart cstart lend _cend) = do
+  let comp = do
+        l <- readLineAt fp lstart
+        let lstartStr = show lstart
+        let l1Head = replicate (length lstartStr + 1) ' ' <> "|"
+        let l2Head = lstartStr <> " |"
+        let l3Head = l1Head
+        let l1 = text l1Head
+        let l2 = text l2Head <+> text l
+        let l3 = text l3Head <+> text (replicate (cstart - 1) ' ' <> replicate (length l - cstart + 1) '^') <> if lend > lstart then text "..." else mempty
+        pure $ Just $ vcat [l1, l2, l3]
+  comp `catchError` (\(_ :: IOException) -> pure Nothing)
 
+readLineAt :: FilePath -> Int -> IO String
+readLineAt fp start = withFile fp ReadMode $ \h -> do
+  sequence_ [hGetLine h | _ <- [1 .. start - 1]]
+  hGetLine h
 instance Pretty SrcSpan where
   ppr NoLoc = D.angles $ D.text "<*unknown place*>"
   ppr (SrcSpan fp r1 c1 r2 c2) =
-    D.hcat [pprMaybeFilePath fp,
-             D.colon, pprPos ]
+    D.hcat
+      [ pprMaybeFilePath fp
+      , D.colon
+      , pprPos
+      ]
     where
       pprPos
-        | r1 == r2 && c1 == c2 = D.hcat [ D.ppr r1, D.colon, D.ppr c1]
-        | r1 == r2 && c1 /= c2 = D.hcat [ D.ppr r1, D.colon, D.ppr c1, D.text "-", D.ppr c2 ]
-        | otherwise            = D.hcat [ D.parens (D.hcat [D.ppr r1, D.colon, D.ppr c1]),
-                                          D.text "-",
-                                          D.parens (D.hcat [D.ppr r2, D.colon, D.ppr c2])]
-
-
+        | r1 == r2 && c1 == c2 = D.hcat [D.ppr r1, D.colon, D.ppr c1]
+        | r1 == r2 && c1 /= c2 = D.hcat [D.ppr r1, D.colon, D.ppr c1, D.text "-", D.ppr c2]
+        | otherwise =
+            D.hcat
+              [ D.parens (D.hcat [D.ppr r1, D.colon, D.ppr c1])
+              , D.text "-"
+              , D.parens (D.hcat [D.ppr r2, D.colon, D.ppr c2])
+              ]
 
 noLoc :: a -> Loc a
 noLoc = Loc NoLoc
 
 instance Semigroup SrcSpan where
   NoLoc <> e = e
-  SrcSpan fp ls1 cs1 le1 ce1  <> SrcSpan _ ls2 cs2 le2 ce2 =
+  SrcSpan fp ls1 cs1 le1 ce1 <> SrcSpan _ ls2 cs2 le2 ce2 =
     let (ls, cs) = min (ls1, cs1) (ls2, cs2)
         (le, ce) = max (le1, ce1) (le2, ce2)
-    in SrcSpan fp ls cs le ce
+    in  SrcSpan fp ls cs le ce
   s <> NoLoc = s
 
 instance Monoid SrcSpan where

@@ -40,14 +40,17 @@ data AbortTyping = AbortTyping
   deriving Show
 instance Exception AbortTyping
 
+data MCContext = MCLinearity | MCUnrestrictedness | MCUnknown
+
 data WhenChecking
   = CheckingEquality !Ty !Ty
   | CheckingConstraint ![TyConstraint]
   | CheckingMoreGeneral !Ty !Ty
+  | CheckingMultiplicities Name MCContext ![Ty] ![Ty]
   | OtherContext !Doc
   | CheckingNone
 
-data TypeError = TypeError !(Maybe SrcSpan) ![S.LExp 'Renaming] !WhenChecking !ErrorDetail
+data TypeError = TypeError !(Maybe SrcSpan) (Maybe Doc) ![S.LExp 'Renaming] !WhenChecking !ErrorDetail
 
 data ErrorDetail
   = UnMatchTy !Ty !Ty
@@ -62,14 +65,17 @@ data ErrorDetail
   | Other !D.Doc
 
 instance Pretty TypeError where
-  ppr (TypeError l exprs ctxt doc) =
-    nest 2 $
-      -- D.bold (D.text "[TYPE ERROR]") D.<+> D.nest 2
-      D.bold (maybe (D.text "<*unknown place*>") ppr l <> text ":" <+> D.red (text "type error"))
-        <> line
-        <> pprDetail doc
-        <> pprWhenChecking ctxt
-        <> (if null exprs then empty else item (group $ pprContexts (drop (length exprs - 3) exprs)))
+  ppr (TypeError l snippet exprs ctxt doc) =
+    -- D.bold (D.text "[TYPE ERROR]") D.<+> D.nest 2
+    D.bold (maybe (D.text "<*unknown place*>") ppr l <> text ":" <+> D.red (text "type error"))
+      <> line
+      <> maybe mempty (<> line <> nest 2 line) snippet
+      <> nest
+        2
+        ( pprDetail doc
+            <> pprWhenChecking ctxt
+            <> (if null exprs then empty else item (group $ pprContexts (drop (length exprs - 3) exprs)))
+        )
     where
       item d = text "-" <+> align d <> line
 
@@ -105,6 +111,15 @@ instance Pretty TypeError where
             ( D.text "when checking constraints:"
                 D.<$> D.parens (hsep $ punctuate comma $ map ppr cs)
             )
+      pprWhenChecking (CheckingMultiplicities x _mc used provided) =
+        D.line
+          <> item
+            ( D.text "when checking multiplicity of" <+> ppr x
+                <> D.nest 2 (line <> vsep [hsep [text "Given:", align $ pprMults provided], hsep [text "Used: ", align $ pprMults used]])
+            )
+        where
+          pprMults [] = text "One"
+          pprMults ms = hcat $ punctuate (text "*") (map ppr ms)
       pprWhenChecking (OtherContext d) =
         D.line
           <> item (D.text "when checking" <+> d)
@@ -465,7 +480,8 @@ abortTyping = throwM AbortTyping
 reportError :: ErrorDetail -> TC ()
 reportError mes = do
   tc <- ask
-  let err = TypeError (tcLoc tc) (tcContexts tc) (tcChecking tc) mes
+  snippet <- liftIO $ fmap join $ traverse retrieveAndRender (tcLoc tc)
+  let err = TypeError (tcLoc tc) snippet (tcContexts tc) (tcChecking tc) mes
   liftIO $ modifyIORef (tcRefErrors tc) $ \s -> s Seq.:|> err
 
 whenChecking :: WhenChecking -> TC a -> TC a
@@ -709,10 +725,10 @@ zonkTypeIC (ICNormal c) = ICNormal <$> zonkTypeC c
 zonkTypeIC (ICGuarded cs ics) = ICGuarded <$> mapM zonkTypeC cs <*> mapM zonkTypeIC ics
 
 zonkTypeError :: TypeError -> TC TypeError
-zonkTypeError (TypeError loc es wc res) = do
+zonkTypeError (TypeError loc snippet es wc res) = do
   wc' <- zonkWhenChecking wc
   res' <- zonkErrorDetail res
-  return $ TypeError loc es wc' res'
+  return $ TypeError loc snippet es wc' res'
 
 zonkWhenChecking :: WhenChecking -> TC WhenChecking
 zonkWhenChecking (CheckingEquality t1 t2) =
@@ -721,6 +737,8 @@ zonkWhenChecking (CheckingMoreGeneral t1 t2) =
   CheckingMoreGeneral <$> zonkType t1 <*> zonkType t2
 zonkWhenChecking (CheckingConstraint cs) =
   CheckingConstraint <$> traverse zonkTypeC cs
+zonkWhenChecking (CheckingMultiplicities x mc ts1 ts2) =
+  CheckingMultiplicities x mc <$> mapM zonkType ts1 <*> mapM zonkType ts2
 zonkWhenChecking (OtherContext d) = return (OtherContext d)
 zonkWhenChecking CheckingNone = return CheckingNone
 

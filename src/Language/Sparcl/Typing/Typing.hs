@@ -81,6 +81,10 @@ msub ts1 ts2 = [MSub t1 ts2 | t1 <- ts1]
 msubMult :: Multiplication -> Multiplication -> [TyConstraint]
 msubMult m1 m2 = msub (m2ty m1) (m2ty m2)
 
+constrainLessThanOne :: Multiplication -> TC ()
+constrainLessThanOne m =
+  forM_ (m2ty m) $ \q -> unify q one
+
 tryUnify :: Ty -> Ty -> TC ()
 tryUnify t1 t2 = whenChecking (CheckingEquality t1 t2) $ unify t1 t2
 
@@ -244,9 +248,10 @@ checkPatTyWork isUnderRev (Loc loc pat) pmult patTy = do
       (req, cs, p', bind) <- checkPatTyWork True p pmult ty
       let bind' = map (\(x, t, m) -> (x, revTy t, m)) bind
 
-      forM_ bind' $ \(_, _, m) ->
+      forM_ bind' $ \(x, _, m) ->
         -- TODO: Add good error messages.
-        addConstraint $ msubMult m one
+        --- addConstraint $ msubMult m one
+        whenChecking (CheckingMultiplicities x MCLinearity (m2ty m) [one]) $ constrainLessThanOne m
 
       return (req, cs, PREV p', bind')
     go (PWild x) = do
@@ -257,6 +262,20 @@ checkPatTyWork isUnderRev (Loc loc pat) pmult patTy = do
       addConstraint $ msubMult omega pmult
       return (req, cs, PWild x', [])
 
+constrainLessThan :: Multiplication -> Multiplication -> TC ()
+constrainLessThan m1 (m2ty -> [TyMult One]) = constrainLessThanOne m1
+constrainLessThan (m2ty -> [TyMult Omega]) m2 =
+  forM_ (m2ty m2) $ \q -> unify (TyMult Omega) q
+constrainLessThan m1 m2 = addConstraint (msubMult m1 m2)
+
+locPS :: [LPat 'Renaming] -> Maybe SrcSpan
+locPS [] = Nothing
+locPS ps = Just $ mconcat $ map location ps
+
+atLocMaybe :: Maybe SrcSpan -> TC a -> TC a
+atLocMaybe Nothing = id
+atLocMaybe (Just x) = atLoc x
+
 constrainVars :: [(Name, Multiplication)] -> UseMap -> TC ()
 constrainVars [] _ = return ()
 constrainVars ((x, q) : xqs) m = do
@@ -264,11 +283,13 @@ constrainVars ((x, q) : xqs) m = do
   case lookupUseMap x m of
     Just mul -> do
       constrainVars xqs m
-      addConstraint $ msubMult mul q
+      -- addConstraint $ msubMult mul q
+      whenChecking (CheckingMultiplicities x MCUnknown (m2ty mul) (m2ty q)) $ constrainLessThan mul q
     Nothing -> do
       -- whenChecking (OtherContext dx) $ unify q (TyMult Omega)
       constrainVars xqs m
-      addConstraint $ msubMult omega q
+      -- addConstraint $ msubMult omega q
+      whenChecking (CheckingMultiplicities x MCUnrestrictedness [omega] (m2ty q)) $ constrainLessThan omega q
 
 -- TODO: sig-expression is buggy.
 
@@ -338,7 +359,7 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
       let xqs = map (\(x, _, q) -> (x, q)) bind
 
       tryUnify (foldr (uncurry tyarr) retTy $ zip qs ts) expectedTy
-      constrainVars xqs umap
+      atLocMaybe (locPS pats) $ constrainVars xqs umap
 
       return (Abs pats' e', foldr (M.delete . fst) umap xqs)
     go (App e1 e2) = do
@@ -364,7 +385,7 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
 
       let xqs = map (\(x, _, q) -> (x, q)) bind
 
-      constrainVars xqs umap2
+      atLoc (location p) $ constrainVars xqs umap2
       let umap2' = foldr (M.delete . fst) umap2 xqs
 
       return (Let1 p' e1' e2', mergeUseMap umap1 umap2')
@@ -493,7 +514,7 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
             goAs as
           let xqs = map (\(x, _, q) -> (x, q)) bind
 
-          constrainVars xqs umapAs
+          atLoc (location p) $ constrainVars xqs umapAs
 
           return
             ( (p', e') : as'
@@ -648,7 +669,7 @@ checkAltsTy alts patTy q bodyTy =
         checkClauseTy c bodyTy
 
       let xqs = map (\(x, _, qq) -> (x, qq)) bind
-      constrainVars xqs umap
+      atLoc (location pat) $ constrainVars xqs umap
       return ((pat', c'), foldr (M.delete . fst) umap xqs)
 
 -- checkAltTy (p, c) = do
@@ -852,7 +873,7 @@ inferMutual isTopLevel decls = do
 
       let xqs = map (\(x, _, q) -> (x, q)) bind
 
-      constrainVars xqs umap
+      atLocMaybe (locPS ps) $ constrainVars xqs umap
       return ((ps', c'), foldr (M.delete . fst) umap' xqs)
 
 checkClauseTy :: Clause 'Renaming -> Ty -> TC (Clause 'TypeCheck, UseMap)
