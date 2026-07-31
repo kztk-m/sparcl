@@ -38,7 +38,7 @@ import System.IO (stdout)
 
 import Control.Monad.Reader (asks, local)
 import Language.Sparcl.Command
-import Language.Sparcl.Core.Syntax
+import Language.Sparcl.Core.Syntax hiding (REPL)
 import Language.Sparcl.DebugPrint
 import Language.Sparcl.Eval
 import Language.Sparcl.Exception

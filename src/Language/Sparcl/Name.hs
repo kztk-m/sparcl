@@ -52,7 +52,7 @@ data Name
   | Generated !Int !Phase
   deriving Show
 
-data Phase = Desugaring | CodeGen deriving (Eq, Show, Ord)
+data Phase = Desugaring | REPL deriving (Eq, Show, Ord)
 
 instance NFData Phase where
   rnf x = seq x ()
@@ -101,7 +101,7 @@ instance Pretty SurfaceName where
 -- Basically, the method pretty-print names as the original without additional
 -- information introduced in the system.
 instance Pretty Name where
-  ppr (Generated i p) = text "_" <> text (case p of Desugaring -> "d"; CodeGen -> "c") <> ppr i
+  ppr (Generated i p) = text "_" <> text (case p of Desugaring -> "d"; REPL -> "r") <> ppr i
   ppr (Alpha _i n) = ppr n
   ppr (Local n) = ppr n
   ppr (Original _ _ o) = ppr o

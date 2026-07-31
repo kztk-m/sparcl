@@ -439,7 +439,7 @@ valueOfExpressionStr s interp = do
   e <- mExp
 
   valEnv <- asks (mcValueTable . lcModuleContext)
-  let name = Generated (-1) CodeGen
+  let name = Generated (-1) REPL
   res <- liftIO $ interp valEnv [(name, ty, e)]
   case res of
     [(_, v)] -> pure v
