@@ -180,8 +180,8 @@ renameExp level localnames (Loc loc expr) = first (Loc loc) <$> go expr
 
     go (Op n e1 e2) = do
       n' <- resolveName loc localnames n
-      (e', fv) <- rearrangeOp loc level localnames n' e1 e2
-      return (unLoc e', S.insert n' fv)
+      (e', fv) <- rearrangeOp loc level localnames n' e1 e2 -- adding n' to fv is responsibility of rearrangeOp
+      return (unLoc e', fv)
 
 
     go (RCon c) = do
@@ -256,10 +256,11 @@ rearrangeOp loc level localnames op exp1 exp2 = do
         if | isAssocLeft (k1, a1) (k2, a2) -> do
                (e2',  fv2) <- renameExp level localnames e2
                (e12', fv1) <- go l1 e1 op1' e2'
-               return (opExp l2 op2' e12' e3', S.union fv1 fv2)
+               return (opExp l2 op2' e12' e3', S.insert op2' $ S.union fv1 fv2)
            | isAssocRight (k1, a1) (k2, a2) -> do
-               (e2', _) <- renameExp level localnames e2
-               go l1 e1 op1' (opExp l2 op2' e2' e3')
+               (e2', fv2) <- renameExp level localnames e2
+               (e123, fv1) <- go l1 e1 op1' (opExp l2 op2' e2' e3')
+               pure (e123, S.insert op2' $ S.union fv1 fv2)
               --  (e1',  fv1) <- renameExp level localnames e1
               --  (e23', fv2) <- go l2 e2 op2' e3'
               --  return (opExp l1 op1' e1' e23', S.union fv1 fv2)
@@ -271,7 +272,7 @@ rearrangeOp loc level localnames op exp1 exp2 = do
                                   hsep [ppr op2', text "has fixity:", ppr k2, ppr a2]])
       go l e1 op' e2' = do
         (e1', fv1) <- renameExp level localnames e1
-        return (opExp l op' e1' e2' , fv1)
+        return (opExp l op' e1' e2' , S.insert op' fv1)
 
       opExp l opName e1 e2 = Loc l (Op opName e1 e2)
 
