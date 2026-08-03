@@ -1,0 +1,17 @@
+sig ($) : (p <= r) => (a # p -> b) # 1 -> a # r -> b
+def ($) f x = f x
+
+sig ($$) : (p <= r) => (a # p -> b) # 1 -> a # r -> b
+def ($$) f x = f x
+
+fixity $ 0 right 
+fixity $$ 100 left 
+
+sig f : Int -> Int
+def f x = x
+
+sig v : Int
+def v = f $ 1 + 1
+
+sig vv : Int 
+def vv = (\x -> x) $$ f $ 1 + 1
