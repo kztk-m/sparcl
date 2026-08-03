@@ -396,7 +396,7 @@ data Decls p x
 
 instance (Pretty x, AllPretty p) => Pretty (Decls p x) where
   ppr (Decls _ ds) = vcat (map ppr ds)
-  ppr (HDecls _ dss) = vcat (map (vcat . map ppr) dss)
+  ppr (HDecls _ dss) = vcat $ punctuate (line <> text "-- --------") $ map (vcat . map ppr) dss
 
 type family XDecls p where
   XDecls 'Parsing = ()
