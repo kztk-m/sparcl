@@ -17,5 +17,5 @@ instance NFData Literal where
 instance Pretty Literal where
   ppr (LitInt i) = ppr i
   ppr (LitDouble d) = ppr d
-  ppr (LitChar c) = ppr (show c)
+  ppr (LitChar c) = ppr c
   ppr (LitRational q) = ppr q

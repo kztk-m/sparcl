@@ -1,0 +1,92 @@
+-- Type classes combined with Sparcl's partially-invertible features.
+--
+-- Features exercised:
+--   * class methods whose types involve `rev` and linear arrows (-o)
+--   * methods with explicit multiplicity annotations (# Omega)
+--   * instances defined with invertible pattern matching (rev patterns
+--     and `with` clauses)
+--   * code taking implicit instance arguments that runs forwards and backwards
+--
+-- An instance argument {{C a}} -> T is always unrestricted (Omega), so
+-- the dictionary may be used any number of times, even when the rest of
+-- the type is linear (e.g. {{RevSucc a}} -> rev a -o rev a).
+
+data Nat = Z | S Nat
+data List a = Nil | Cons a (List a)
+
+def fwd f = case unlift f of (x, _) -> x end
+def bwd f = case unlift f of (_, x) -> x end
+
+-- An invertible "successor" on a type: forwards it increments a value,
+-- backwards it decrements it.
+class RevSucc a where
+    sig rsucc : rev a -o rev a
+end
+
+instance revSuccNat : RevSucc Nat where
+    def rsucc n = rev S n
+end
+
+instance {{RevSucc a}} -> RevSucc (List a) where
+    -- increments every element
+    def rsucc (rev Nil)       = rev Nil with isNil
+            | (rev Cons x xs) = rev Cons (rsucc x) (rsucc xs)
+end
+
+sig isNil : List a -> Bool
+def isNil Nil = True
+        | _   = False
+
+-- An invertible serialization into a list of bits.
+data Bit = O | I
+
+class Serialize a where
+    sig encode : rev a -o rev (List Bit) -o rev (List Bit)
+end
+
+instance Serialize Nat where
+    -- unary encoding: S^n Z  ~>  I ... I O
+    def encode (rev Z)   bs = rev Cons (rev O) bs with isO
+             | (rev S n) bs = rev Cons (rev I) (encode n bs)
+end
+
+sig isO : List Bit -> Bool
+def isO (Cons O _) = True
+      | _          = False
+
+instance {{Serialize a}} -> Serialize (List a) where
+    -- a list is a sequence of (I, element) followed by O
+    def encode (rev Nil)       bs = rev Cons (rev O) bs with isO
+             | (rev Cons x xs) bs = rev Cons (rev I) (encode x (encode xs bs))
+end
+
+sig serialize : {{Serialize a}} -> rev a -o rev (List Bit)
+def serialize x = encode x (rev Nil)
+
+-- A class whose method takes an unrestricted (non-linear) static argument,
+-- which is the usual pattern for partially-invertible functions.
+class RevAdd a where
+    sig radd : a # Omega -> rev a -o rev a
+end
+
+instance RevAdd Nat where
+    def radd Z     y = y
+           | (S x) y = rev S (radd x y)
+end
+
+-- The instance argument is used twice here, which is fine since it is
+-- unrestricted.
+sig twice : {{RevSucc a}} -> rev a -o rev a
+def twice x = rsucc (rsucc x)
+
+-- Test expressions
+
+def t1 = fwd twice (S Z)
+def t2 = bwd twice (S (S (S Z)))
+def t3 = fwd rsucc (Cons Z (Cons (S Z) Nil))
+def t4 = bwd rsucc (Cons (S Z) (Cons (S (S Z)) Nil))
+def t5 = fwd serialize (Cons (S Z) (Cons Z Nil))
+def t6 = bwd serialize (Cons I (Cons I (Cons O (Cons I (Cons O (Cons O Nil))))))
+def t7 = fwd (radd (S (S Z))) (S Z)
+def t8 = bwd (radd (S (S Z))) (S (S (S Z)))
+def t9 = fwd (twice {{revSuccNat}}) Z

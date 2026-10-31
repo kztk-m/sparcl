@@ -1,0 +1,68 @@
+-- Multi-parameter type classes and class-polymorphic constants.
+--
+-- Features exercised:
+--   * a class with two parameters (Convert a b)
+--   * class methods with no function arguments (mempty)
+--   * several instance arguments in one signature
+--   * explicit forall together with instance arguments
+
+data Nat = Z | S Nat
+data List a = Nil | Cons a (List a)
+
+-- Multi-parameter class
+
+class Convert a b where
+    sig convert : a -> b
+end
+
+instance convNatInt : Convert Nat Int where
+    def convert Z     = 0
+              | (S n) = 1 + convert n
+end
+
+instance Convert Bool Nat where
+    def convert False = Z
+              | True  = S Z
+end
+
+instance {{Convert a b}} -> Convert (List a) (List b) where
+    def convert Nil         = Nil
+              | (Cons x xs) = Cons (convert x) (convert xs)
+end
+
+-- Monoid: a class with a constant method
+
+class Monoid a where
+    sig mempty  : a
+    sig mappend : a -> a -> a
+end
+
+instance monoidInt : Monoid Int where
+    def mempty  = 0
+    def mappend = \x y -> x + y
+end
+
+instance Monoid (List a) where
+    def mempty = Nil
+    def mappend Nil         ys = ys
+              | (Cons x xs) ys = Cons x (mappend xs ys)
+end
+
+sig mconcat : {{Monoid a}} -> List a -> a
+def mconcat Nil         = mempty
+          | (Cons x xs) = mappend x (mconcat xs)
+
+-- Several instance arguments, with an explicit quantifier
+
+sig sumAs : forall a b. {{Convert a b}} -> {{Monoid b}} -> List a -> b
+def sumAs xs = mconcat (convert xs)
+
+-- Test expressions
+
+def t1 = (convert (S (S Z)) : Int)
+def t2 = (convert (Cons True (Cons False Nil)) : List Nat)
+def t3 = mconcat (Cons 1 (Cons 2 (Cons 3 Nil)))
+def t4 = mconcat (Cons (Cons 1 Nil) (Cons (Cons 2 (Cons 3 Nil)) Nil))
+def t5 = (sumAs (Cons (S Z) (Cons (S (S Z)) Nil)) : Int)
+-- explicitly passing named instances; the type annotation is no longer needed
+def t6 = sumAs {{convNatInt}} {{monoidInt}} (Cons (S Z) Nil)

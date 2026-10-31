@@ -25,6 +25,8 @@ data SystemName
     KArrow
   | -- | name for function types (ternary)
     NArrow
+  | -- | name for instance-argument function types (binary, always unrestricted)
+    NInstArrow
   | -- | name for unrestricted type constructor (to be removed)
     NBang
   | -- | name for invertible type constructor
@@ -35,6 +37,7 @@ instance Pretty SystemName where
   ppr (NTuple n) = text "<Tup" <+> ppr n <> text ">"
   ppr (NWTuple n) = text "<&Tup" <+> ppr n <> text ">"
   ppr NArrow = text "->" -- NB: ternary (Multiplicity -> Type -> Type -> Type) instead of binary
+  ppr NInstArrow = text "{{->}}" -- NB: binary (Type -> Type -> Type)
   ppr KArrow = text "->"
   ppr NBang = text "!" -- TODO: will be removed
   ppr NRev = text "rev"
@@ -204,6 +207,9 @@ nameTyList = nameInBase (User "List")
 
 nameTyArr :: Name
 nameTyArr = nameInBase (System NArrow)
+
+nameTyInstArr :: Name
+nameTyInstArr = nameInBase (System NInstArrow)
 
 nameKiArr :: Name
 nameKiArr = nameInBase (System KArrow)

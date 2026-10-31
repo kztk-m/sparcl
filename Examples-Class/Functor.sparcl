@@ -1,0 +1,80 @@
+-- Constructor classes: classes over type constructors of kind Type -> Type.
+--
+-- Features exercised:
+--   * class parameter that is applied to arguments in method types (f a)
+--   * instances for partially applied type constructors (Either e)
+--   * a subclass of a constructor class (Applicative f extends Functor f)
+--   * functions polymorphic in the type constructor, taking {{Functor f}}
+--
+-- NB: the type parser does not yet accept applications of type variables
+-- (e.g., `f a`), so this file does not parse with the current parser.
+
+data Maybe a = Nothing | Just a
+data List a = Nil | Cons a (List a)
+data Tree a = Leaf | Node (Tree a) a (Tree a)
+data Either a b = Left a | Right b
+
+class Functor f where
+    sig fmap : (a -> b) -> f a -> f b
+end
+
+instance Functor Maybe where
+    def fmap _ Nothing  = Nothing
+           | g (Just x) = Just (g x)
+end
+
+instance functorList : Functor List where
+    def fmap _ Nil         = Nil
+           | g (Cons x xs) = Cons (g x) (fmap g xs)
+end
+
+instance Functor Tree where
+    def fmap _ Leaf         = Leaf
+           | g (Node l x r) = Node (fmap g l) (g x) (fmap g r)
+end
+
+instance Functor (Either e) where
+    def fmap _ (Left e)  = Left e
+           | g (Right x) = Right (g x)
+end
+
+class Applicative f extends Functor f where
+    sig pure : a -> f a
+    sig ap   : f (a -> b) -> f a -> f b
+end
+
+instance Applicative Maybe where
+    def pure = Just
+    def ap (Just g) (Just x) = Just (g x)
+         | _        _        = Nothing
+end
+
+sig append : List a -> List a -> List a
+def append Nil         ys = ys
+         | (Cons x xs) ys = Cons x (append xs ys)
+
+-- The Functor List field is filled by functorList.
+instance Applicative List where
+    def pure x = Cons x Nil
+    def ap Nil         _  = Nil
+         | (Cons g gs) xs = append (fmap g xs) (ap gs xs)
+end
+
+-- Functions over any functor / applicative
+
+sig inc : {{Functor f}} -> f Int -> f Int
+def inc = fmap (\x -> x + 1)
+
+-- fmap is available through the Functor superclass of Applicative.
+sig liftA2 : {{Applicative f}} -> (a -> b -> c) -> f a -> f b -> f c
+def liftA2 g x y = ap (fmap g x) y
+
+-- Test expressions
+
+def t1 = inc (Just 41)
+def t2 = inc (Cons 1 (Cons 2 (Cons 3 Nil)))
+def t3 = inc (Node Leaf 1 (Node Leaf 2 Leaf))
+def t4 = inc (Right 0 : Either Bool Int)
+def t5 = liftA2 (\x y -> x + y) (Just 1) (Just 2)
+def t6 = liftA2 (\x y -> (x, y)) (Cons 1 (Cons 2 Nil)) (Cons True (Cons False Nil))
+def t7 = inc {{functorList}} (Cons 0 Nil)

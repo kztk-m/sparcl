@@ -94,7 +94,11 @@ simplePat =
       <|> (unLoc <$> tuplePat)
       -- No wTuplePat, as it doesn't work well with the current inference.
       <|> wildPat
+      <|> instPat
   where
+    instPat =
+      PInst <$> instBraces pat
+
     conPat = do
       c <- L.lexeme sp qconName
       return $ PCon c []
@@ -212,12 +216,22 @@ singleConstraint = do
     symbolMult = symbol "*" <|> symbol "↑"
 
 arrTy :: (Monad m) => P m (LTy 'Parsing)
-arrTy =
-  -- Essentially, this implements foldr by foldl.
-  (\t fs -> foldl (.) (\c -> c t) fs id)
-    <$> appTy
-    <*> P.many ((\f x c z -> f z (c x)) <$> arr <*> appTy)
+arrTy = instArrTy <|> normalArrTy
   where
+    -- {{C}} -> t
+    instArrTy = do
+      c <- instBraces typeExpr
+      void rightArrow
+      t <- arrTy
+      return $ Loc (location c <> location t) $ TCon (BuiltIn nameTyInstArr) [c, t]
+
+    normalArrTy = do
+      t1 <- appTy
+      m <- P.optional arr
+      case m of
+        Nothing -> return t1
+        Just mk -> mk t1 <$> arrTy
+
     mkArr m e1 e2 = Loc (location e1 <> location e2) $ TCon (BuiltIn nameTyArr) [m, e1, e2]
     arr =
       ( do
@@ -328,7 +342,7 @@ topDecls :: (Monad m) => P m (Decls 'Parsing (Loc (TopDecl 'Parsing)))
 topDecls = Decls () <$> P.many topDecl
 
 topDecl :: (Monad m) => P m (Loc (TopDecl 'Parsing))
-topDecl = typeDecl <|> dataDecl <|> (fmap DDecl <$> localDecl)
+topDecl = typeDecl <|> dataDecl <|> (fmap DDecl <$> localDecl) <|> classDecl <|> instanceDecl
   where
     tyLHS = do
       c <- L.lexeme sp conName
@@ -380,6 +394,8 @@ topDecl = typeDecl <|> dataDecl <|> (fmap DDecl <$> localDecl)
       c <- conName <* sp
       ts <- P.many simpleTy
       return $ Loc (start <> mconcat (map location ts)) $ NormalC c ts
+    
+      
 
 localDecls :: (Monad m) => P m (Decls 'Parsing (LDecl 'Parsing))
 localDecls = Decls () <$> P.many localDecl
@@ -513,7 +529,12 @@ simpleExpr startLoc =
     <|> tupleExpr
     <|> P.try wTupleExpr
     <|> P.try wProjExpr
+    <|> instArgExpr
   where
+    instArgExpr = do
+      e <- instBraces expr
+      return $ Loc (startLoc <> location e) $ InstArg e
+
     withEnd t = do
       endLoc <- getSrcLoc
       return $ Loc (startLoc <> endLoc) t
@@ -640,3 +661,22 @@ whereClause = do
   case r of
     Just ds -> return ds
     Nothing -> return $ Decls () []
+
+-- class C a1 ... an [extends S1, ..., Sm] [where ... end]
+classDecl :: (Monad m) => P m (Loc (TopDecl 'Parsing))
+classDecl = loc $ do
+  void $ keyword "class"
+  c <- L.lexeme sp conName
+  xs <- P.many (L.lexeme sp varName)
+  sups <- fromMaybe [] <$> P.optional (keyword "extends" *> appTy `P.sepBy1` comma)
+  d <- whereClause
+  return $ DClass c xs sups d
+
+-- instance [x :] {{S1}} -> ... -> C t1 ... tn [where ... end]
+instanceDecl :: (Monad m) => P m (Loc (TopDecl 'Parsing))
+instanceDecl = loc $ do
+  void $ keyword "instance"
+  x <- P.optional $ P.try (L.lexeme sp varName <* symbol ":")
+  ty <- introForAll <$> typeExpr
+  d <- whereClause
+  return $ DInst x ty d

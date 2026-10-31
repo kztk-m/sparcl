@@ -1,0 +1,123 @@
+-- Superclasses: Ord extends Eq.
+--
+-- A superclass is a field of the subclass instance (Lean-style `extends`),
+-- so an {{Ord a}} argument also provides Eq a.
+--
+-- Features exercised:
+--   * class declaration with a superclass (class Ord a extends Eq a)
+--   * default methods that rely on the superclass method
+--   * instances of a subclass whose superclass instance is found by
+--     instance resolution
+--   * using a superclass method (==) under only an {{Ord a}} argument
+
+fixity == 40
+
+class Eq a where
+    sig (==) : a -> a -> Bool
+end
+
+data Ordering = LT | EQ | GT
+
+class Ord a extends Eq a where
+    sig compare : a -> a -> Ordering
+    sig leq     : a -> a -> Bool
+
+    -- default methods: either one can be defined in terms of the other
+    def leq x y = case compare x y of
+                    GT -> False
+                  | _  -> True
+                  end
+    def compare x y = case x == y of
+                        True  -> EQ
+                      | False -> case leq x y of
+                                   True  -> LT
+                                 | False -> GT
+                                 end
+                      end
+end
+
+-- Instances
+
+instance Eq Int where
+    def (==) = eqInt
+end
+
+-- The Eq Int field is filled by instance resolution.
+instance Ord Int where
+    def leq = leInt
+end
+
+data Nat = Z | S Nat
+
+instance eqNat : Eq Nat where
+    def (==) Z     Z     = True
+           | (S n) (S m) = n == m
+           | _     _     = False
+end
+
+instance ordNat : Ord Nat where
+    def compare Z     Z     = EQ
+              | Z     (S _) = LT
+              | (S _) Z     = GT
+              | (S n) (S m) = compare n m
+end
+
+data List a = Nil | Cons a (List a)
+
+instance eqList : {{Eq a}} -> Eq (List a) where
+    def (==) Nil         Nil         = True
+           | (Cons x xs) (Cons y ys) = case x == y of
+                                         True  -> xs == ys
+                                       | False -> False
+                                       end
+           | _           _           = False
+end
+
+-- Lexicographic ordering.
+-- {{Ord a}} also provides Eq a, which is needed for the Eq (List a) field.
+instance ordList : {{Ord a}} -> Ord (List a) where
+    def compare Nil         Nil         = EQ
+              | Nil         (Cons _ _)  = LT
+              | (Cons _ _)  Nil         = GT
+              | (Cons x xs) (Cons y ys) = case compare x y of
+                                            EQ -> compare xs ys
+                                          | o  -> o
+                                          end
+end
+
+-- Functions taking implicit instance arguments
+
+sig max : {{Ord a}} -> a -> a -> a
+def max x y = case leq x y of
+                True  -> y
+              | False -> x
+              end
+
+sig insert : {{Ord a}} -> a -> List a -> List a
+def insert x Nil         = Cons x Nil
+         | x (Cons y ys) = case leq x y of
+                             True  -> Cons x (Cons y ys)
+                           | False -> Cons y (insert x ys)
+                           end
+
+sig sort : {{Ord a}} -> List a -> List a
+def sort Nil         = Nil
+       | (Cons x xs) = insert x (sort xs)
+
+-- Uses (==) from the superclass Eq, with only an {{Ord a}} argument.
+sig countEq : {{Ord a}} -> a -> List a -> Int
+def countEq _ Nil         = 0
+          | x (Cons y ys) = case x == y of
+                              True  -> 1 + countEq x ys
+                            | False -> countEq x ys
+                            end
+
+-- Test expressions
+
+def t1 = max 3 5
+def t2 = sort (Cons 3 (Cons 1 (Cons 2 Nil)))
+def t3 = sort (Cons (S (S Z)) (Cons Z (Cons (S Z) Nil)))
+def t4 = compare (Cons 1 (Cons 2 Nil)) (Cons 1 (Cons 3 Nil))
+def t5 = countEq 1 (Cons 1 (Cons 2 (Cons 1 Nil)))
+-- explicitly passing a named instance
+def t6 = sort {{ordList {{ordNat}}}} (Cons (Cons (S Z) Nil) (Cons (Cons Z Nil) Nil))

@@ -1,0 +1,116 @@
+-- Basic single-parameter type class: Eq.
+--
+-- Instances are passed as implicit instance arguments written {{C a}}
+-- (Agda style), not as Haskell-style constraints.
+--
+-- Features exercised:
+--   * class declaration with method signatures
+--   * a default method implementation inside a class body
+--   * unnamed and named instances (instance eqNat : Eq Nat)
+--   * instances that take instance arguments ({{Eq a}} -> Eq (List a))
+--   * functions taking implicit instance arguments
+--   * binding an instance argument by name and passing an instance explicitly
+
+fixity == 40
+fixity /= 40
+
+class Eq a where
+    sig (==) : a -> a -> Bool
+    sig (/=) : a -> a -> Bool
+
+    -- default method
+    def (/=) x y = not (x == y)
+end
+
+sig not : Bool -> Bool
+def not True  = False
+      | False = True
+
+sig and : Bool -> Bool -> Bool
+def and True  b = b
+      | False _ = False
+
+-- Unnamed instances for primitive types
+
+instance Eq Int where
+    def (==) = eqInt
+end
+
+instance Eq Char where
+    def (==) = eqChar
+end
+
+instance Eq Bool where
+    def (==) True  True  = True
+           | False False = True
+           | _     _     = False
+end
+
+-- A named instance for a user-defined type
+
+data Nat = Z | S Nat
+
+instance eqNat : Eq Nat where
+    def (==) Z     Z     = True
+           | (S n) (S m) = n == m
+           | _     _     = False
+end
+
+-- Instances taking instance arguments.
+-- Inside the body, {{Eq a}} is a candidate for instance resolution.
+
+data List a = Nil | Cons a (List a)
+
+instance eqList : {{Eq a}} -> Eq (List a) where
+    def (==) Nil         Nil         = True
+           | (Cons x xs) (Cons y ys) = and (x == y) (xs == ys)
+           | _           _           = False
+end
+
+data Pair a b = Pair a b
+
+instance {{Eq a}} -> {{Eq b}} -> Eq (Pair a b) where
+    def (==) (Pair a1 b1) (Pair a2 b2) = and (a1 == a2) (b1 == b2)
+end
+
+-- Functions taking implicit instance arguments.
+-- The instance argument need not be bound in the definition.
+
+sig elem : {{Eq a}} -> a -> List a -> Bool
+def elem _ Nil         = False
+       | x (Cons y ys) = case x == y of
+                           True  -> True
+                         | False -> elem x ys
+                         end
+
+sig lookup : {{Eq k}} -> k -> List (Pair k v) -> List v
+def lookup _ Nil                  = Nil
+         | k (Cons (Pair k' v) r) = case k == k' of
+                                      True  -> Cons v Nil
+                                    | False -> lookup k r
+                                    end
+
+sig nub : {{Eq a}} -> List a -> List a
+def nub Nil         = Nil
+      | (Cons x xs) = case elem x xs of
+                        True  -> nub xs
+                      | False -> Cons x (nub xs)
+                      end
+
+-- An instance argument bound by name in the definition and passed explicitly.
+-- (Instance arguments cannot be named in types.)
+sig notElem : {{Eq a}} -> a -> List a -> Bool
+def notElem {{eq}} x xs = not (elem {{eq}} x xs)
+
+-- Test expressions
+
+def t1 = 1 == 1
+def t2 = S (S Z) /= S Z
+def t3 = Cons 1 (Cons 2 Nil) == Cons 1 (Cons 2 Nil)
+def t4 = elem 'c' (Cons 'a' (Cons 'b' (Cons 'c' Nil)))
+def t5 = lookup Z (Cons (Pair (S Z) True) (Cons (Pair Z False) Nil))
+def t6 = nub (Cons 1 (Cons 2 (Cons 1 (Cons 3 (Cons 2 Nil)))))
+def t7 = Pair True Z == Pair True (S Z)
+-- explicitly passing named instances
+def t8 = elem {{eqNat}} Z (Cons (S Z) (Cons Z Nil))
+def t9 = notElem {{eqList {{eqNat}}}} Nil (Cons (Cons Z Nil) Nil)
