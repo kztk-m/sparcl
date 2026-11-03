@@ -32,6 +32,7 @@ import Language.Sparcl.Typing.Type
 import qualified Language.Sparcl.Core.Syntax as C (DDecl (..), TDecl (..))
 
 import Language.Sparcl.DebugPrint
+import Language.Sparcl.Exception (staticError)
 import qualified Language.Sparcl.Surface.Syntax as S
 
 import Language.Sparcl.Pretty as D hiding ((<$>))
@@ -833,6 +834,8 @@ inferTopDecls ::
   Decls 'Renaming (LDecl 'Renaming)
   -> [Loc (Name, [Name], [Loc (CDecl 'Renaming)])]
   -> [Loc (Name, [Name], LTy 'Renaming)]
+  -> [Loc (Name, [Name], [LTy 'Renaming], [Loc (Name, LTy 'Renaming)], [LDecl 'Renaming])] -- classes
+  -> [Loc (Name, LTy 'Renaming, [LDecl 'Renaming])] -- instances
   -> TC
       ( Decls 'TypeCheck (LDecl 'TypeCheck)
       , [(Name, PolyTy)]
@@ -841,7 +844,12 @@ inferTopDecls ::
       , CTypeTable
       , SynTable
       )
-inferTopDecls decls dataDecls typeDecls = do
+inferTopDecls decls dataDecls typeDecls classDecls instDecls = do
+  -- TODO: type checking of classes and instances
+  case (classDecls, instDecls) of
+    ([], []) -> return ()
+    _ -> staticError $ text "Type checking of class and instance declarations is not supported yet."
+
   let dataDecls' =
         [ C.DDecl n (map BoundTv ns) [convConDecl cd | Loc _ cd <- cdecls]
         | Loc _ (n, ns, cdecls) <- dataDecls

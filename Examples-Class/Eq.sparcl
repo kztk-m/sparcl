@@ -11,12 +11,11 @@
 --   * functions taking implicit instance arguments
 --   * binding an instance argument by name and passing an instance explicitly
 
-fixity == 40
-fixity /= 40
-
 class Eq a where
     sig (==) : a -> a -> Bool
     sig (/=) : a -> a -> Bool
+    fixity == 40
+    fixity /= 40
 
     -- default method
     def (/=) x y = not (x == y)

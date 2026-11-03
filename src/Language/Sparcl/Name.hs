@@ -31,6 +31,8 @@ data SystemName
     NBang
   | -- | name for invertible type constructor
     NRev
+  | -- | generated name for an unnamed instance (numbered within a module)
+    NInstance !Int
   deriving (Eq, Ord, Show)
 
 instance Pretty SystemName where
@@ -41,6 +43,7 @@ instance Pretty SystemName where
   ppr KArrow = text "->"
   ppr NBang = text "!" -- TODO: will be removed
   ppr NRev = text "rev"
+  ppr (NInstance k) = text "<instance #" <> ppr k <> text ">"
 
 data SurfaceName
   = Qual !ModuleName !NameBase

@@ -477,7 +477,7 @@ interpDecls mCurrentModuleName decls interp = do
   -- (decls', newDefinedNames, newOpTable, newDataTable, newSynTable) <-
   --        liftIO $ runDesugar mod definedNames opTable (desugarTopDecls decls)
 
-  (renamedDecls, tyDecls, synDecls, newNames, newOpTable) <-
+  (renamedDecls, tyDecls, synDecls, classDecls, instDecls, newNames, newOpTable) <-
     liftIO $ either nameError return $ runRenaming nameTable opTable $ renameTopDecls currentModule decls
 
   -- debugPrint $ "Desugaring Ok."
@@ -498,7 +498,7 @@ interpDecls mCurrentModuleName decls interp = do
 
   (typedDecls, nts, _dataDecls', _typeDecls', newCTypeTable, newSynTable) <- do
     tc <- askTC
-    liftIO $ execTCWith tc conEnv tyEnv synEnv $ inferTopDecls renamedDecls tyDecls synDecls
+    liftIO $ execTCWith tc conEnv tyEnv synEnv $ inferTopDecls renamedDecls tyDecls synDecls classDecls instDecls
 
   debugPrint 1 $ text "Type checking Ok."
   debugPrint 1 $ text "Desugaring ..."

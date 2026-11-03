@@ -10,10 +10,9 @@
 --     instance resolution
 --   * using a superclass method (==) under only an {{Ord a}} argument
 
-fixity == 40
-
 class Eq a where
     sig (==) : a -> a -> Bool
+    fixity == 40
 end
 
 data Ordering = LT | EQ | GT

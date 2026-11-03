@@ -141,8 +141,13 @@ appPat =
     <|> simplePat
 
 introForAll :: LTy 'Parsing -> LTy 'Parsing
-introForAll ty =
-  let freeVars = freeTyVars ty
+introForAll = introForAllExcept []
+
+-- | Same as 'introForAll', but leaves the given type variables free
+--   (e.g., the class parameters in method signatures).
+introForAllExcept :: [SurfaceName] -> LTy 'Parsing -> LTy 'Parsing
+introForAllExcept xs ty =
+  let freeVars = filter (`notElem` xs) $ freeTyVars ty
   in  foldr (\x -> Loc (location ty) . TForall x) ty freeVars
 
 -- where
@@ -401,7 +406,11 @@ localDecls :: (Monad m) => P m (Decls 'Parsing (LDecl 'Parsing))
 localDecls = Decls () <$> P.many localDecl
 
 localDecl :: (Monad m) => P m (LDecl 'Parsing)
-localDecl = defDecl <|> sigDecl <|> fixityDecl
+localDecl = localDeclWith introForAll
+
+-- | 'localDecl' whose signatures are quantified by the given function.
+localDeclWith :: (Monad m) => (LTy 'Parsing -> LTy 'Parsing) -> P m (LDecl 'Parsing)
+localDeclWith quant = defDecl <|> sigDeclWith quant <|> fixityDecl
 
 defDecl :: (Monad m) => P m (LDecl 'Parsing)
 defDecl = do
@@ -434,13 +443,16 @@ defBody = do
   return (ps, c)
 
 sigDecl :: (Monad m) => P m (LDecl 'Parsing)
-sigDecl = do
+sigDecl = sigDeclWith introForAll
+
+sigDeclWith :: (Monad m) => (LTy 'Parsing -> LTy 'Parsing) -> P m (LDecl 'Parsing)
+sigDeclWith quant = do
   start <- getSrcLoc
   void $ keyword "sig"
   x <- varOpName
   sp
   void $ symbol ":"
-  t <- introForAll <$> typeExpr
+  t <- quant <$> typeExpr
   return (Loc (start <> location t) $ DSig x t)
 
 fixityDecl :: (Monad m) => P m (LDecl 'Parsing)
@@ -652,10 +664,14 @@ withExpr :: (Monad m) => P m (LExp 'Parsing)
 withExpr = keyword "with" >> expr
 
 whereClause :: (Monad m) => P m (Decls 'Parsing (LDecl 'Parsing))
-whereClause = do
+whereClause = whereClauseWith introForAll
+
+-- | 'whereClause' whose signatures are quantified by the given function.
+whereClauseWith :: (Monad m) => (LTy 'Parsing -> LTy 'Parsing) -> P m (Decls 'Parsing (LDecl 'Parsing))
+whereClauseWith quant = do
   r <- P.optional $ do
     void $ keyword "where"
-    ds <- localDecls
+    ds <- Decls () <$> P.many (localDeclWith quant)
     void $ keyword "end"
     return ds
   case r of
@@ -669,7 +685,8 @@ classDecl = loc $ do
   c <- L.lexeme sp conName
   xs <- P.many (L.lexeme sp varName)
   sups <- fromMaybe [] <$> P.optional (keyword "extends" *> appTy `P.sepBy1` comma)
-  d <- whereClause
+  -- class parameters are not quantified in method signatures
+  d <- whereClauseWith (introForAllExcept xs)
   return $ DClass c xs sups d
 
 -- instance [x :] {{S1}} -> ... -> C t1 ... tn [where ... end]
