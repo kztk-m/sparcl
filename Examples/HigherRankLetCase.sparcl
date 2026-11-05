@@ -1,0 +1,26 @@
+-- Higher-rank values bound by `let` and matched by `case`.
+--
+-- The bound expression of `let p <- e1 in e2` and the scrutinee of
+-- `case e0 of ...` are inferred, so a higher-rank type is kept and the bound
+-- variable can be used polymorphically. (Passing `ex0` as an argument of an
+-- application, `(\g -> g (\y -> y)) ex0`, is rejected, since an argument is
+-- checked against a meta variable.) Kept as a regression test: see D-2 (F1)
+-- in notes/extend-type-class_2026.txt.
+
+sig ex0 : (forall x. x -> x) -> (Int, Bool)
+def ex0 f = (f 42, f True)
+
+def t1 = let g <- ex0 in g (\y -> y)
+
+def t3 = case ex0 of g -> g (\y -> y) end
+
+-- Parentheses around the head of an application.
+def t4 = (ex0) (\y -> y)
+
+-- An operator applied to an argument of polymorphic type (operator
+-- applications are checked as applications, D-3).
+fixity $$ 0 right
+sig ($$) : ((forall x. x -> x) -> (Int, Bool)) -> (forall x. x -> x) -> (Int, Bool)
+def ($$) f k = f k
+
+def t5 = ex0 $$ (\y -> y)

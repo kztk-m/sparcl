@@ -201,11 +201,17 @@ ensureFunTy ty = do
   tryUnify (FunTy m argTy resTy) ty
   return (argTy, m, resTy)
 
-ensureFunTyN :: Int -> BodyTy -> TC ([(PolyTy, MultTy)], BodyTy)
-ensureFunTyN 0 ty = pure ([], ty)
-ensureFunTyN n ty = do
-  (argTy, m, rest) <- ensureFunTy ty
-  (args, resTy) <- ensureFunTyN (n - 1) rest
+-- | Aligns the argument patterns of a definition or an abstraction with the
+--   arrows of its type, one pattern at a time (C-2). For now only ordinary
+--   arrows, which is what the former @ensureFunTyN@ did.
+--
+--   TODO (stage 3): instance arrows (slots @Inst@ / @Inserted@, C-2).
+alignPatsTy :: [LPat 'Renaming] -> BodyTy -> TC ([(PolyTy, MultTy)], BodyTy)
+alignPatsTy [] ty = pure ([], ty)
+alignPatsTy (_ : ps) ty = do
+  ty' <- zonkType ty
+  (argTy, m, rest) <- ensureFunTy ty'
+  (args, resTy) <- alignPatsTy ps rest
   pure ((argTy, m) : args, resTy)
 
 litTy :: Literal -> TC MonoTy
@@ -392,8 +398,23 @@ constrainVars ((x, q) : xqs) m = do
 
 -- TODO: sig-expression is buggy.
 
+-- | Infers the type of an expression; trailing instance arguments of its
+--   value are not inserted (as Agda's inferExpr, DontExpandLast).
 inferTy :: LExp 'Renaming -> TC (LExp 'TypeCheck, BodyTy, UseMap)
-inferTy (Loc loc expr) = go expr
+inferTy = withExpandLast DontExpandLast . inferTyWork
+
+-- | Infers the type of an expression whose value is matched against
+--   patterns (the bound expression of @let p <- e1 in e2@ and the scrutinee
+--   of @case@), inserting trailing instance arguments (as Agda's
+--   inferExpr' ExpandLast for pattern lets).
+inferTyExpandM :: LExp 'Renaming -> Multiplication -> TC (LExp 'TypeCheck, BodyTy, UseMap)
+inferTyExpandM lexp m = do
+  (lexp', ty, umap) <- withExpandLast ExpandLast $ inferTyWork lexp
+  pure (lexp', ty, raiseUse m umap)
+
+-- | Inference under the current expand-last flag (set by the callers).
+inferTyWork :: LExp 'Renaming -> TC (LExp 'TypeCheck, BodyTy, UseMap)
+inferTyWork (Loc loc expr) = go expr
   where
     -- go (Sig e tySyn) = do
     --   let sigTy = ty2ty tySyn
@@ -408,19 +429,79 @@ inferTy (Loc loc expr) = go expr
       ty <- readTCRef ref
       return (e', ty, umap)
 
-inferTyM :: LExp 'Renaming -> Multiplication -> TC (LExp 'TypeCheck, BodyTy, UseMap)
-inferTyM lexp m = do
-  (lexp', ty, umap) <- inferTy lexp
-  pure (lexp', ty, raiseUse m umap)
+-- | Splits an application into its head and its arguments (D-1).
+--   Parentheses around the head are crossed (D-6).
+flattenSpine :: LExp 'Renaming -> (LExp 'Renaming, [Arg 'Renaming])
+flattenSpine = go []
+  where
+    go as (Loc _ (App f a)) = go (a : as) f
+    go as@(_ : _) (Loc _ (Parens e)) = go as e
+    go as e = (e, as)
+
+-- | Checks an application as a spine (D-1): the head's type is used as is
+--   for a variable and inferred otherwise; the arguments are processed from
+--   the left, instantiating @forall@s on the way; finally the rest of the
+--   type is compared with the expected type.
+--
+--   The applications are rebuilt with locations recomputed from their parts
+--   (the head's parentheses are dropped, D-6), and the partial applications
+--   give the error contexts of the arguments.
+--
+--   TODO (stage 3): instance arguments (D-1), trailing insertion under the
+--   expand-last flag (D-2).
+checkSpine :: LExp 'Renaming -> [Arg 'Renaming] -> Expected BodyTy -> TC (Exp 'TypeCheck, UseMap)
+checkSpine hd args expectedTy = do
+  (hd', hdTy, hdUmap) <- case hd of
+    Loc l (Var x) -> do
+      tyOfX <- askType l x
+      pure (Loc l (Var (x, tyOfX)), tyOfX, singletonUseMap x)
+    _ -> inferTy hd
+  (res, resTy, argsUmap) <- goArgs hd hd' hdTy args
+  instantiatePoly resTy expectedTy
+  pure (unLoc res, mergeUseMap hdUmap argsUmap)
+  where
+    -- f: the partial application so far (for error contexts); f': its typed version
+    goArgs ::
+      LExp 'Renaming
+      -> LExp 'TypeCheck
+      -> PolyTy
+      -> [Arg 'Renaming]
+      -> TC (LExp 'TypeCheck, PolyTy, UseMap)
+    goArgs _ f' ty [] = pure (f', ty, M.empty)
+    goArgs f f' ty (a : as) = do
+      ty' <- zonkType ty
+      case (ty', a) of
+        (TyForAll _ _, _) -> do
+          ty'' <- instantiate ty'
+          goArgs f f' ty'' (a : as)
+        (_, InstArg _) ->
+          -- TODO: instance arguments (stage 3 of the implementation plan)
+          atExp f $ atLoc (location f) $
+            staticError $ text "Type checking of instance arguments is not supported yet."
+        (_, ExplicitArg e) -> do
+          (argTy, m, resTy) <- atExp f $ atLoc (location f) $ ensureFunTy ty'
+          mul <- ty2mult m
+          (e', umapE) <- checkPolyTyM e argTy mul
+          let l = location f <> location e
+          (res, rTy, umapR) <-
+            goArgs (Loc l (App f a)) (Loc l (App f' (ExplicitArg e'))) resTy as
+          pure (res, rTy, mergeUseMap umapE umapR)
 
 checkTyM :: LExp 'Renaming -> Expected BodyTy -> Multiplication -> TC (LExp 'TypeCheck, UseMap)
 checkTyM lexp ty m = do
   (lexp', umap) <- checkTy lexp ty
   return (lexp', raiseUse m umap)
 
+-- | In Check mode, the expand-last flag is set (as Agda's doExpandLast in
+--   checkExpr); in Infer mode, the flag set by the caller is used.
 checkTy :: LExp 'Renaming -> Expected BodyTy -> TC (LExp 'TypeCheck, UseMap)
-checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ atExp lexp $ go expr
+checkTy lexp@(Loc loc expr) expectedTy =
+  fmap (first $ Loc loc) $ atLoc loc $ atExp lexp $ setFlag $ go expr
   where
+    setFlag = case expectedTy of
+      Check _ -> withExpandLast ExpandLast
+      Infer _ -> id
+
     -- first3 f (a,b,c) = (f a, b, c)
 
     go :: Exp 'Renaming -> TC (Exp 'TypeCheck, UseMap)
@@ -439,16 +520,14 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
 
       instantiatePoly (FunTy (TyMult One) wTupleTy ti) expectedTy
       pure (WProj i n, emptyUseMap)
-    go (Var x) = do
-      tyOfX <- askType loc x
-      instantiatePoly tyOfX expectedTy
-      return (Var (x, tyOfX), singletonUseMap x)
+    -- A variable is a spine without arguments (D-1 7).
+    go (Var x) = checkSpine (Loc loc (Var x)) [] expectedTy
     go (Lit l) = do
       ty <- litTy l
       instantiatePoly ty expectedTy
       return (Lit l, M.empty)
     go (Abs pats e) | Check eTy <- expectedTy = do
-      (tqs, resTy) <- ensureFunTyN (length pats) eTy
+      (tqs, resTy) <- alignPatsTy pats eTy
 
       qs <- mapM (ty2mult . snd) tqs
       let ts = map fst tqs
@@ -478,20 +557,13 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
       writeTCRef ref (foldr (uncurry tyarr) retTy $ zip qs ts)
 
       return (Abs pats' e', foldr (M.delete . fst) umap xqs)
-    go (App e1 (ExplicitArg e2)) = do
-      (e1', ty1, umap1) <- inferTy e1
-      (argTy, m, resTy) <- atExp e1 $ atLoc (location e1) $ ensureFunTy ty1
-      mul <- ty2mult m
-      (e2', umap2) <- checkPolyTyM e2 argTy mul
-      instantiatePoly resTy expectedTy
-      return (App e1' (ExplicitArg e2'), mergeUseMap umap1 umap2)
-    go (App _ (InstArg _)) =
-      -- TODO: instance arguments (stage 3 of the implementation plan)
-      staticError $ text "Type checking of instance arguments is not supported yet."
+    go e@(App _ _) =
+      let (hd, args) = flattenSpine (Loc loc e)
+      in  checkSpine hd args expectedTy
     go (InstHole v _) = absurd v
     go (Let1 p e1 e2) = do
       patMult <- ty2mult =<< newMetaTy
-      (e1', ty1, umap1) <- inferTyM e1 patMult
+      (e1', ty1, umap1) <- inferTyExpandM e1 patMult
 
       ((e2', umap2), [p'], bind) <- checkPatsTyK [p] [patMult] [Check ty1] $ do
         when (hasPRev p) $ do
@@ -542,18 +614,11 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
     go (Parens e) = do
       (e', umap) <- checkTy e expectedTy
       return (Parens e', umap)
-    go (Op () op e1 e2) = do
-      tyOfOp <- instantiate =<< askType loc op
-      (ty1, m1, rest) <- ensureFunTy tyOfOp
-      (ty2, m2, resTy) <- ensureFunTy rest
-      (e1', umap1) <- checkTyM e1 (Check ty1) =<< ty2mult m1
-      (e2', umap2) <- checkTyM e2 (Check ty2) =<< ty2mult m2
-
-      instantiatePoly resTy expectedTy
-      -- An operator application is output as applications (D-3); `Op`
-      -- cannot appear after type checking (XOp 'TypeCheck = Void).
-      let opApp = Loc loc $ App (Loc loc $ Var (op, tyOfOp)) (ExplicitArg e1')
-      pure (App opApp (ExplicitArg e2'), mergeUseMap umap1 umap2)
+    -- An operator application is checked as a spine and output as
+    -- applications (D-3); `Op` cannot appear after type checking
+    -- (XOp 'TypeCheck = Void).
+    go (Op () op e1 e2) =
+      checkSpine (Loc loc (Var op)) [ExplicitArg e1, ExplicitArg e2] expectedTy
     go (RCon c) = do
       tyOfC_ <- askType loc c
 
@@ -576,7 +641,7 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
       p <- newMetaTyVar -- multiplicity of e0
       mul <- ty2mult (TyMetaV p)
 
-      (e0', tyPat, umap0) <- inferTyM e0 mul
+      (e0', tyPat, umap0) <- inferTyExpandM e0 mul
       (alts', umapA) <- checkAltsTy alts tyPat mul expectedTy
 
       return (Case e0' alts', mergeUseMap umap0 umapA)
@@ -916,16 +981,12 @@ inferMutual isTopLevel decls = do
       case M.lookup n sigMap of
         Nothing -> do
           bodyTy <- newMetaTy
-          (args, resTy) <- ensureFunTyN (numPatterns pcs) bodyTy
+          (args, resTy) <- alignPatsTy (firstPats pcs) bodyTy
           ((pcs', umap), cs) <- gatherConstraint $ gatherAltUC =<< mapM (checkTyPC loc args resTy) pcs
           pure ((n, loc, Left (cs, bodyTy), pcs'), raiseUse omega umap)
         Just polyTy -> do
           -- defer escape check
-          (skVars, TyQual given bodyTy) <- skolemize polyTy
-
-          (args, resTy) <- ensureFunTyN (numPatterns pcs) bodyTy
-          ((pcs', umap), cs) <- gatherConstraint $ gatherAltUC =<< mapM (checkTyPC loc args resTy) pcs
-
+          (pcs', umap, (skVars, given, cs)) <- checkSigDefBody loc polyTy pcs
           pure ((n, loc, Right (skVars, polyTy, given, cs), pcs'), raiseUse omega umap)
 
   let skVarss = [(n, loc, sks, polyTy) | (n, loc, Right (sks, polyTy, _, _), _) <- nts0]
@@ -941,32 +1002,7 @@ inferMutual isTopLevel decls = do
       do csCurr <- readConstraint; setConstraint (csCurr ++ csOrig)
       pure (n, loc, polyTy, pcs')
     Right (_, polyTy, given, cs) -> do
-      do
-        cs' <- mapM zonkTypeIC cs
-        debugPrint 3 $ text "inferMutual:" <+> align (vsep [text "Given: " <> ppr given, text "Wanted: " <> ppr cs'])
-
-      currentTcLevel <- askCurrentTcLevel
-      invisibleMetaVars <-
-        filterM
-          ( \m -> do
-              lv <- readTcLevelMv m
-              return $ lv > currentTcLevel
-          )
-          (nub $ metaTyVars cs)
-
-      whenChecking (CheckingType n polyTy) $
-        if isTopLevel
-          then do
-            -- if this is called in the top level cs must be solved at this point
-            csRes <- solveInferredConstraint True invisibleMetaVars given cs
-            unless (null csRes) $
-              reportError $
-                ImplicationCheckFail invisibleMetaVars given csRes
-          else
-            if null given
-              then do csCurr <- readConstraint; setConstraint (cs ++ csCurr)
-              else addImpConstraint invisibleMetaVars given cs
-
+      finishSigDef isTopLevel n polyTy given cs
       pure (n, loc, polyTy, pcs')
 
   tyVars <- freeTyVars <$> mapM (\(_, _, ty, _) -> zonkType ty) nts1
@@ -1055,9 +1091,6 @@ inferMutual isTopLevel decls = do
 
     -- return (decls', binds', umap)
 
-    numPatterns ((ps, _) : _) = length ps
-    numPatterns _ = error "Cannot happen."
-
     gatherU [] = ([], M.empty)
     gatherU ((x, u) : ts) =
       let (xs, u') = gatherU ts
@@ -1074,20 +1107,84 @@ inferMutual isTopLevel decls = do
     --   let (xs, u',c') = gatherUC ts
     --   in  (x:xs, mergeUseMap u u', c ++ c')
 
-    checkTyPC loc argTys resTy (ps, c) = atLoc loc $ do
-      muls <- mapM (ty2mult . snd) argTys
-      let tys = map fst argTys
 
-      ((c', umap), ps', bind) <- checkPatsTyK ps muls (map Check tys) $ do
-        when (any hasPRev ps) $ void $ ensureRevTy resTy
-        checkClauseTy c (Check resTy)
+-- | The argument patterns of the first clause; by renaming, all clauses
+--   have the same number of patterns (and instance patterns at the same
+--   positions).
+firstPats :: [([LPat p], Clause p)] -> [LPat p]
+firstPats ((ps, _) : _) = ps
+firstPats _ = error "Cannot happen."
 
-      let umap' = raiseUse omega umap
+-- | Checks a clause of a definition against the aligned argument types and
+--   the result type.
+checkTyPC ::
+  SrcSpan
+  -> [(PolyTy, MultTy)]
+  -> BodyTy
+  -> ([LPat 'Renaming], Clause 'Renaming)
+  -> TC (([LPat 'TypeCheck], Clause 'TypeCheck), UseMap)
+checkTyPC loc argTys resTy (ps, c) = atLoc loc $ do
+  muls <- mapM (ty2mult . snd) argTys
+  let tys = map fst argTys
 
-      let xqs = map (\(x, _, q) -> (x, q)) bind
+  ((c', umap), ps', bind) <- checkPatsTyK ps muls (map Check tys) $ do
+    when (any hasPRev ps) $ void $ ensureRevTy resTy
+    checkClauseTy c (Check resTy)
 
-      atLocMaybe (locPS ps) $ constrainVars xqs umap
-      return ((ps', c'), foldr (M.delete . fst) umap' xqs)
+  let umap' = raiseUse omega umap
+
+  let xqs = map (\(x, _, q) -> (x, q)) bind
+
+  atLocMaybe (locPS ps) $ constrainVars xqs umap
+  return ((ps', c'), foldr (M.delete . fst) umap' xqs)
+
+-- | The part of checking a definition with a signature that is done inside
+--   its group (G-5 1): skolemization, alignment of the patterns and checking
+--   of the clauses. Returns the skolems, the given constraints and the
+--   wanted constraints, for 'finishSigDef' and the escape check.
+checkSigDefBody ::
+  SrcSpan
+  -> PolyTy
+  -> [([LPat 'Renaming], Clause 'Renaming)]
+  -> TC ([([LPat 'TypeCheck], Clause 'TypeCheck)], UseMap, ([TyVar], [TyConstraint], [InferredConstraint]))
+checkSigDefBody loc polyTy pcs = do
+  (skVars, TyQual given bodyTy) <- skolemize polyTy
+
+  (args, resTy) <- alignPatsTy (firstPats pcs) bodyTy
+  ((pcs', umap), cs) <- gatherConstraint $ gatherAltUC =<< mapM (checkTyPC loc args resTy) pcs
+
+  pure (pcs', umap, (skVars, given, cs))
+
+-- | The part of checking a definition with a signature that is done after
+--   its group (G-5 1): the wanted constraints are solved under the given
+--   ones (at the top level they must be solved here).
+finishSigDef :: Bool -> Name -> PolyTy -> [TyConstraint] -> [InferredConstraint] -> TC ()
+finishSigDef isTopLevel n polyTy given cs = do
+  do
+    cs' <- mapM zonkTypeIC cs
+    debugPrint 3 $ text "inferMutual:" <+> align (vsep [text "Given: " <> ppr given, text "Wanted: " <> ppr cs'])
+
+  currentTcLevel <- askCurrentTcLevel
+  invisibleMetaVars <-
+    filterM
+      ( \m -> do
+          lv <- readTcLevelMv m
+          return $ lv > currentTcLevel
+      )
+      (nub $ metaTyVars cs)
+
+  whenChecking (CheckingType n polyTy) $
+    if isTopLevel
+      then do
+        -- if this is called in the top level cs must be solved at this point
+        csRes <- solveInferredConstraint True invisibleMetaVars given cs
+        unless (null csRes) $
+          reportError $
+            ImplicationCheckFail invisibleMetaVars given csRes
+      else
+        if null given
+          then do csCurr <- readConstraint; setConstraint (cs ++ csCurr)
+          else addImpConstraint invisibleMetaVars given cs
 
 -- checkTyPC loc qs (ps, c) expectedTy = atLoc loc $ do
 --   muls <- mapM ty2mult qs

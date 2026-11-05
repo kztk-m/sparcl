@@ -379,7 +379,23 @@ data TypingContext
   , tcRefErrors :: !(IORef (Seq TypeError))
   , tcDeferredIC :: !(IORef [(TypeErrorContext, SuspendedCheck)])
   -- Type errors are accumulated for better error messages
+  , tcExpandLast :: !ExpandLast
+  -- Whether the spine being checked inserts trailing instance arguments
+  -- (as Agda's envExpandLast); see 'ExpandLast'.
   }
+
+-- | Whether trailing instance arguments are inserted after the arguments of
+--   an application are used up (as Agda's ExpandHidden). The flag is set by
+--   the caller: checking ('Check') sets 'ExpandLast'; plain inference sets
+--   'DontExpandLast'; inference of a value that is matched against patterns
+--   (the bound expression of @let p <- e1 in e2@, the scrutinee of @case@)
+--   sets 'ExpandLast'. Inference passes the flag on to the parts that are
+--   the value of the whole (parentheses, the body of @let@, ...).
+data ExpandLast = ExpandLast | DontExpandLast
+  deriving (Eq, Show)
+
+withExpandLast :: ExpandLast -> TC r -> TC r
+withExpandLast e = local (\tc -> tc{tcExpandLast = e})
 
 data KeyTC
 
@@ -408,6 +424,7 @@ initTypingContext = do
       , tcSyn = M.empty
       , tcBLog = rbm
       , tcDeferredIC = ric
+      , tcExpandLast = DontExpandLast
       }
 
 -- This function must be called before each session of type checking.
