@@ -1,0 +1,17 @@
+-- It is intentional that this program causes a type error.
+-- An instance of `Ord T` needs an instance of its superclass `Eq T`
+-- (G-3 3 in notes/extend-type-class_2026.txt).
+
+data T = MkT
+
+class Eq a where
+    sig eq : a -> a -> Bool
+end
+
+class Ord a extends Eq a where
+    sig leq : a -> a -> Bool
+end
+
+instance ordT : Ord T where
+    def leq x y = True
+end

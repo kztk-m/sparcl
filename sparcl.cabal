@@ -88,6 +88,7 @@ library
     Language.Sparcl.Surface.Parser.Id
     Language.Sparcl.Surface.Parsing
     Language.Sparcl.Surface.Syntax
+    Language.Sparcl.Typing.Instance
     Language.Sparcl.Typing.TCMonad
     Language.Sparcl.Typing.Type
     Language.Sparcl.Typing.Constraint

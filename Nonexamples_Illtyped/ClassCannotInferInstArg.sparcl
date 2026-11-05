@@ -1,0 +1,10 @@
+-- It is intentional that this program causes a type error.
+-- Instance arguments of a top-level definition without a signature are not
+-- inferred (E-2 (a) in notes/extend-type-class_2026.txt); `g` needs a
+-- signature such as `sig g : {{Eq a}} -> a -> a -> Bool`.
+
+class Eq a where
+    sig eq : a -> a -> Bool
+end
+
+def g x y = eq x y

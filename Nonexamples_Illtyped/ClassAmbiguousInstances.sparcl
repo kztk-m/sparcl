@@ -1,0 +1,20 @@
+-- It is intentional that this program causes a type error.
+-- Overlapping instances may be declared, but a goal that both match is
+-- ambiguous (E-4 (4) revised in notes/extend-type-class_2026.txt).
+
+data Nat = Z | S Nat
+
+class Eq a where
+    sig eq : a -> a -> Bool
+end
+
+instance eqNat : Eq Nat where
+    def eq x y = True
+end
+
+instance eqNat2 : Eq Nat where
+    def eq x y = False
+end
+
+sig f : Nat -> Bool
+def f x = eq x x

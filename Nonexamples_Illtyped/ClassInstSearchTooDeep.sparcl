@@ -1,0 +1,18 @@
+-- It is intentional that this program causes a type error.
+-- Instance search is stopped by its depth limit (E-3 3 in
+-- notes/extend-type-class_2026.txt): `Eq T` needs `Eq (List T)`, which
+-- needs `Eq (List (List T))`, ...
+
+data T = MkT
+data List a = Nil | Cons a (List a)
+
+class Eq a where
+    sig eq : a -> a -> Bool
+end
+
+instance loop : {{Eq (List a)}} -> Eq a where
+    def eq x y = True
+end
+
+sig f : T -> Bool
+def f x = eq x x

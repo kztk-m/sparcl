@@ -11,7 +11,7 @@ import Control.Monad.Except
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Reader (asks)
 import Data.IORef (newIORef, readIORef)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (catMaybes, fromMaybe)
 import Data.Void
 
 -- import Control.Monad.Writer
@@ -30,13 +30,14 @@ import Language.Sparcl.Surface.Syntax hiding (
   Ty (..),
  )
 import Language.Sparcl.Typing.Constraint
+import Language.Sparcl.Typing.Instance
 import Language.Sparcl.Typing.TCMonad
 import Language.Sparcl.Typing.Type
 
 import qualified Language.Sparcl.Core.Syntax as C (DDecl (..), TDecl (..))
 
 import Language.Sparcl.DebugPrint
-import Language.Sparcl.Exception (cannotHappen, staticError)
+import Language.Sparcl.Exception (cannotHappen)
 import qualified Language.Sparcl.Surface.Syntax as S
 
 import Language.Sparcl.Pretty as D hiding ((<$>))
@@ -983,7 +984,11 @@ generalizeTy ty_ um = do
 
 inferPolyTy :: Bool -> LExp 'Renaming -> TC (LExp 'TypeCheck, PolyTy, UseMap)
 inferPolyTy isMultipleUse expr = do
-  (expr', ty, umap) <- pushLevel $ inferTy expr
+  ((expr', ty, umap), goals) <- gatherGoals $ pushLevel $ inferTy expr
+
+  -- H-2: goals are solved before generalization, as for a top-level
+  -- definition without a signature (E-2).
+  solveGoals (ReportAtTopLevel False) goals
 
   -- (umapM, csM) <- if isMultipleUse then raiseUse (TyMult Omega) umap
   --                 else return (umap, [])
@@ -1004,17 +1009,8 @@ inferExp expr = do
   -- polyTy <- quantify (mvs \\ envMetaVars) ty'
   -- trace (prettyShow ty' ++ " --> " ++ prettyShow polyTy) $ return (expr', polyTy)
   (expr', polyTy, _) <- inferPolyTy True expr
-  interimRejectGoals
+  reportLeftoverGoals
   return (expr', polyTy)
-
--- | TODO (stage 3-B): goals are not solved yet; until instance search is
---   implemented, a program that makes goals is rejected here (instead of
---   leaving unfilled holes to desugaring).
-interimRejectGoals :: TC ()
-interimRejectGoals = do
-  gs <- liftIO . readIORef =<< asks tcGoals
-  unless (null gs) $
-    staticError $ text "Instance search is not supported yet."
 
 checkAltsTy ::
   [(LPat 'Renaming, Clause 'Renaming)]
@@ -1145,6 +1141,9 @@ inferTopDecls ::
       , SynTable
       , ClassTable -- classes declared in this module
       , InstTable -- instances declared in this module
+      , [(Name, [(Name, Ty)], [LExp 'TypeCheck])]
+      -- ^ for each instance: its instance arguments as local instances and
+      --   the dictionaries of its superclasses (G-3 3, for H-4-4)
       )
 inferTopDecls decls dataDecls typeDecls classDecls instDecls = do
   let dataDecls' =
@@ -1217,9 +1216,16 @@ inferTopDecls decls dataDecls typeDecls classDecls instDecls = do
 
         withClassesAndInstances M.empty instTable $
           withVars (methodTys ++ instTys) $ do
+            -- G-1 stage 3-b: the superclass instances of each instance are
+            -- solvable (G-3 3), once all instances are registered.
+            superDicts <- forM (zip instDecls instTys) $ \(Loc l (x, _, _), (_, ty)) ->
+              atLoc l $ whenChecking (CheckingSuperclasses x) $ do
+                (locals, dicts) <- checkSuperInstances ty
+                pure (x, locals, dicts)
+
             -- G-1 stage 4: definitions.
             (decls', nts, _) <- inferDecls True decls
-            interimRejectGoals
+            reportLeftoverGoals
             return
               ( decls'
               , nts ++ methodTys ++ instTys
@@ -1229,8 +1235,32 @@ inferTopDecls decls dataDecls typeDecls classDecls instDecls = do
               , synTable
               , classTable
               , instTable
+              , superDicts
               )
   where
+    -- G-3 3: for @forall as. {{H1}} -> ... -> {{Hk}} -> C ts@, with the
+    -- @as@ skolemized and @H1 ... Hk@ as local instances @d1 ... dk@, each
+    -- superclass of @C ts@ must be solvable. Returns the local instances
+    -- and the dictionaries of the superclasses (used by desugaring, H-4-4).
+    checkSuperInstances ty = do
+      (_, TyQual _ instBody) <- skolemize ty
+      instBody' <- normTy instBody
+      let (hs, hd) = splitInstArrows instBody'
+      ds <- mapM (const newGenName) hs
+      let locals = zip ds hs
+      cenv <- asks tcClassEnv
+      dicts <- case hd of
+        TyCon c ts | Just ci <- M.lookup c cenv ->
+          forM (ciSupers ci) $ \s -> do
+            g <- makeGoal locals (substTy (zip (ciParams ci) ts) s)
+            solveGoals (ReportAtTopLevel True) [g]
+            liftIO $ readIORef (goalRef g)
+        _ -> pure [] -- not a class: reported at registration
+      pure (locals, catMaybes dicts)
+
+    splitInstArrows (InstFunTy h t) = first (h :) (splitInstArrows t)
+    splitInstArrows t = ([], t)
+
     mkClassInfo ps sups sigs defs =
       ClassInfo
         { ciParams = map BoundTv ps
@@ -1281,22 +1311,38 @@ inferMutual isTopLevel decls = do
   let sigMap = M.fromList [(n, ty2ty t) | Loc _ (DSig n t) <- decls]
   mapM_ checkClassTypesL [t | Loc _ (DSig _ t) <- decls] -- G-4
 
-  (nts0, umap) <- pushLevel $ do
+  (nts0g, umap) <- pushLevel $ do
     tys <- forM names $ \n -> case M.lookup n sigMap of
       Just t -> pure t
       Nothing -> newMetaTy
 
     fmap gatherU $ withVars (zip names tys) $ forM defs $ \(loc, n, pcs) -> atLoc loc $ do
-      case M.lookup n sigMap of
-        Nothing -> do
-          bodyTy <- newMetaTy
-          (args, resTy) <- alignPatsTy (firstPats pcs) bodyTy
-          ((pcs', umap), cs) <- gatherConstraint $ gatherAltUC =<< mapM (checkTyPC loc args resTy) pcs
-          pure ((n, loc, Left (cs, bodyTy), pcs'), raiseUse omega umap)
-        Just polyTy -> do
-          -- defer escape check
-          (pcs', umap, (skVars, given, cs)) <- checkSigDefBody loc polyTy pcs
-          pure ((n, loc, Right (skVars, polyTy, given, cs), pcs'), raiseUse omega umap)
+      -- the goals of each definition are collected (E-2)
+      ((entry, umap), goals) <- gatherGoals $
+        case M.lookup n sigMap of
+          Nothing -> do
+            bodyTy <- newMetaTy
+            (args, resTy) <- alignPatsTy (firstPats pcs) bodyTy
+            ((pcs', umap), cs) <- gatherConstraint $ gatherAltUC =<< mapM (checkTyPC loc args resTy) pcs
+            pure ((n, loc, Left (cs, bodyTy), pcs'), raiseUse omega umap)
+          Just polyTy -> do
+            -- defer escape check
+            (pcs', umap, (skVars, given, cs)) <- checkSigDefBody loc polyTy pcs
+            pure ((n, loc, Right (skVars, polyTy, given, cs), pcs'), raiseUse omega umap)
+      pure ((entry, goals), umap)
+
+  let (nts0, goalss) = unzip nts0g
+
+  -- E-2: the goals of the group are solved after all of its bodies, before
+  -- generalization and the multiplicity constraints. Undecidable ones are
+  -- postponed outward from a local group, and errors at the top level.
+  forM_ (zip nts0 goalss) $ \((_, _, tt, _), goals) ->
+    solveGoals
+      ( if isTopLevel
+          then ReportAtTopLevel (either (const False) (const True) tt)
+          else PostponeOutward
+      )
+      goals
 
   let skVarss = [(n, loc, sks, polyTy) | (n, loc, Right (sks, polyTy, _, _), _) <- nts0]
 
