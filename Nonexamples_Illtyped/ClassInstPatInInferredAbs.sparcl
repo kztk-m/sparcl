@@ -1,0 +1,12 @@
+-- It is intentional that this program causes a type error.
+-- An instance pattern {{p}} needs a known type: an abstraction binding one
+-- cannot be inferred (C-4 in notes/extend-type-class_2026.txt); annotate
+-- it, e.g. (\{{d}} x -> eq {{d}} x x : {{Eq Nat}} -> Nat -> Bool).
+
+data Nat = Z | S Nat
+
+class Eq a where
+    sig eq : a -> a -> Bool
+end
+
+def g = (\{{d}} x -> eq {{d}} x x) Z

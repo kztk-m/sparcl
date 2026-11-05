@@ -8,7 +8,10 @@ module Language.Sparcl.Typing.Typing (
 
 import Control.Monad
 import Control.Monad.Except
+import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Reader (asks)
+import Data.IORef (newIORef, readIORef)
+import Data.Maybe (fromMaybe)
 import Data.Void
 
 -- import Control.Monad.Writer
@@ -33,7 +36,7 @@ import Language.Sparcl.Typing.Type
 import qualified Language.Sparcl.Core.Syntax as C (DDecl (..), TDecl (..))
 
 import Language.Sparcl.DebugPrint
-import Language.Sparcl.Exception (staticError)
+import Language.Sparcl.Exception (cannotHappen, staticError)
 import qualified Language.Sparcl.Surface.Syntax as S
 
 import Language.Sparcl.Pretty as D hiding ((<$>))
@@ -208,18 +211,71 @@ ensureFunTy ty = do
   tryUnify (FunTy m argTy resTy) ty
   return (argTy, m, resTy)
 
+-- | The shape of a type for deciding insertions: zonked, with type synonyms
+--   at the top expanded (a signature may hide @{{C}} -> t@ in a synonym).
+shapeOf :: Ty -> TC Ty
+shapeOf ty = stripSyn <$> (resolveSyn =<< zonkType ty)
+
+-- | A position of the argument patterns aligned with the arrows of a type
+--   (C-2): an ordinary argument, an instance argument bound by a written
+--   instance pattern, or an instance argument for which a pattern is
+--   inserted.
+data Slot
+  = Explicit PolyTy MultTy
+  | Inst Ty
+  | Inserted Ty
+
+isInstPat :: LPat p -> Bool
+isInstPat (Loc _ (PInst _)) = True
+isInstPat _ = False
+
 -- | Aligns the argument patterns of a definition or an abstraction with the
---   arrows of its type, one pattern at a time (C-2). For now only ordinary
---   arrows, which is what the former @ensureFunTyN@ did.
---
---   TODO (stage 3): instance arrows (slots @Inst@ / @Inserted@, C-2).
-alignPatsTy :: [LPat 'Renaming] -> BodyTy -> TC ([(PolyTy, MultTy)], BodyTy)
+--   arrows of its type, one pattern at a time (C-2). Each step consumes at
+--   most one pattern; an instance arrow without a written instance pattern
+--   gets an inserted one. A trailing instance arrow after the patterns is
+--   left to the abstraction insertion of the body (C-1).
+alignPatsTy :: [LPat 'Renaming] -> BodyTy -> TC ([Slot], BodyTy)
 alignPatsTy [] ty = pure ([], ty)
-alignPatsTy (_ : ps) ty = do
-  ty' <- zonkType ty
-  (argTy, m, rest) <- ensureFunTy ty'
-  (args, resTy) <- alignPatsTy ps rest
-  pure ((argTy, m) : args, resTy)
+alignPatsTy ps@(p : rest) ty = do
+  shape <- shapeOf ty
+  case shape of
+    InstFunTy c t
+      | isInstPat p -> first (Inst c :) <$> alignPatsTy rest t
+      | otherwise -> first (Inserted c :) <$> alignPatsTy ps t
+    TyMetaV _ | isInstPat p -> atLoc (location p) $ do
+      reportError InstPatNeedsAnnotation
+      abortTyping
+    _ | isInstPat p -> atLoc (location p) $ do
+      reportError NotInstArgPosition
+      abortTyping
+    _ -> do
+      ty' <- zonkType ty
+      (argTy, m, resTy) <- ensureFunTy ty'
+      first (Explicit argTy m :) <$> alignPatsTy rest resTy
+
+-- | The patterns of a clause (or an abstraction) according to the slots:
+--   instance arguments without written patterns get fresh instance patterns
+--   (fresh per clause, C-2). Returns the patterns, their multiplicities and
+--   types, and the local instances they bind (B-3).
+expandSlots :: [Slot] -> [LPat 'Renaming] -> TC ([LPat 'Renaming], [Multiplication], [PolyTy], [(Name, Ty)])
+expandSlots [] [] = pure ([], [], [], [])
+expandSlots (Explicit t m : ss) (p : ps) = do
+  q <- ty2mult m
+  (ps', qs, ts, ls) <- expandSlots ss ps
+  pure (p : ps', q : qs, t : ts, ls)
+expandSlots (Inst c : ss) (p : ps) = do
+  (ps', qs, ts, ls) <- expandSlots ss ps
+  pure (p : ps', omega : qs, c : ts, (instPatVar p, c) : ls)
+  where
+    -- By renaming, the contents is a variable or `_` (which has a name).
+    instPatVar (Loc _ (PInst (Loc _ (PVar x)))) = x
+    instPatVar (Loc _ (PInst (Loc _ (PWild x)))) = x
+    instPatVar _ = cannotHappen $ text "expandSlots: an instance pattern must bind a variable"
+expandSlots (Inserted c : ss) ps = do
+  d <- newGenName
+  (ps', qs, ts, ls) <- expandSlots ss ps
+  pure (noLoc (PInst (noLoc (PVar d))) : ps', omega : qs, c : ts, (d, c) : ls)
+expandSlots _ _ = cannotHappen $ text "expandSlots: patterns and slots do not match"
 
 litTy :: Literal -> TC MonoTy
 litTy (LitInt _) = return $ TyCon nameTyInt []
@@ -372,9 +428,18 @@ checkPatTyWork isUnderRev (Loc loc pat) pmult expected = do
       -- cs must be []
       addConstraint $ msubMult omega pmult
       return (req, cs, PWild x', [])
-    go (PInst _) =
-      -- TODO: instance patterns (C-3, stage 3 of the implementation plan)
-      staticError $ text "Type checking of instance patterns is not supported yet."
+    -- C-3: an instance pattern is checked only at an instance slot of the
+    -- alignment (C-2), against its class type; by renaming its contents is
+    -- a variable or `_` (which has a name). It binds the variable (with the
+    -- multiplicity given by the caller, Omega).
+    go (PInst (Loc l p))
+      | Check c <- expected =
+          let x = case p of
+                PVar y -> y
+                PWild y -> y
+                _ -> cannotHappen $ text "checkPatTyWork: an instance pattern must bind a variable"
+          in  pure (False, [], PInst (Loc l (PVar (x, c))), [(x, c, pmult)])
+      | otherwise = cannotHappen $ text "checkPatTyWork: an instance pattern in Infer mode"
 
 constrainLessThan :: Multiplication -> Multiplication -> TC ()
 constrainLessThan m1 (m2ty -> []) =
@@ -457,8 +522,10 @@ flattenSpine = go []
 --   (the head's parentheses are dropped, D-6), and the partial applications
 --   give the error contexts of the arguments.
 --
---   TODO (stage 3): instance arguments (D-1), trailing insertion under the
---   expand-last flag (D-2).
+--   An instance arrow takes a written instance argument @{{e}}@, or else an
+--   application to a hole for a new goal is inserted (D-1); after the
+--   arguments, trailing instance arrows get insertions when the expand-last
+--   flag is set (D-2).
 checkSpine :: LExp 'Renaming -> [Arg 'Renaming] -> Expected BodyTy -> TC (Exp 'TypeCheck, UseMap)
 checkSpine hd args expectedTy = do
   (hd', hdTy, hdUmap) <- case hd of
@@ -467,8 +534,12 @@ checkSpine hd args expectedTy = do
       pure (Loc l (Var (x, tyOfX)), tyOfX, singletonUseMap x)
     _ -> inferTy hd
   (res, resTy, argsUmap) <- goArgs hd hd' hdTy args
-  instantiatePoly resTy expectedTy
-  pure (unLoc res, mergeUseMap hdUmap argsUmap)
+  expand <- asks tcExpandLast
+  (res', resTy') <- case expand of
+    ExpandLast -> insertTrailing res resTy
+    DontExpandLast -> pure (res, resTy)
+  instantiatePoly resTy' expectedTy
+  pure (unLoc res', mergeUseMap hdUmap argsUmap)
   where
     -- f: the partial application so far (for error contexts); f': its typed version
     goArgs ::
@@ -479,16 +550,30 @@ checkSpine hd args expectedTy = do
       -> TC (LExp 'TypeCheck, PolyTy, UseMap)
     goArgs _ f' ty [] = pure (f', ty, M.empty)
     goArgs f f' ty (a : as) = do
-      ty' <- zonkType ty
-      case (ty', a) of
+      shape <- shapeOf ty
+      case (shape, a) of
         (TyForAll _ _, _) -> do
-          ty'' <- instantiate ty'
-          goArgs f f' ty'' (a : as)
-        (_, InstArg _) ->
-          -- TODO: instance arguments (stage 3 of the implementation plan)
-          atExp f $ atLoc (location f) $
-            staticError $ text "Type checking of instance arguments is not supported yet."
+          ty' <- instantiate shape
+          goArgs f f' ty' (a : as)
+        (InstFunTy c t, InstArg e) -> do
+          -- an explicitly passed instance (instance arrows are Omega)
+          (e', umapE) <- checkTyM e (Check c) omega
+          let l = location f <> location e
+          (res, rTy, umapR) <-
+            goArgs (Loc l (App f a)) (Loc l (App f' (InstArg e'))) t as
+          pure (res, rTy, mergeUseMap umapE umapR)
+        (InstFunTy c t, ExplicitArg _) -> do
+          -- insertion; the argument is not consumed
+          hole <- atExp f $ atLoc (location f) $ newGoal c
+          goArgs f (Loc (location f) (App f' (InstArg hole))) t (a : as)
+        (TyMetaV _, InstArg e) -> atExp f $ atLoc (location e) $ do
+          reportError InstArgUnknownFun
+          abortTyping
+        (_, InstArg e) -> atExp f $ atLoc (location e) $ do
+          reportError NotInstArgPosition
+          abortTyping
         (_, ExplicitArg e) -> do
+          ty' <- zonkType ty
           (argTy, m, resTy) <- atExp f $ atLoc (location f) $ ensureFunTy ty'
           mul <- ty2mult m
           (e', umapE) <- checkPolyTyM e argTy mul
@@ -496,6 +581,45 @@ checkSpine hd args expectedTy = do
           (res, rTy, umapR) <-
             goArgs (Loc l (App f a)) (Loc l (App f' (ExplicitArg e'))) resTy as
           pure (res, rTy, mergeUseMap umapE umapR)
+
+    -- D-2: leading foralls and instance arrows of the rest are instantiated
+    -- / get insertions until neither remains. The type is returned as is if
+    -- nothing is done (keeping synonyms for messages).
+    insertTrailing :: LExp 'TypeCheck -> PolyTy -> TC (LExp 'TypeCheck, PolyTy)
+    insertTrailing f' ty = do
+      shape <- shapeOf ty
+      case shape of
+        TyForAll _ _ -> do
+          ty' <- instantiate shape
+          insertTrailing f' ty'
+        InstFunTy c t -> do
+          hole <- atLoc (location f') $ newGoal c
+          insertTrailing (Loc (location f') (App f' (InstArg hole))) t
+        _ -> pure (f', ty)
+
+-- | Makes a goal for an instance argument of class type @c@ (E-1) in the
+--   current scope (local instances, level, location, error context) and
+--   returns the hole for its dictionary (F-3).
+newGoal :: Ty -> TC (LExp 'TypeCheck)
+newGoal c = do
+  g <- newGenName
+  ref <- liftIO $ newIORef Nothing
+  locals <- asks tcLocalInsts
+  lv <- askCurrentTcLevel
+  l <- asks tcLoc
+  ctx <- currentTypeErrorContext
+  addGoals
+    [ Goal
+        { goalId = g
+        , goalRef = ref
+        , goalTy = c
+        , goalLocals = locals
+        , goalLevel = lv
+        , goalLoc = l
+        , goalCtx = ctx
+        }
+    ]
+  pure $ Loc (fromMaybe NoLoc l) (InstHole () (g, c) ref)
 
 checkTyM :: LExp 'Renaming -> Expected BodyTy -> Multiplication -> TC (LExp 'TypeCheck, UseMap)
 checkTyM lexp ty m = do
@@ -505,9 +629,33 @@ checkTyM lexp ty m = do
 -- | In Check mode, the expand-last flag is set (as Agda's doExpandLast in
 --   checkExpr); in Infer mode, the flag set by the caller is used.
 checkTy :: LExp 'Renaming -> Expected BodyTy -> TC (LExp 'TypeCheck, UseMap)
-checkTy lexp@(Loc loc expr) expectedTy =
-  fmap (first $ Loc loc) $ atLoc loc $ atExp lexp $ setFlag $ go expr
+checkTy lexp@(Loc loc expr) expectedTy = do
+  -- C-1: when an instance argument is expected, an abstraction binding it
+  -- (a local instance, B-3) is inserted and the same expression is checked
+  -- against the rest of the type (recursively, for several instance
+  -- arguments). Not for an abstraction binding it explicitly, parentheses
+  -- (the expected type is passed inside) and annotations (the annotation
+  -- gives the type).
+  inserted <- case expectedTy of
+    Check t | not (bindsItself expr) -> do
+      shape <- shapeOf t
+      pure $ case shape of
+        InstFunTy c t' -> Just (c, t')
+        _ -> Nothing
+    _ -> pure Nothing
+  case inserted of
+    Just (c, t') -> atLoc loc $ do
+      d <- newGenName
+      (e', umap) <- withVars [(d, c)] $ withLocalInsts [(d, c)] $ checkTy lexp (Check t')
+      pure (Loc loc (Abs [Loc loc (PInst (Loc loc (PVar (d, c))))] e'), M.delete d umap)
+    Nothing ->
+      fmap (first $ Loc loc) $ atLoc loc $ atExp lexp $ setFlag $ go expr
   where
+    bindsItself (Abs (p : _) _) = isInstPat p
+    bindsItself (Parens _) = True
+    bindsItself (Sig _ _) = True
+    bindsItself _ = False
+
     setFlag = case expectedTy of
       Check _ -> withExpandLast ExpandLast
       Infer _ -> id
@@ -537,12 +685,10 @@ checkTy lexp@(Loc loc expr) expectedTy =
       instantiatePoly ty expectedTy
       return (Lit l, M.empty)
     go (Abs pats e) | Check eTy <- expectedTy = do
-      (tqs, resTy) <- alignPatsTy pats eTy
+      (slots, resTy) <- alignPatsTy pats eTy
+      (pats1, qs, ts, locals) <- expandSlots slots pats
 
-      qs <- mapM (ty2mult . snd) tqs
-      let ts = map fst tqs
-
-      ((e', umap), pats', bind) <- checkPatsTyK pats qs (map Check ts) $ do
+      ((e', umap), pats', bind) <- checkPatsTyK pats1 qs (map Check ts) $ withLocalInsts locals $ do
         when (any hasPRev pats) $ void $ ensureRevTy resTy
         checkTy e (Check resTy)
 
@@ -551,6 +697,10 @@ checkTy lexp@(Loc loc expr) expectedTy =
 
       pure (Abs pats' e', foldr (M.delete . fst) umap xqs)
     go (Abs pats e) | Infer ref <- expectedTy = do
+      -- An instance pattern needs a known type (C-4).
+      forM_ (filter isInstPat pats) $ \p -> atLoc (location p) $ do
+        reportError InstPatNeedsAnnotation
+        abortTyping
       -- multiplicity of arguments
       ts <- mapM (const newMetaTy) pats
       qs <- mapM (const newMetaTy) pats
@@ -570,7 +720,7 @@ checkTy lexp@(Loc loc expr) expectedTy =
     go e@(App _ _) =
       let (hd, args) = flattenSpine (Loc loc e)
       in  checkSpine hd args expectedTy
-    go (InstHole v _) = absurd v
+    go (InstHole v _ _) = absurd v
     go (Let1 p e1 e2) = do
       patMult <- ty2mult =<< newMetaTy
       (e1', ty1, umap1) <- inferTyExpandM e1 patMult
@@ -854,7 +1004,17 @@ inferExp expr = do
   -- polyTy <- quantify (mvs \\ envMetaVars) ty'
   -- trace (prettyShow ty' ++ " --> " ++ prettyShow polyTy) $ return (expr', polyTy)
   (expr', polyTy, _) <- inferPolyTy True expr
+  interimRejectGoals
   return (expr', polyTy)
+
+-- | TODO (stage 3-B): goals are not solved yet; until instance search is
+--   implemented, a program that makes goals is rejected here (instead of
+--   leaving unfilled holes to desugaring).
+interimRejectGoals :: TC ()
+interimRejectGoals = do
+  gs <- liftIO . readIORef =<< asks tcGoals
+  unless (null gs) $
+    staticError $ text "Instance search is not supported yet."
 
 checkAltsTy ::
   [(LPat 'Renaming, Clause 'Renaming)]
@@ -1059,6 +1219,7 @@ inferTopDecls decls dataDecls typeDecls classDecls instDecls = do
           withVars (methodTys ++ instTys) $ do
             -- G-1 stage 4: definitions.
             (decls', nts, _) <- inferDecls True decls
+            interimRejectGoals
             return
               ( decls'
               , nts ++ methodTys ++ instTys
@@ -1267,15 +1428,15 @@ firstPats _ = error "Cannot happen."
 --   the result type.
 checkTyPC ::
   SrcSpan
-  -> [(PolyTy, MultTy)]
+  -> [Slot]
   -> BodyTy
   -> ([LPat 'Renaming], Clause 'Renaming)
   -> TC (([LPat 'TypeCheck], Clause 'TypeCheck), UseMap)
-checkTyPC loc argTys resTy (ps, c) = atLoc loc $ do
-  muls <- mapM (ty2mult . snd) argTys
-  let tys = map fst argTys
+checkTyPC loc slots resTy (ps0, c) = atLoc loc $ do
+  -- inserted instance patterns are fresh per clause (C-2)
+  (ps, muls, tys, locals) <- expandSlots slots ps0
 
-  ((c', umap), ps', bind) <- checkPatsTyK ps muls (map Check tys) $ do
+  ((c', umap), ps', bind) <- checkPatsTyK ps muls (map Check tys) $ withLocalInsts locals $ do
     when (any hasPRev ps) $ void $ ensureRevTy resTy
     checkClauseTy c (Check resTy)
 

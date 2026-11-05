@@ -51,6 +51,7 @@ data WhenChecking
   | CheckingMoreGeneral !Ty !Ty
   | CheckingMultiplicities Name MCContext ![Ty] ![Ty]
   | CheckingType Name !Ty
+  | CheckingSuperclasses Name -- the superclass instances of an instance (G-3 3-b)
   | OtherContext !Doc
   | CheckingNone
 
@@ -145,6 +146,8 @@ instance Pretty TypeError where
           <> item (D.text "when checking" <+> d)
       pprWhenChecking (CheckingType n ty) =
         D.line <> item (D.text "when checking if" <+> ppr n <+> text "has type" <+> ppr ty)
+      pprWhenChecking (CheckingSuperclasses n) =
+        D.line <> item (D.text "when checking the superclasses of instance" <+> ppr n)
       pprWhenChecking CheckingNone = D.empty
 
       pprDetail = item . go
@@ -469,7 +472,59 @@ data TypingContext
   , tcExpandLast :: !ExpandLast
   -- Whether the spine being checked inserts trailing instance arguments
   -- (as Agda's envExpandLast); see 'ExpandLast'.
+  , tcLocalInsts :: ![(Name, Ty)]
+  -- Local instances in scope (B-3): variables bound by {{x}} and by
+  -- inserted abstractions, with their class types; the innermost first.
+  , tcRefGenCount :: !(IORef Int)
+  -- Counter for names `Generated i TypeChecking` (B-3 (6)).
+  , tcGoals :: !(IORef [Goal])
+  -- Instance goals not solved yet (E-1).
   }
+
+-- | An instance goal (E-1): made when an instance argument is inserted
+--   (D-1, D-2) and solved later (E-2), when its type is better known.
+data Goal = Goal
+  { goalId :: !Name -- the goal's name (for messages)
+  , goalRef :: !(IORef (Maybe (S.LExp 'TypeCheck))) -- the hole in the AST (F-3)
+  , goalTy :: !Ty -- the class type; may contain metas
+  , goalLocals :: ![(Name, Ty)] -- the local instances at creation (B-3 (5))
+  , goalLevel :: !TcLevel -- the level at creation (E-2)
+  , goalLoc :: !(Maybe SrcSpan) -- the location at creation, for errors
+  , goalCtx :: !TypeErrorContext -- the error context at creation
+  }
+
+-- | A fresh name of the type-checking phase.
+newGenName :: TC Name
+newGenName = do
+  cref <- asks tcRefGenCount
+  cnt <- liftIO $ atomicModifyIORef' cref $ \cnt -> (cnt + 1, cnt)
+  pure $ Generated cnt TypeChecking
+
+-- | Registers local instances (B-3); the given ones become the innermost.
+withLocalInsts :: [(Name, Ty)] -> TC r -> TC r
+withLocalInsts xs = local (\tc -> tc{tcLocalInsts = xs ++ tcLocalInsts tc})
+
+addGoals :: [Goal] -> TC ()
+addGoals gs = do
+  ref <- asks tcGoals
+  liftIO $ modifyIORef ref (gs ++)
+
+-- | Collects the goals made by a computation (cf. 'gatherConstraint').
+gatherGoals :: TC a -> TC (a, [Goal])
+gatherGoals m = do
+  ref <- asks tcGoals
+  prev <- liftIO $ readIORef ref
+  liftIO $ writeIORef ref []
+  res <- m
+  gs <- liftIO $ readIORef ref
+  liftIO $ writeIORef ref prev
+  return (res, gs)
+
+-- | Runs a computation in the location and the error context where a goal
+--   was made, so that errors about it point there.
+atGoal :: Goal -> TC r -> TC r
+atGoal g =
+  local (\tc -> tc{tcLoc = goalLoc g}) . restoreTypeErrorContext (goalCtx g)
 
 -- | Whether trailing instance arguments are inserted after the arguments of
 --   an application are used up (as Agda's ExpandHidden). The flag is set by
@@ -494,6 +549,8 @@ initTypingContext = do
   rc <- newIORef []
   ric <- newIORef []
   rbm <- newIORef M.empty
+  rgen <- newIORef 0
+  rgoals <- newIORef []
   return
     TypingContext
       { tcRefMvCount = r1
@@ -514,6 +571,9 @@ initTypingContext = do
       , tcBLog = rbm
       , tcDeferredIC = ric
       , tcExpandLast = DontExpandLast
+      , tcLocalInsts = []
+      , tcRefGenCount = rgen
+      , tcGoals = rgoals
       }
 
 -- This function must be called before each session of type checking.
@@ -522,9 +582,13 @@ refreshTC tc = do
   r <- newIORef Seq.empty
   rc <- newIORef []
   ric <- newIORef []
+  rgoals <- newIORef []
   return $
     tc
-      { tcTyEnv = M.empty
+      { tcGoals = rgoals
+      , tcLocalInsts = []
+      , tcExpandLast = DontExpandLast
+      , tcTyEnv = M.empty
       , tcConEnv = M.empty
       , tcSyn = M.empty
       , tcClassEnv = M.empty
@@ -927,6 +991,7 @@ zonkWhenChecking (CheckingMultiplicities x mc ts1 ts2) =
   CheckingMultiplicities x mc <$> mapM zonkType ts1 <*> mapM zonkType ts2
 zonkWhenChecking (CheckingType n ty) =
   CheckingType n <$> zonkType ty
+zonkWhenChecking (CheckingSuperclasses n) = return (CheckingSuperclasses n)
 zonkWhenChecking (OtherContext d) = return (OtherContext d)
 zonkWhenChecking CheckingNone = return CheckingNone
 

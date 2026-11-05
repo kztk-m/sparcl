@@ -1,0 +1,9 @@
+-- It is intentional that this program causes a type error.
+-- An instance pattern {{p}} needs a known type: a definition binding one
+-- needs a signature (C-4 in notes/extend-type-class_2026.txt).
+
+class Eq a where
+    sig eq : a -> a -> Bool
+end
+
+def g {{d}} x = eq {{d}} x x

@@ -72,7 +72,7 @@ desugarExp (Loc _ expr) = go expr
     -- arguments become ordinary applications.
     go (S.App e1 a2) =
       mkApp <$> desugarExp e1 <*> desugarExp (S.argExp a2)
-    go (S.InstHole () ref) = do
+    go (S.InstHole () _ ref) = do
       sol <- liftIO $ readIORef ref
       case sol of
         Just e -> desugarExp e
@@ -85,6 +85,8 @@ desugarExp (Loc _ expr) = go expr
         checkAllVars [] = pure []
         checkAllVars (x : xs) = liftA2 (:) (checkVar x) (checkAllVars xs)
         checkVar (unLoc -> S.PVar (n, _)) = pure n
+        -- a dictionary is an ordinary argument at run time (H-4-1 3)
+        checkVar (unLoc -> S.PInst p) = checkVar p
         checkVar _ = Nothing
     go (S.Abs ps e) = desugarRHS [(ps, S.Clause e (S.HDecls () []) Nothing)]
     go (S.Con (c, ty)) = do
@@ -290,6 +292,9 @@ separatePat pat = go False (unLoc pat)
     go _ (S.PWild (x, _ty)) =
       -- (if b then CPVar x else CPBang (CPVar x), [])
       (CPVar x, [])
+    -- An instance pattern binds the dictionary, an ordinary argument at
+    -- run time (H-4-1 3).
+    go b (S.PInst p) = go b (unLoc p)
     -- go _ (S.PBang p) =
     --   let (p', subs) = go True (unLoc p)
     --   in (CPBang p', subs)

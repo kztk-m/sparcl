@@ -135,7 +135,7 @@ renameExp level localnames (Loc loc expr) = first (Loc loc) <$> go expr
       (e2', fv2) <- renameExp level localnames (argExp a2)
       return (App e1' (mapArg (const e2') a2), S.union fv1 fv2)
 
-    go (InstHole v _) = absurd v
+    go (InstHole v _ _) = absurd v
 
     go (Abs ps e) = do
       mapM_ checkInstPatArg ps

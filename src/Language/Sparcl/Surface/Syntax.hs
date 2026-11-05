@@ -277,9 +277,11 @@ data Exp p
   | Var !(XId p)
   | App !(LExp p) !(Arg p)
   | -- | A hole for the dictionary of an instance goal, filled when the goal
-    --   is solved. The tag (see XHole) is lazy, so that `absurd` handles
-    --   the passes where it is Void (as XDecls).
-    InstHole (XHole p) !(IORef (Maybe (LExp p)))
+    --   is solved; the goal's name and class type (as an @XId@, which is a
+    --   name with its type after type checking) are kept for printing. The
+    --   tag (see XHole) is lazy, so that `absurd` handles the passes where
+    --   it is Void (as XDecls).
+    InstHole (XHole p) !(XId p) !(IORef (Maybe (LExp p)))
   | Abs ![LPat p] !(LExp p)
   | Con !(XId p)
   | WProj !Int !Int -- &i_n
@@ -307,10 +309,10 @@ instance (AllPretty p) => Pretty (Exp p) where
       pprPrec 9 e1 D.<+> pprPrec 10 a
   -- As meta type variables are printed (Typing/Type.hs), the contents are
   -- read unsafely.
-  pprPrec _ (InstHole _ ref) =
+  pprPrec _ (InstHole _ g ref) =
     case unsafePerformIO (readIORef ref) of
       Just e -> pprPrec 10 e
-      Nothing -> D.text "?"
+      Nothing -> D.text "?" <> ppr g
   pprPrec k (Abs x e) =
     parensIf (k > 0) $
       D.text "\\" D.<> D.hsep (map ppr x) D.<+> D.text "->" D.<+> D.align (D.nest 2 (pprPrec 0 e))
