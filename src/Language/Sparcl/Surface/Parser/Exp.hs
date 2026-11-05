@@ -475,7 +475,7 @@ opExpr =
     <$> funExpr
     <*> P.many ((\o e2 e1 -> lop o e1 e2) <$> (qop <* sp) <*> funExpr)
   where
-    lop o e1 e2 = Loc (location e1 <> location e2) $ Op o e1 e2
+    lop o e1 e2 = Loc (location e1 <> location e2) $ Op () o e1 e2
 
 funExpr :: (Monad m) => P m (LExp 'Parsing)
 funExpr =
@@ -522,12 +522,24 @@ funExpr =
           )
       <|> appExpr
 
+-- | A head followed by arguments. An explicitly passed instance @{{e}}@ is
+--   accepted only at argument positions, so it is an argument (@InstArg@)
+--   of an application by construction.
 appExpr :: (Monad m) => P m (LExp 'Parsing)
 appExpr =
-  (\(f : fs) -> foldl lapp f fs) <$> P.some (withLoc simpleExpr)
+  foldl (\f (l, a) -> Loc (location f <> l) (App f a))
+    <$> withLoc simpleExpr
+    <*> P.many (withLoc argExpr)
+  where
+    argExpr startLoc =
+      ( do
+          e <- instBraces expr
+          return (startLoc <> location e, InstArg e)
+      )
+        <|> (\e -> (location e, ExplicitArg e)) <$> simpleExpr startLoc
 
 lapp :: Loc (Exp p) -> Loc (Exp p) -> Loc (Exp p)
-lapp e1 e2 = Loc (location e1 <> location e2) $ App e1 e2
+lapp e1 e2 = Loc (location e1 <> location e2) $ App e1 (ExplicitArg e2)
 
 simpleExpr :: (Monad m) => SrcSpan -> P m (LExp 'Parsing)
 simpleExpr startLoc =
@@ -541,12 +553,7 @@ simpleExpr startLoc =
     <|> tupleExpr
     <|> P.try wTupleExpr
     <|> P.try wProjExpr
-    <|> instArgExpr
   where
-    instArgExpr = do
-      e <- instBraces expr
-      return $ Loc (startLoc <> location e) $ InstArg e
-
     withEnd t = do
       endLoc <- getSrcLoc
       return $ Loc (startLoc <> endLoc) t

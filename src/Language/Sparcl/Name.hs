@@ -33,6 +33,15 @@ data SystemName
     NRev
   | -- | generated name for an unnamed instance (numbered within a module)
     NInstance !Int
+  | -- | dictionary constructor of a class (the class's base name); used
+    --   with the module declaring the class
+    NDict !NameBase
+  | -- | projection of the i-th superclass dictionary of a class (the
+    --   class's base name); used with the module declaring the class
+    NSuperProj !NameBase !Int
+  | -- | default implementation of a method (the method's base name); used
+    --   with the module declaring the class
+    NDefault !NameBase
   deriving (Eq, Ord, Show)
 
 instance Pretty SystemName where
@@ -44,6 +53,9 @@ instance Pretty SystemName where
   ppr NBang = text "!" -- TODO: will be removed
   ppr NRev = text "rev"
   ppr (NInstance k) = text "<instance #" <> ppr k <> text ">"
+  ppr (NDict c) = text "<dict" <+> ppr c <> text ">"
+  ppr (NSuperProj c i) = text "<super" <+> ppr c <+> text "#" <> ppr i <> text ">"
+  ppr (NDefault m) = text "<default" <+> ppr m <> text ">"
 
 data SurfaceName
   = Qual !ModuleName !NameBase
@@ -58,7 +70,7 @@ data Name
   | Generated !Int !Phase
   deriving Show
 
-data Phase = Desugaring | REPL deriving (Eq, Show, Ord)
+data Phase = Desugaring | REPL | TypeChecking deriving (Eq, Show, Ord)
 
 instance NFData Phase where
   rnf x = seq x ()
@@ -107,7 +119,7 @@ instance Pretty SurfaceName where
 -- Basically, the method pretty-print names as the original without additional
 -- information introduced in the system.
 instance Pretty Name where
-  ppr (Generated i p) = text "_" <> text (case p of Desugaring -> "d"; REPL -> "r") <> ppr i
+  ppr (Generated i p) = text "_" <> text (case p of Desugaring -> "d"; REPL -> "r"; TypeChecking -> "t") <> ppr i
   ppr (Alpha _i n) = ppr n
   ppr (Local n) = ppr n
   ppr (Original _ _ o) = ppr o

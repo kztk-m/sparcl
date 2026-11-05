@@ -128,19 +128,14 @@ renameExp level localnames (Loc loc expr) = first (Loc loc) <$> go expr
 
     go (Lit l) = return (Lit l, S.empty)
 
-    -- An instance argument {{e}} is allowed only as an argument of an application.
-    go (App e1 (Loc l2 (InstArg e2))) = do
+    -- An argument is an ordinary one or an explicitly passed instance {{e}};
+    -- the latter can appear only here by the definition of the AST.
+    go (App e1 a2) = do
       (e1', fv1) <- renameExp level localnames e1
-      (e2', fv2) <- renameExp level localnames e2
-      return (App e1' (Loc l2 (InstArg e2')), S.union fv1 fv2)
+      (e2', fv2) <- renameExp level localnames (argExp a2)
+      return (App e1' (mapArg (const e2') a2), S.union fv1 fv2)
 
-    go (InstArg _) =
-      throwError (loc, text "An instance argument {{...}} can only appear as an argument of a function application.")
-
-    go (App e1 e2) = do
-      (e1', fv1) <- renameExp level localnames e1
-      (e2', fv2) <- renameExp level localnames e2
-      return (App e1' e2', S.union fv1 fv2)
+    go (InstHole v _) = absurd v
 
     go (Abs ps e) = do
       mapM_ checkInstPatArg ps
@@ -189,7 +184,7 @@ renameExp level localnames (Loc loc expr) = first (Loc loc) <$> go expr
       (e', fvE) <- renameExp level localnames e
       return (Parens e', fvE)
 
-    go (Op n e1 e2) = do
+    go (Op () n e1 e2) = do
       n' <- resolveName loc localnames n
       (e', fv) <- rearrangeOp loc level localnames n' e1 e2 -- adding n' to fv is responsibility of rearrangeOp
       return (unLoc e', fv)
@@ -261,7 +256,7 @@ rearrangeOp loc level localnames op exp1 exp2 = do
   (exp' , fv)  <- go loc exp1 op exp2'
   return (exp', S.union fv fv2)
     where
-      go l2 (Loc l1 (Op op1 e1 e2)) op2' e3' = do
+      go l2 (Loc l1 (Op () op1 e1 e2)) op2' e3' = do
         op1' <- resolveName loc localnames op1
         (k1, a1) <- lookupFixity op1'
         (k2, a2) <- lookupFixity op2'
@@ -286,7 +281,7 @@ rearrangeOp loc level localnames op exp1 exp2 = do
         (e1', fv1) <- renameExp level localnames e1
         return (opExp l op' e1' e2' , S.insert op' fv1)
 
-      opExp l opName e1 e2 = Loc l (Op opName e1 e2)
+      opExp l opName e1 e2 = Loc l (Op () opName e1 e2)
 
 
 

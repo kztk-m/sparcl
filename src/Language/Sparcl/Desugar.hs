@@ -8,6 +8,7 @@ module Language.Sparcl.Desugar (
 ) where
 
 import Data.Function (on)
+import Data.IORef (readIORef)
 import Data.List (groupBy)
 import Data.Void
 
@@ -15,6 +16,7 @@ import Control.Monad
 import Control.Monad.Reader
 import Control.Monad.State
 
+import Language.Sparcl.Exception (cannotHappen)
 import Language.Sparcl.SrcLoc
 import qualified Language.Sparcl.Surface.Syntax as S
 
@@ -54,6 +56,9 @@ runDesugar m = runReaderT m 0
 numberOfArgs :: T.Ty -> Int
 numberOfArgs (T.TyForAll _ (T.TyQual _ t)) = numberOfArgs t
 numberOfArgs (T.TyCon n [_, _, t]) | n == nameTyArr = numberOfArgs t + 1
+-- No constructor takes instance arguments now; counted in preparation for
+-- constructors with instance arguments (see the notes, H-4-1).
+numberOfArgs (T.TyCon n [_, t]) | n == nameTyInstArr = numberOfArgs t + 1
 numberOfArgs _ = 0
 
 desugarExp :: S.LExp 'TypeCheck -> Desugar (C.Exp Name)
@@ -63,8 +68,15 @@ desugarExp (Loc _ expr) = go expr
 
     go (S.Var (x, _)) = return $ C.Var x
     go (S.Lit l) = return $ C.Lit l
-    go (S.App e1 e2) =
-      mkApp <$> desugarExp e1 <*> desugarExp e2
+    -- Dictionaries are ordinary arguments at run time, so both kinds of
+    -- arguments become ordinary applications.
+    go (S.App e1 a2) =
+      mkApp <$> desugarExp e1 <*> desugarExp (S.argExp a2)
+    go (S.InstHole () ref) = do
+      sol <- liftIO $ readIORef ref
+      case sol of
+        Just e -> desugarExp e
+        Nothing -> cannotHappen $ text "desugarExp: an unfilled instance hole"
     go (S.Abs ps e) | Just xs <- checkAllVars ps = do
       e' <- desugarExp e
       pure $ foldr C.Abs e' xs
@@ -112,12 +124,10 @@ desugarExp (Loc _ expr) = go expr
               )
               bs
           return $ C.Let bs' e'
-    go (S.Let1 p1 e1 e2) = go (S.App (noLoc (S.Abs [p1] e2)) e1)
+    go (S.Let1 p1 e1 e2) = go (S.App (noLoc (S.Abs [p1] e2)) (S.ExplicitArg e1))
     go (S.Parens e) = desugarExp e
-    go (S.Op (op, _ty) e1 e2) = do
-      e1' <- desugarExp e1
-      e2' <- desugarExp e2
-      return $ C.App (C.App (C.Var op) e1') e2'
+    -- The type checker outputs operator applications as `App`s.
+    go (S.Op v _ _ _) = absurd v
     go S.Unlift =
       withNewName $ \x ->
         return $ C.Abs x (C.Unlift (C.Var x))
@@ -135,7 +145,7 @@ desugarExp (Loc _ expr) = go expr
 desugarRDO :: [(S.LPat 'TypeCheck, Loc (S.Exp 'TypeCheck))] -> Loc (S.Exp 'TypeCheck) -> Loc (S.Exp 'TypeCheck)
 desugarRDO = go [] id
   where
-    app e1 e2 = noLoc (S.App e1 e2)
+    app e1 e2 = noLoc (S.App e1 (S.ExplicitArg e2))
     go _ _ [] er = er -- this branch is used only for the expressions of the form "revdo in e0"
     go ps kpin [(p, e)] er =
       let pinExp = kpin e

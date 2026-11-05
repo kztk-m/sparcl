@@ -20,6 +20,11 @@ module Language.Sparcl.Surface.Syntax (
   Pat (..),
   LExp,
   Exp (..),
+  Arg (..),
+  argExp,
+  mapArg,
+  XOp,
+  XHole,
   Clause (..),
   Prec (..),
   Assoc (..),
@@ -54,8 +59,10 @@ import Language.Sparcl.Pass
 
 import qualified Language.Sparcl.Typing.Type as Typing
 
+import Data.IORef (IORef, readIORef)
 import Data.Kind
 import Data.Void
+import System.IO.Unsafe (unsafePerformIO)
 
 import Data.Typeable
 
@@ -229,12 +236,50 @@ pprVarName n
 type ForallX (f :: Type -> Constraint) p = (f (XId p), f (XTId p))
 type AllPretty p = (ForallX Pretty p, QueryName p, Typeable p)
 
+-- | Operator applications @e1 op e2@ are made by the parser and renaming;
+--   the type checker turns them into applications (@App@), so they never
+--   appear after type checking.
+type family XOp (p :: Pass) where
+  XOp 'Parsing = ()
+  XOp 'Renaming = ()
+  XOp 'TypeCheck = Void
+
+-- | Holes for the dictionaries of instance goals (@InstHole@) are made only
+--   by the type checker (as the arguments of inserted applications), so
+--   they never appear before type checking.
+type family XHole (p :: Pass) where
+  XHole 'Parsing = Void
+  XHole 'Renaming = Void
+  XHole 'TypeCheck = ()
+
+-- | An argument of an application: an ordinary one or an explicitly
+--   passed instance @{{e}}@. Having it as the argument type of @App@
+--   ensures that @{{e}}@ appears only as an argument of an application.
+data Arg p
+  = ExplicitArg !(LExp p)
+  | InstArg !(LExp p)
+
+argExp :: Arg p -> LExp p
+argExp (ExplicitArg e) = e
+argExp (InstArg e) = e
+
+mapArg :: (LExp p -> LExp q) -> Arg p -> Arg q
+mapArg f (ExplicitArg e) = ExplicitArg (f e)
+mapArg f (InstArg e) = InstArg (f e)
+
+instance (AllPretty p) => Pretty (Arg p) where
+  pprPrec k (ExplicitArg e) = pprPrec k e
+  pprPrec _ (InstArg e) = D.text "{{" <> pprPrec 0 e <> D.text "}}"
+
 -- TODO: add "if" expression
 data Exp p
   = Lit !Literal
   | Var !(XId p)
-  | App !(LExp p) !(LExp p)
-  | InstArg !(LExp p) -- {{e}}, which appears as an argument of App to explicitly pass an instance
+  | App !(LExp p) !(Arg p)
+  | -- | A hole for the dictionary of an instance goal, filled when the goal
+    --   is solved. The tag (see XHole) is lazy, so that `absurd` handles
+    --   the passes where it is Void (as XDecls).
+    InstHole (XHole p) !(IORef (Maybe (LExp p)))
   | Abs ![LPat p] !(LExp p)
   | Con !(XId p)
   | WProj !Int !Int -- &i_n
@@ -245,7 +290,7 @@ data Exp p
   | Let !(Decls p (LDecl p)) !(LExp p)
   | Let1 !(LPat p) !(LExp p) !(LExp p) -- let p = e1 in e2 is equivalent to (\p . e2) e1
   | Parens !(LExp p) -- for operators
-  | Op !(XId p) !(LExp p) !(LExp p)
+  | Op (XOp p) !(XId p) !(LExp p) !(LExp p) -- see XOp; the first field is lazy, as in InstHole
   | RDO ![(LPat p, LExp p)] !(LExp p)
   | Unlift
   | RCon !(XId p)
@@ -257,10 +302,15 @@ instance (AllPretty p) => Pretty (LExp p) where
 instance (AllPretty p) => Pretty (Exp p) where
   pprPrec _ (Lit l) = ppr l
   pprPrec _ (Var q) = pprVarName q
-  pprPrec k (App e1 e2) =
+  pprPrec k (App e1 a) =
     parensIf (k > 9) $
-      pprPrec 9 e1 D.<+> pprPrec 10 e2
-  pprPrec _ (InstArg e) = D.text "{{" <> pprPrec 0 e <> D.text "}}"
+      pprPrec 9 e1 D.<+> pprPrec 10 a
+  -- As meta type variables are printed (Typing/Type.hs), the contents are
+  -- read unsafely.
+  pprPrec _ (InstHole _ ref) =
+    case unsafePerformIO (readIORef ref) of
+      Just e -> pprPrec 10 e
+      Nothing -> D.text "?"
   pprPrec k (Abs x e) =
     parensIf (k > 0) $
       D.text "\\" D.<> D.hsep (map ppr x) D.<+> D.text "->" D.<+> D.align (D.nest 2 (pprPrec 0 e))
@@ -281,7 +331,7 @@ instance (AllPretty p) => Pretty (Exp p) where
   pprPrec _ Lift = text "lift"
   pprPrec _ Unlift = text "unlift"
   pprPrec _ (Parens e) = D.parens (pprPrec 0 e)
-  pprPrec k (Op q e1 e2) =
+  pprPrec k (Op _ q e1 e2) =
     parensIf (k > 8) $
       pprPrec 8 e1 D.<+> ppr q D.<+> pprPrec 9 e2
   pprPrec k (Sig e t) =

@@ -478,13 +478,17 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
       writeTCRef ref (foldr (uncurry tyarr) retTy $ zip qs ts)
 
       return (Abs pats' e', foldr (M.delete . fst) umap xqs)
-    go (App e1 e2) = do
+    go (App e1 (ExplicitArg e2)) = do
       (e1', ty1, umap1) <- inferTy e1
       (argTy, m, resTy) <- atExp e1 $ atLoc (location e1) $ ensureFunTy ty1
       mul <- ty2mult m
       (e2', umap2) <- checkPolyTyM e2 argTy mul
       instantiatePoly resTy expectedTy
-      return (App e1' e2', mergeUseMap umap1 umap2)
+      return (App e1' (ExplicitArg e2'), mergeUseMap umap1 umap2)
+    go (App _ (InstArg _)) =
+      -- TODO: instance arguments (stage 3 of the implementation plan)
+      staticError $ text "Type checking of instance arguments is not supported yet."
+    go (InstHole v _) = absurd v
     go (Let1 p e1 e2) = do
       patMult <- ty2mult =<< newMetaTy
       (e1', ty1, umap1) <- inferTyM e1 patMult
@@ -538,7 +542,7 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
     go (Parens e) = do
       (e', umap) <- checkTy e expectedTy
       return (Parens e', umap)
-    go (Op op e1 e2) = do
+    go (Op () op e1 e2) = do
       tyOfOp <- instantiate =<< askType loc op
       (ty1, m1, rest) <- ensureFunTy tyOfOp
       (ty2, m2, resTy) <- ensureFunTy rest
@@ -546,7 +550,10 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
       (e2', umap2) <- checkTyM e2 (Check ty2) =<< ty2mult m2
 
       instantiatePoly resTy expectedTy
-      pure (Op (op, tyOfOp) e1' e2', mergeUseMap umap1 umap2)
+      -- An operator application is output as applications (D-3); `Op`
+      -- cannot appear after type checking (XOp 'TypeCheck = Void).
+      let opApp = Loc loc $ App (Loc loc $ Var (op, tyOfOp)) (ExplicitArg e1')
+      pure (App opApp (ExplicitArg e2'), mergeUseMap umap1 umap2)
     go (RCon c) = do
       tyOfC_ <- askType loc c
 
