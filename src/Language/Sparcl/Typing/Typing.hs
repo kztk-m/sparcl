@@ -8,6 +8,7 @@ module Language.Sparcl.Typing.Typing (
 
 import Control.Monad
 import Control.Monad.Except
+import Control.Monad.Reader (asks)
 import Data.Void
 
 -- import Control.Monad.Writer
@@ -135,6 +136,12 @@ subsumptionCheckBody isRightGiven ty1_ ty2_ = do
     (TyForAll _ _, _) -> do
       bodyTy1 <- instantiate ty1 -- discharge constraint
       subsumptionCheckBody isRightGiven bodyTy1 ty2
+    -- A-3: the classes are compared by equality (they are monotypes), the
+    -- results covariantly. An instance arrow against an ordinary arrow is
+    -- an error (via ensureFunTy below).
+    (InstFunTy c1 r1, InstFunTy c2 r2) -> do
+      if isRightGiven then tryUnify c1 c2 else tryUnify c2 c1
+      subsumptionCheckBody isRightGiven r1 r2
     (FunTy m1 a1 r1, _) -> do
       (a2, m2, r2) <- ensureFunTy ty2
       subsumptionCheckFun isRightGiven a1 m1 r1 a2 m2 r2
@@ -365,6 +372,9 @@ checkPatTyWork isUnderRev (Loc loc pat) pmult expected = do
       -- cs must be []
       addConstraint $ msubMult omega pmult
       return (req, cs, PWild x', [])
+    go (PInst _) =
+      -- TODO: instance patterns (C-3, stage 3 of the implementation plan)
+      staticError $ text "Type checking of instance patterns is not supported yet."
 
 constrainLessThan :: Multiplication -> Multiplication -> TC ()
 constrainLessThan m1 (m2ty -> []) =
@@ -584,6 +594,7 @@ checkTy lexp@(Loc loc expr) expectedTy =
       return (Con (c, tyOfC), M.empty)
     go (Sig e ty_) = do
       let annTy = ty2ty ty_
+      checkClassTypesL ty_ -- G-4
       (e', umap) <- checkPolyTy e annTy
       instantiatePoly annTy expectedTy
       pure (unLoc e', umap)
@@ -902,6 +913,63 @@ inferDecls isTopLevel (HDecls _ dss) = do
       (rest', bs', umap') <- withVars bind $ go (bind ++ bs) rest
       return (ds' : rest', bs', mergeUseMap umap umap')
 
+-- | Checks the class types in a user-written type (G-4): the contents of
+--   @{{ }}@ must be a class applied to arguments (Q2), and every class must
+--   be applied to as many arguments as it has parameters, inside or outside
+--   @{{ }}@ (classes are ordinary types, Q1, but there is no kind for
+--   unapplied classes, I1). Synonyms are expanded first, so this is done
+--   where a type is used, not at synonym definitions. Errors are reported
+--   and checking continues.
+checkClassTypes :: Ty -> TC ()
+checkClassTypes ty = resolveSyn ty >>= go
+  where
+    go (TySyn _ t) = go t
+    go (TyForAll _ (TyQual _ t)) = go t
+    go (InstFunTy c t) = do
+      checkClassApp c
+      go c
+      go t
+    go (TyCon n ts) = do
+      cenv <- asks tcClassEnv
+      case M.lookup n cenv of
+        Just ci
+          | length (ciParams ci) /= length ts ->
+              reportError $ ClassArityMismatch n (length (ciParams ci)) (length ts)
+        _ -> pure ()
+      mapM_ go ts
+    go _ = pure ()
+
+-- | 'checkClassTypes' for a written type, located at it.
+checkClassTypesL :: LTy 'Renaming -> TC ()
+checkClassTypesL lty = atLoc (location lty) $ checkClassTypes (ty2ty lty)
+
+-- | Checks that a type is an application of a class (where a class is
+--   required: inside @{{ }}@, superclasses, instance heads). The number of
+--   arguments is checked by 'checkClassTypes'.
+checkClassApp :: Ty -> TC ()
+checkClassApp ty = do
+  ty' <- stripSyn <$> resolveSyn ty
+  cenv <- asks tcClassEnv
+  case ty' of
+    TyCon n _ | M.member n cenv -> pure ()
+    _ -> reportError $ NotAClass ty
+
+stripSyn :: Ty -> Ty
+stripSyn (TySyn _ t) = stripSyn t
+stripSyn t = t
+
+-- | The global type of a method (B-5): for @class C as@ and the method
+--   signature @forall bs. cs => t@, @forall as bs. cs => {{C as}} -> t@
+--   (all foralls in front). Renaming names the variables of the signature
+--   apart from the class parameters.
+methodType :: Name -> [TyVar] -> Ty -> Ty
+methodType c params sigTy =
+  case sigTy of
+    TyForAll bs (TyQual cs t) -> TyForAll (params ++ bs) (TyQual cs (InstFunTy dict t))
+    t -> TyForAll params (TyQual [] (InstFunTy dict t))
+  where
+    dict = TyCon c (map TyVar params)
+
 inferTopDecls ::
   Decls 'Renaming (LDecl 'Renaming)
   -> [Loc (Name, [Name], [Loc (CDecl 'Renaming)])]
@@ -915,13 +983,10 @@ inferTopDecls ::
       , [C.TDecl Name]
       , CTypeTable
       , SynTable
+      , ClassTable -- classes declared in this module
+      , InstTable -- instances declared in this module
       )
 inferTopDecls decls dataDecls typeDecls classDecls instDecls = do
-  -- TODO: type checking of classes and instances
-  case (classDecls, instDecls) of
-    ([], []) -> return ()
-    _ -> staticError $ text "Type checking of class and instance declarations is not supported yet."
-
   let dataDecls' =
         [ C.DDecl n (map BoundTv ns) [convConDecl cd | Loc _ cd <- cdecls]
         | Loc _ (n, ns, cdecls) <- dataDecls
@@ -942,12 +1007,94 @@ inferTopDecls decls dataDecls typeDecls classDecls instDecls = do
   --   let tvs = map BoundTv ns,
   --   Loc _ (CDecl cn tys) <- cdecls ]
 
+  -- The order of registration and checks follows G-1 in the notes: type
+  -- information first (data types and synonyms, classes, instances), then
+  -- expressions.
+  -- TODO: superclass instances (G-3 3-b, stage 3); default methods and
+  -- instance bodies (G-5, stage 4) are not checked yet.
+
+  -- G-1 stage 1: data types and type synonyms.
   withCons (M.toList ctypeTable) $
     withSyns (M.toList synTable) $ do
-      (decls', nts, _) <- inferDecls True decls
-      -- liftIO $ putStrLn $ show cs
-      return (decls', nts, dataDecls', typeDecls', ctypeTable, synTable)
+      -- G-1 stage 2: classes (G-2).
+      let classTable = M.fromList [(c, mkClassInfo ps sups sigs defs) | Loc _ (c, ps, sups, sigs, defs) <- classDecls]
+      withClassesAndInstances classTable M.empty $ do
+        -- G-4: fields of data constructors (they may contain class types,
+        -- so this is done once the class table exists).
+        forM_ dataDecls $ \(Loc _ (_, _, cdecls)) ->
+          forM_ cdecls $ \(Loc _ cd) -> mapM_ checkClassTypesL (fieldTys cd)
+
+        -- G-2 2 and 4: superclasses and method signatures. Cycles in the
+        -- superclass hierarchy are allowed (G-2 3).
+        forM_ classDecls $ \(Loc _ (_, _, sups, sigs, _)) -> do
+          forM_ sups $ \s -> atLoc (location s) $ do
+            checkClassTypes (ty2ty s)
+            checkClassApp (ty2ty s)
+          forM_ sigs $ \(Loc _ (_, t)) -> checkClassTypesL t
+
+        let methodTys =
+              [ (m, methodType c (map BoundTv ps) (ty2ty t))
+              | Loc _ (c, ps, _, sigs, _) <- classDecls
+              , Loc _ (m, t) <- sigs
+              ]
+
+        -- G-1 stage 3-a: instances (G-3 1, 4); registered even when a
+        -- check fails, to avoid cascades of errors at their uses.
+        instTys <- forM instDecls $ \(Loc _ (x, lty, _)) -> do
+          let ty = ty2ty lty
+          atLoc (location lty) $ do
+            checkClassTypes ty
+            checkClassApp =<< instHead ty
+          pure (x, ty)
+        instTable <-
+          M.fromListWith M.union
+            <$> sequence
+              [ do
+                  hd <- instHead ty
+                  pure (headName hd, M.singleton x ty)
+              | (x, ty) <- instTys
+              ]
+
+        withClassesAndInstances M.empty instTable $
+          withVars (methodTys ++ instTys) $ do
+            -- G-1 stage 4: definitions.
+            (decls', nts, _) <- inferDecls True decls
+            return
+              ( decls'
+              , nts ++ methodTys ++ instTys
+              , dataDecls'
+              , typeDecls'
+              , ctypeTable
+              , synTable
+              , classTable
+              , instTable
+              )
   where
+    mkClassInfo ps sups sigs defs =
+      ClassInfo
+        { ciParams = map BoundTv ps
+        , ciSupers = map ty2ty sups
+        , ciMethods = [(m, ty2ty t) | Loc _ (m, t) <- sigs]
+        , ciDefaults = [n | Loc _ (DDef n _) <- defs]
+        }
+
+    fieldTys (NormalC _ tys) = tys
+    fieldTys (GeneralC _ _ _ tyms) = map fst tyms
+
+    -- The head of an instance type, forall as. {{H1}} -> ... -> C ts
+    instHead ty = stripSyn . go <$> resolveSyn ty
+      where
+        go (TySyn _ t) = go t
+        go (TyForAll _ (TyQual _ t)) = go t
+        go (InstFunTy _ t) = go t
+        go t = t
+
+    -- Renaming ensures that an instance head is a type constructor applied
+    -- to types; the name is used as a key even if it is not a class (the
+    -- error has been reported).
+    headName (TyCon n _) = n
+    headName _ = error "Cannot happen: the head of an instance must be C t1 ... tn."
+
     convConDecl (NormalC cn tys) = (cn, [], [], map ty2ty tys)
     convConDecl (GeneralC cn xs q tys) = (cn, xs, concatMap c2c q, map (ty2ty . fst) tys)
 
@@ -971,6 +1118,7 @@ inferMutual isTopLevel decls = do
   let names = [n | Loc _ (DDef n _) <- decls]
   let defs = [(loc, n, pcs) | Loc loc (DDef n pcs) <- decls]
   let sigMap = M.fromList [(n, ty2ty t) | Loc _ (DSig n t) <- decls]
+  mapM_ checkClassTypesL [t | Loc _ (DSig _ t) <- decls] -- G-4
 
   (nts0, umap) <- pushLevel $ do
     tys <- forM names $ \n -> case M.lookup n sigMap of

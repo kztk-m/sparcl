@@ -1,0 +1,6 @@
+-- It is intentional that this program causes a type error.
+-- Only an application of a class may appear inside {{ }}, also in the
+-- field types of data constructors (D-4, G-4 in
+-- notes/extend-type-class_2026.txt).
+
+data U = MkU ({{Int}} -> Int)

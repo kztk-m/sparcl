@@ -69,6 +69,19 @@ data ErrorDetail
   | CannotHavePolyTy !PolyTy ![TyVar]
   | LessPolymorphic !PolyTy !PolyTy ![TyVar]
   | CannotUnifyPolyTy !MetaTyVar !PolyTy
+  | -- Type classes (E-5 in the notes)
+    NoInstance !Ty -- no candidate for a goal without metas
+  | AmbiguousInstances !Ty ![Name] -- several global candidates for a goal without metas
+  | AmbiguousGoal !Ty -- metas left in a goal that can no longer be fixed
+  | CannotInferInstArg !Ty -- a polymorphic goal of a top-level definition without a signature
+  | InstSearchTooDeep !Ty -- the depth limit of instance search
+  | NotInstArgPosition -- {{e}} / {{p}} where the type has an ordinary arrow
+  | InstArgUnknownFun -- {{e}} passed to a function of unknown type
+  | InstPatNeedsAnnotation -- {{p}} where the type is unknown
+  | NotAClass !Ty -- a non-class where a class is required
+  | ClassArityMismatch !Name !Int !Int -- class, expected and actual numbers of arguments
+  | NotAMethod !Name !Name -- instance, definition
+  | MissingMethod !Name !Name -- instance, method
   | Other !D.Doc
 
 instance Pretty TypeError where
@@ -204,6 +217,47 @@ instance Pretty TypeError where
               , D.nest 2 (D.line <> D.align (ppr polyTy))
               , D.line <> D.text "with an unification variable" <+> ppr mv
               ]
+          go (NoInstance ty) =
+            D.text "No instance found for" <+> D.align (ppr ty)
+          go (AmbiguousInstances ty ns) =
+            D.vcat
+              [ D.text "Several instances match" <+> D.align (ppr ty) <> D.text ":"
+              , D.nest 2 (D.vcat (map ppr ns))
+              ]
+          go (AmbiguousGoal ty) =
+            D.vcat
+              [ D.text "Ambiguous instance argument:" <+> D.align (ppr ty)
+              , D.text "Its type cannot be determined; add a type annotation."
+              ]
+          go (CannotInferInstArg ty) =
+            D.vcat
+              [ D.text "Cannot infer the instance argument" <+> D.align (ppr ty)
+              , D.text "of a definition without a signature; add a signature."
+              ]
+          go (InstSearchTooDeep ty) =
+            D.text "Instance search for" <+> D.align (ppr ty)
+              <+> D.text "is too deep (possibly cyclic instances)."
+          go NotInstArgPosition =
+            D.text "An instance argument {{...}} is given where an ordinary argument is expected."
+          go InstArgUnknownFun =
+            D.text "An instance argument {{...}} cannot be passed to a function whose type is unknown; add a type annotation."
+          go InstPatNeedsAnnotation =
+            D.text "An instance pattern {{...}} needs a type annotation."
+          go (NotAClass ty) =
+            D.text "Not a class:" <+> D.align (ppr ty)
+          go (ClassArityMismatch c expected actual) =
+            D.hsep
+              [ D.text "Class"
+              , ppr c
+              , D.text "expects"
+              , ppr expected
+              , D.text "argument(s), but is given"
+              , ppr actual <> D.text "."
+              ]
+          go (NotAMethod inst n) =
+            D.hsep [ppr n, D.text "is not a method of the class of instance", ppr inst <> D.text "."]
+          go (MissingMethod inst m) =
+            D.hsep [D.text "Instance", ppr inst, D.text "does not define method", ppr m, D.text "(which has no default)."]
           go (Other d) = d
 
       pprContexts [] = D.empty
@@ -219,6 +273,37 @@ instance Pretty TypeError where
 -- our principle; multiplicites are synthesized instead of checked.
 type TyEnv = Map Name Ty
 type ConEnv = Map Name ConTy
+
+-- | Information on a class (B-1 in the notes). The class parameters stay
+--   'BoundTv's and are instantiated by substitution when used.
+data ClassInfo = ClassInfo
+  { ciParams :: ![TyVar] -- class parameters
+  , ciSupers :: ![Ty] -- superclasses (the parameters free)
+  , ciMethods :: ![(Name, Ty)] -- methods and their signature types (the parameters free)
+  , ciDefaults :: ![Name] -- methods with a default implementation
+  }
+
+instance Pretty ClassInfo where
+  ppr (ClassInfo ps sups ms ds) =
+    D.braces $
+      D.align $
+        D.vsep
+          [ D.text "params:" <+> D.hsep (map ppr ps)
+          , D.text "supers:" <+> D.hsep (D.punctuate D.comma (map ppr sups))
+          , D.text "methods:" <+> D.align (D.vsep [ppr m <+> D.colon <+> ppr t | (m, t) <- ms])
+          , D.text "defaults:" <+> D.hsep (map ppr ds)
+          ]
+
+-- | Classes by name.
+type ClassTable = Map Name ClassInfo
+
+-- | Instances (B-2, B-4 (5)): class name -> instance name -> instance type.
+type InstTable = Map Name (Map Name Ty)
+
+-- | Merges instance tables; the same instance reached by several import
+--   paths is one entry.
+mergeInstTable :: InstTable -> InstTable -> InstTable
+mergeInstTable = M.unionWith M.union
 
 dummyName :: Name
 dummyName = Original (ModuleName "") (User "") (Bare (User ""))
@@ -372,6 +457,8 @@ data TypingContext
   , tcTyEnv :: !TyEnv -- Current typing environment
   , tcConEnv :: !ConEnv
   , tcSyn :: !SynTable -- Current type synonym table
+  , tcClassEnv :: !ClassTable -- classes (own and imported)
+  , tcInstEnv :: !InstTable -- global instances (own and imported)
   , tcContexts :: ![S.LExp 'Renaming] -- parent expressions
   , tcLoc :: !(Maybe SrcSpan) -- focused part
   , tcChecking :: !WhenChecking
@@ -422,6 +509,8 @@ initTypingContext = do
       , tcConEnv = M.empty
       , tcTyEnv = M.empty
       , tcSyn = M.empty
+      , tcClassEnv = M.empty
+      , tcInstEnv = M.empty
       , tcBLog = rbm
       , tcDeferredIC = ric
       , tcExpandLast = DontExpandLast
@@ -438,6 +527,8 @@ refreshTC tc = do
       { tcTyEnv = M.empty
       , tcConEnv = M.empty
       , tcSyn = M.empty
+      , tcClassEnv = M.empty
+      , tcInstEnv = M.empty
       , tcLoc = Nothing
       , tcConstraint = rc
       , tcRefErrors = r
@@ -446,12 +537,14 @@ refreshTC tc = do
       , tcDeferredIC = ric
       }
 
-setEnvs :: TypingContext -> ConEnv -> TypeTable -> SynTable -> TypingContext
-setEnvs tc kenv tenv syn =
+setEnvs :: TypingContext -> ConEnv -> TypeTable -> SynTable -> ClassTable -> InstTable -> TypingContext
+setEnvs tc kenv tenv syn cenv ienv =
   tc
     { tcConEnv = kenv
     , tcTyEnv = tenv
     , tcSyn = syn
+    , tcClassEnv = cenv
+    , tcInstEnv = ienv
     }
 
 setDebugLevel :: TypingContext -> Int -> TypingContext
@@ -513,14 +606,27 @@ logBenchN key cnt comp = do
   where
     mrg (BenchInfo i m) (BenchInfo i' m') = BenchInfo (i + i') (m + m')
 
-runTCWith :: CTypeTable -> TypeTable -> SynTable -> TC a -> TC a
-runTCWith ctbl tytbl syntbl m = do
+runTCWith :: CTypeTable -> TypeTable -> SynTable -> ClassTable -> InstTable -> TC a -> TC a
+runTCWith ctbl tytbl syntbl clstbl insttbl m = do
   tc <- ask
   tc' <- liftIO $ refreshTC tc
-  local (\_ -> setEnvs tc' ctbl tytbl syntbl) $ runTC m
+  local (\_ -> setEnvs tc' ctbl tytbl syntbl clstbl insttbl) $ runTC m
 
-execTCWith :: TypingContext -> CTypeTable -> TypeTable -> SynTable -> TC a -> IO a
-execTCWith tc ctbl tytbl syntbl m | TC m' <- runTCWith ctbl tytbl syntbl m = runReaderT m' tc
+execTCWith :: TypingContext -> CTypeTable -> TypeTable -> SynTable -> ClassTable -> InstTable -> TC a -> IO a
+execTCWith tc ctbl tytbl syntbl clstbl insttbl m
+  | TC m' <- runTCWith ctbl tytbl syntbl clstbl insttbl m = runReaderT m' tc
+
+-- | Extends the class and instance environments (classes and instances
+--   declared in the module being checked).
+withClassesAndInstances :: ClassTable -> InstTable -> TC r -> TC r
+withClassesAndInstances cls insts =
+  local
+    ( \tc ->
+        tc
+          { tcClassEnv = M.union cls (tcClassEnv tc)
+          , tcInstEnv = mergeInstTable insts (tcInstEnv tc)
+          }
+    )
 
 tupleConTy :: Int -> ConTy
 tupleConTy n =
@@ -849,6 +955,12 @@ zonkErrorDetail (LessPolymorphic ty1@(TyMetaV mv) ty2 escaped) = do
     containsForAll _ = False
 zonkErrorDetail (LessPolymorphic ty1 ty2 escaped) =
   LessPolymorphic <$> zonkType ty1 <*> zonkType ty2 <*> pure escaped
+zonkErrorDetail (NoInstance ty) = NoInstance <$> zonkType ty
+zonkErrorDetail (AmbiguousInstances ty ns) = AmbiguousInstances <$> zonkType ty <*> pure ns
+zonkErrorDetail (AmbiguousGoal ty) = AmbiguousGoal <$> zonkType ty
+zonkErrorDetail (CannotInferInstArg ty) = CannotInferInstArg <$> zonkType ty
+zonkErrorDetail (InstSearchTooDeep ty) = InstSearchTooDeep <$> zonkType ty
+zonkErrorDetail (NotAClass ty) = NotAClass <$> zonkType ty
 zonkErrorDetail res = pure res
 
 skolemize :: PolyTy -> TC ([TyVar], QualTy)

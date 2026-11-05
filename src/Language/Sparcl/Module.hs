@@ -60,6 +60,10 @@ data ModuleContext v = ModuleContext
   , mcConTable :: !CTypeTable
   , mcSynTable :: !SynTable
   , mcValueTable :: !(M.Map Name v)
+  , mcClassTable :: !ClassTable
+  -- ^ classes; not filtered by import/export lists, propagated transitively (B-4)
+  , mcInstTable :: !InstTable
+  -- ^ instances; not filtered by import/export lists, propagated transitively (B-4)
   }
 
 instance Semigroup (ModuleContext v) where
@@ -71,10 +75,12 @@ instance Semigroup (ModuleContext v) where
       , mcConTable = M.union (mcConTable m1) (mcConTable m2)
       , mcSynTable = M.union (mcSynTable m1) (mcSynTable m2)
       , mcValueTable = M.union (mcValueTable m1) (mcValueTable m2)
+      , mcClassTable = M.union (mcClassTable m1) (mcClassTable m2)
+      , mcInstTable = mergeInstTable (mcInstTable m1) (mcInstTable m2)
       }
 
 emptyModuleContext :: ModuleContext v
-emptyModuleContext = ModuleContext{mcNameTable = M.empty, mcOpTable = M.empty, mcTypeTable = M.empty, mcConTable = M.empty, mcSynTable = M.empty, mcValueTable = M.empty}
+emptyModuleContext = ModuleContext{mcNameTable = M.empty, mcOpTable = M.empty, mcTypeTable = M.empty, mcConTable = M.empty, mcSynTable = M.empty, mcValueTable = M.empty, mcClassTable = M.empty, mcInstTable = M.empty}
 
 instance Monoid (ModuleContext v) where
   mempty = emptyModuleContext
@@ -129,6 +135,8 @@ baseModuleInfo =
           , mcTypeTable = typeTable
           , mcSynTable = synTable
           , mcValueTable = valueTable
+          , mcClassTable = M.empty
+          , mcInstTable = M.empty
           }
     }
   where
@@ -274,6 +282,10 @@ restrictNames ns mi =
           , mcConTable = restrict (mcConTable mc)
           , mcSynTable = restrict (mcSynTable mc)
           , mcValueTable = restrict (mcValueTable mc)
+          , -- Classes and instances are in effect whenever their module is
+            -- loaded, so they are not filtered (B-4 (2)).
+            mcClassTable = mcClassTable mc
+          , mcInstTable = mcInstTable mc
           }
     }
   where
@@ -368,6 +380,9 @@ exportNames ns m = do
               , mcConTable = conTbl
               , mcSynTable = synTbl
               , mcValueTable = valTbl
+              , -- already including the imported ones (B-4 (3))
+                mcClassTable = mcClassTable (miModuleContext m)
+              , mcInstTable = mcInstTable (miModuleContext m)
               }
         }
 
@@ -404,6 +419,8 @@ readExp str = do
   typeTable <- asks (mcTypeTable . lcModuleContext)
   conTable <- asks (mcConTable . lcModuleContext)
   synTable <- asks (mcSynTable . lcModuleContext)
+  classTable <- asks (mcClassTable . lcModuleContext)
+  instTable <- asks (mcInstTable . lcModuleContext)
 
   debugPrint 1 $ text "Type checking expression..."
   debugPrint 3 $
@@ -418,7 +435,7 @@ readExp str = do
   -- liftIO $ setEnvs tinfo typeTable synTable
   (typedExp, ty) <- do
     tc <- askTC
-    liftIO $ execTCWith tc conTable typeTable synTable $ inferExp renamedExp
+    liftIO $ execTCWith tc conTable typeTable synTable classTable instTable $ inferExp renamedExp
   debugPrint 1 $ text "Type checking Ok."
   ty' <- liftIO $ evaluate ty
 
@@ -492,13 +509,17 @@ interpDecls mCurrentModuleName decls interp = do
   tyEnv <- asks (mcTypeTable . lcModuleContext)
   conEnv <- asks (mcConTable . lcModuleContext)
   synEnv <- asks (mcSynTable . lcModuleContext)
+  classEnv <- asks (mcClassTable . lcModuleContext)
+  instEnv <- asks (mcInstTable . lcModuleContext)
 
   debugPrint 1 $ text "Type checking ..."
   debugPrint 2 $ text "under ty env" </> pprMap tyEnv
 
-  (typedDecls, nts, _dataDecls', _typeDecls', newCTypeTable, newSynTable) <- do
+  (typedDecls, nts, _dataDecls', _typeDecls', newCTypeTable, newSynTable, newClassTable, newInstTable) <- do
     tc <- askTC
-    liftIO $ execTCWith tc conEnv tyEnv synEnv $ inferTopDecls renamedDecls tyDecls synDecls classDecls instDecls
+    liftIO $
+      execTCWith tc conEnv tyEnv synEnv classEnv instEnv $
+        inferTopDecls renamedDecls tyDecls synDecls classDecls instDecls
 
   debugPrint 1 $ text "Type checking Ok."
   debugPrint 1 $ text "Desugaring ..."
@@ -540,6 +561,10 @@ interpDecls mCurrentModuleName decls interp = do
                 , mcTypeTable = M.fromList nts
                 , mcConTable = newCTypeTable
                 , mcValueTable = M.fromList newValueEnv
+                , -- own classes and instances plus the imported ones, with or
+                  -- without an export list (transitive, B-4 (3))
+                  mcClassTable = M.union newClassTable classEnv
+                , mcInstTable = mergeInstTable newInstTable instEnv
                 }
           }
   pure newMod

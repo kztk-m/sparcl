@@ -1,0 +1,10 @@
+-- It is intentional that this program causes a type error.
+-- A class must be applied to as many arguments as it has parameters, also
+-- outside {{ }} (G-4 in notes/extend-type-class_2026.txt).
+
+class Eq a where
+    sig eq : a -> a -> Bool
+end
+
+sig g : Eq Int Int -> Bool
+def g = g

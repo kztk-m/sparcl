@@ -67,6 +67,15 @@ pattern FunTy m argTy resTy <- TyCon ((== nameTyArr) -> True) [m, argTy, resTy]
   where
     FunTy m argTy resTy = TyCon nameTyArr [m, argTy, resTy]
 
+-- | An instance-argument function type @{{c}} -> t@ (always unrestricted).
+--   NB: as it is an ordinary 'TyCon', generic treatments of type
+--   constructors apply to it silently; places where it must be treated
+--   differently from 'FunTy' need explicit cases (A-1 in the notes).
+pattern InstFunTy :: Ty -> Ty -> Ty
+pattern InstFunTy c resTy <- TyCon ((== nameTyInstArr) -> True) [c, resTy]
+  where
+    InstFunTy c resTy = TyCon nameTyInstArr [c, resTy]
+
 isMonoTy :: Ty -> Bool
 isMonoTy = isJust . testMonoTy
 
@@ -209,6 +218,8 @@ instance Pretty Ty where
       TyMult One -> D.group (D.align (pprPrec 1 a) D.<$> D.text "-o" D.<+> pprPrec 0 b)
       TyMult Omega -> D.group (D.align (pprPrec 1 a) D.<$> D.text "->" D.<+> pprPrec 0 b)
       _ -> D.group (D.align (pprPrec 1 a) <+> D.text "#" <+> pprPrec 0 m D.<$> text "->" <+> pprPrec 0 b)
+  pprPrec k (TyCon c [cl, b]) | c == nameTyInstArr = parensIf (k > 0) $
+    D.group (D.text "{{" <> pprPrec 0 cl <> D.text "}}" D.<$> D.text "->" D.<+> pprPrec 0 b)
   pprPrec k (TyCon c ts) =
     parensIf (k > 1) $
       ppr c D.<+> D.align (D.hsep (map (pprPrec 2) ts))

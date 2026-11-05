@@ -1,0 +1,6 @@
+-- It is intentional that this program causes a type error.
+-- Only an application of a class may appear inside {{ }} (Q2 in
+-- notes/extend-type-class_2026.txt): `Int` is not a class.
+
+sig f : {{Int}} -> Bool
+def f = f
