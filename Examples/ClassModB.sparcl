@@ -1,0 +1,19 @@
+-- Classes and instances across modules (2/3): see Examples.ClassModA.
+--
+-- The import list names neither the instances nor `eq`. The export list
+-- re-exports `Nat` and its constructors from Examples.ClassModA, but not the
+-- classes, the methods or the instances.
+
+module Examples.ClassModB (Nat, Z, S, leqAndNeq, neqViaOrd) where
+
+import Examples.ClassModA (Nat, Z, S, Eq, neq, Ord, leq)
+
+-- `neq` from the superclass `Eq a` of `Ord a`
+sig neqViaOrd : {{Ord a}} -> a -> a -> Bool
+def neqViaOrd x y = neq x y
+
+sig leqAndNeq : {{Ord a}} -> a -> a -> Bool
+def leqAndNeq x y = case leq x y of
+                      True  -> neq x y
+                    | False -> False
+                    end

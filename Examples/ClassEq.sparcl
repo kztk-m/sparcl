@@ -113,3 +113,16 @@ def t7 = Pair True Z == Pair True (S Z)
 -- explicitly passing named instances
 def t8 = elem {{eqNat}} Z (Cons (S Z) (Cons Z Nil))
 def t9 = notElem {{eqList {{eqNat}}}} Nil (Cons (Cons Z Nil) Nil)
+
+-- Expected values (compared with t1 .. t9 by test/Spec.hs)
+
+def t1' = True
+def t2' = True
+def t3' = True
+def t4' = True
+def t5' = Cons False Nil
+-- nub keeps the last occurrence of each element
+def t6' = Cons 1 (Cons 3 (Cons 2 Nil))
+def t7' = False
+def t8' = True
+def t9' = True

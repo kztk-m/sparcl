@@ -553,7 +553,25 @@ simpleExpr startLoc =
     <|> tupleExpr
     <|> P.try wTupleExpr
     <|> P.try wProjExpr
+    <|> misplacedInstArg
   where
+    -- An explicitly passed instance @{{e}}@ is parsed only by 'appExpr' at
+    -- argument positions; anywhere else it reaches here. Report it with a
+    -- dedicated message instead of the generic one. @{{@ is consumed, so
+    -- that the message is not discarded by callers that would try other
+    -- alternatives (e.g. the empty tuple for @({{e}})@); no expression
+    -- starts with @{{@, so no alternative is lost. The error is reported
+    -- at the position of @{{@.
+    misplacedInstArg = do
+#if MIN_VERSION_megaparsec(7,0,0)
+      o <- P.getOffset
+      void $ symbol "{{"
+      P.setOffset o
+#else
+      void $ symbol "{{"
+#endif
+      fail "An instance argument {{e}} can be written only as an argument of an application, as in `f {{e}}` (not parenthesized)."
+
     withEnd t = do
       endLoc <- getSrcLoc
       return $ Loc (startLoc <> endLoc) t

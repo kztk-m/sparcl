@@ -1,0 +1,18 @@
+-- It is intentional that this program causes an error.
+-- An explicitly passed instance `{{e}}` can be written only as an argument
+-- of an application (`f {{e}}`); here it is the whole body of a definition,
+-- which is a parse error with a dedicated message.
+
+data Nat = Z | S Nat
+
+class Eq a where
+    sig (==) : a -> a -> Bool
+end
+
+instance eqNat : Eq Nat where
+    def (==) Z     Z     = True
+           | (S n) (S m) = n == m
+           | _     _     = False
+end
+
+def d = {{eqNat}}

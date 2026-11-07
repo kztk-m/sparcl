@@ -1,0 +1,27 @@
+-- A method whose type does not mention the class parameter (G-2 5 in
+-- notes/extend-type-class_2026.txt). Such a method is accepted, but its
+-- instance argument can never be determined by the other arguments, so it
+-- must be passed explicitly; an implicit use is ambiguous
+-- (Nonexamples_Illtyped/ClassMethodWithoutParamImplicit.sparcl).
+
+data Nat = Z | S Nat
+
+class Sized a where
+    sig size : Int
+end
+
+instance sizedNat : Sized Nat where
+    def size = 1
+end
+
+instance sizedBool : Sized Bool where
+    def size = 2
+end
+
+def t1 = size {{sizedNat}}
+def t2 = size {{sizedBool}}
+
+-- Expected values (compared with t1 .. t2 by test/Spec.hs)
+
+def t1' = 1
+def t2' = 2

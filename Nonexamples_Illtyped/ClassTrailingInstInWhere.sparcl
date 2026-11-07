@@ -1,0 +1,25 @@
+-- It is intentional that this program causes a type error.
+-- The instance argument `{{Eq a}}` comes after the written patterns of `f`,
+-- so it is abstracted in the body of the clause (C-1), not bound by the
+-- clause (C-2 in notes/extend-type-class_2026.txt). The `where` declaration
+-- `go` does not see it, and no instance of `Eq a` is found for `x == x`.
+-- Writing `def f x {{_}} = go where ... end` makes it work
+-- (Examples/ClassTrailingWhere.sparcl).
+
+data Nat = Z | S Nat
+
+class Eq a where
+    sig (==) : a -> a -> Bool
+end
+
+instance eqNat : Eq Nat where
+    def (==) Z     Z     = True
+           | (S n) (S m) = n == m
+           | _     _     = False
+end
+
+sig f : a -> {{Eq a}} -> Bool
+def f x = go
+    where
+        def go = x == x
+    end

@@ -1,0 +1,43 @@
+-- Classes and instances across modules (1/3): the module declaring them.
+--
+-- Examples.ClassModB imports this module with an import list that names
+-- neither the instances nor the method `eq`; Examples.ClassModC imports only
+-- Examples.ClassModB. The instances, the default of `neq` and the superclass
+-- projection of `Ord` are still available there, since instance arguments
+-- inserted by the type checker refer to them without their names being in
+-- scope.
+--
+-- (Methods are named rather than operators, since operators cannot appear
+-- in import / export lists.)
+
+module Examples.ClassModA where
+
+data Nat = Z | S Nat
+
+sig not : Bool -> Bool
+def not True  = False
+    | False = True
+
+class Eq a where
+    sig eq  : a -> a -> Bool
+    sig neq : a -> a -> Bool
+    def neq x y = not (eq x y)
+end
+
+class Ord a extends Eq a where
+    sig leq : a -> a -> Bool
+end
+
+-- a named instance; `neq` is the default
+instance eqNat : Eq Nat where
+    def eq Z     Z     = True
+         | (S n) (S m) = eq n m
+         | _     _     = False
+end
+
+-- an unnamed instance
+instance Ord Nat where
+    def leq Z     _     = True
+          | (S n) Z     = False
+          | (S n) (S m) = leq n m
+end

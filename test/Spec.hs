@@ -63,7 +63,22 @@ checkTrue vt n =
     _ -> expectationFailure $ "undefined name: " ++ show n
 
 mkName :: String -> Name
-mkName n = Original (ModuleName "Main") (User n) (Bare (User n))
+mkName = mkNameIn "Main"
+
+mkNameIn :: String -> String -> Name
+mkNameIn m n = Original (ModuleName m) (User n) (Bare (User n))
+
+-- | For each @tK@ given, checks that @tK@ and @tK'@ (the expected value
+--   written in the sample) are the same.
+checkExpected :: FilePath -> String -> [String] -> SpecWith (M.Map Name Value)
+checkExpected fp m ns =
+  forM_ ns $ \n ->
+    it ("satisfies " ++ n ++ " = " ++ n ++ "' in " ++ fp) $ \vt ->
+      checkSame vt (mkNameIn m n) (mkNameIn m (n ++ "'"))
+
+-- | Names @t1@ .. @tn@.
+tNames :: Int -> [String]
+tNames n = ["t" ++ show i | i <- [1 .. n]]
 
 main :: IO ()
 main = hspec $ do
@@ -98,3 +113,21 @@ main = hspec $ do
     loadEval tc "./Examples/AddLSB.sparcl" `before` do
       it "satisfies n4 = sub73 in AddLSB.sparcl" $ \vt -> do
         checkSame vt (mkName "n4") (mkName "sub73")
+
+    -- type classes: each sample defines the expected values tK' of tK
+    forM_
+      [ ("ClassEq.sparcl", "Main", tNames 9)
+      , ("ClassOrd.sparcl", "Main", tNames 6)
+      , ("ClassMultiParam.sparcl", "Main", tNames 6)
+      , ("ClassInvertible.sparcl", "Main", tNames 9)
+      , ("ClassRevClauses.sparcl", "Main", tNames 3)
+      , ("ClassCyclic.sparcl", "Main", tNames 4)
+      , ("ClassModC.sparcl", "Examples.ClassModC", tNames 4)
+      , ("ClassTrailingWhere.sparcl", "Main", tNames 2)
+      , ("ClassInstPatAnnotated.sparcl", "Main", tNames 3)
+      , ("ClassMethodWithoutParam.sparcl", "Main", tNames 2)
+      , ("ClassInstArgInList.sparcl", "Main", tNames 2)
+      , ("HigherRankLetCase.sparcl", "Main", ["t6", "t7"])
+      ]
+      $ \(f, m, ns) ->
+        loadEval tc ("./Examples" </> f) `before` checkExpected f m ns

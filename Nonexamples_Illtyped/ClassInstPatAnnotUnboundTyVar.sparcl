@@ -1,0 +1,21 @@
+-- It is intentional that this program causes an error.
+-- Type variables in an expression annotation `(e : T)` are not quantified
+-- implicitly (unlike those in a signature), so `a` is an unbound type
+-- variable. Writing `forall a. {{Eq a}} -> a -> Bool` makes it work
+-- (Examples/ClassInstPatAnnotated.sparcl, C-4 in
+-- notes/extend-type-class_2026.txt).
+
+data Nat = Z | S Nat
+
+class Eq a where
+    sig (==) : a -> a -> Bool
+end
+
+instance eqNat : Eq Nat where
+    def (==) Z     Z     = True
+           | (S n) (S m) = n == m
+           | _     _     = False
+end
+
+sig t : Bool
+def t = ((\{{d}} x -> x == x) : {{Eq a}} -> a -> Bool) Z

@@ -1,0 +1,51 @@
+-- Cyclic superclasses (G-2 3 in notes/extend-type-class_2026.txt).
+--
+-- `A a` extends `B a` and `B a` extends `A a`. Cycles are not rejected:
+-- instance search stops by its depth limit, and the global dictionaries
+-- `aNat` and `bNat` become mutually recursive (cyclic) values. Loading a
+-- module forces dictionaries only to weak head normal form, and the REPL
+-- prints a dictionary as `<dict A>`, so neither loops.
+
+data Nat = Z | S Nat
+
+class A a extends B a where
+    sig fa : a -> Nat
+end
+
+class B a extends A a where
+    sig fb : a -> Nat
+end
+
+instance aNat : A Nat where
+    def fa x = S x
+end
+
+-- `fa` here is found through the superclass `A Nat` of `bNat`'s class,
+-- i.e. `aNat`
+instance bNat : B Nat where
+    def fb x = fa (S x)
+end
+
+-- `fa` from the local instance `B a`, through its superclass `A a`
+sig viaB : {{B a}} -> a -> Nat
+def viaB x = fa x
+
+-- `fb` from the local instance `A a`, through its superclass `B a`
+sig viaA : {{A a}} -> a -> Nat
+def viaA x = fb x
+
+def t1 = viaB Z
+def t2 = viaA Z
+def t3 = fb Z
+def t4 = viaB {{bNat}} (S Z)
+
+-- the cyclic dictionaries themselves
+def dA = aNat
+def dB = bNat
+
+-- Expected values (compared with t1 .. t4 by test/Spec.hs)
+
+def t1' = S Z
+def t2' = S (S Z)
+def t3' = S (S Z)
+def t4' = S (S Z)

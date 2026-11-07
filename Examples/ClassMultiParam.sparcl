@@ -66,3 +66,12 @@ def t4 = mconcat (Cons (Cons 1 Nil) (Cons (Cons 2 (Cons 3 Nil)) Nil))
 def t5 = (sumAs (Cons (S Z) (Cons (S (S Z)) Nil)) : Int)
 -- explicitly passing named instances; the type annotation is no longer needed
 def t6 = sumAs {{convNatInt}} {{monoidInt}} (Cons (S Z) Nil)
+
+-- Expected values (compared with t1 .. t6 by test/Spec.hs)
+
+def t1' = 2
+def t2' = Cons (S Z) (Cons Z Nil)
+def t3' = 6
+def t4' = Cons 1 (Cons 2 (Cons 3 Nil))
+def t5' = 3
+def t6' = 1

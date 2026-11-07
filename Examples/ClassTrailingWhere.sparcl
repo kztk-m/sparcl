@@ -1,0 +1,41 @@
+-- Workaround for a limitation of instance arguments that come after the
+-- written argument patterns (C-2 in notes/extend-type-class_2026.txt).
+--
+-- For `sig f : a -> {{Eq a}} -> Bool`, `def f x = ...` binds only `x`; the
+-- instance argument is abstracted in the body, so `where` / `with` of the
+-- clause do not see it (Nonexamples_Illtyped/ClassTrailingInstInWhere.sparcl).
+-- Writing the instance pattern, even as `{{_}}`, binds it in the clause.
+
+data Nat = Z | S Nat
+
+class Eq a where
+    sig (==) : a -> a -> Bool
+end
+
+instance eqNat : Eq Nat where
+    def (==) Z     Z     = True
+           | (S n) (S m) = n == m
+           | _     _     = False
+end
+
+-- used from `where`
+sig f : a -> {{Eq a}} -> Bool
+def f x {{_}} = go
+    where
+        def go = x == x
+    end
+
+-- used from `with` (the exit assertion of a clause with an invertible
+-- pattern)
+sig g : rev a -o {{Eq a}} -> rev a
+def g (rev x) {{_}} = x with (\y -> y == y)
+
+def fwd h = case unlift h of (y, _) -> y end
+
+def t1 = f (S Z)
+def t2 = fwd (\x -> g x) Z
+
+-- Expected values (compared with t1 .. t2 by test/Spec.hs)
+
+def t1' = True
+def t2' = Z

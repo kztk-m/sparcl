@@ -1,0 +1,43 @@
+-- Instance patterns need a known type (C-4 in
+-- notes/extend-type-class_2026.txt): `def f {{d}} x = ...` without a
+-- signature and `\{{d}} -> ...` whose type is inferred are errors
+-- (Nonexamples_Illtyped/ClassInstPatNoSig.sparcl,
+-- Nonexamples_Illtyped/ClassInstPatInInferredAbs.sparcl). This file shows
+-- the workarounds.
+
+data Nat = Z | S Nat
+
+class Eq a where
+    sig (==) : a -> a -> Bool
+end
+
+instance eqNat : Eq Nat where
+    def (==) Z     Z     = True
+           | (S n) (S m) = n == m
+           | _     _     = False
+end
+
+-- A local function: a local `def` with a signature (local signatures are
+-- quantified as top-level ones).
+sig t1 : Bool
+def t1 = let sig same : {{Eq a}} -> a -> Bool
+             def same {{d}} x = x == x
+         in same (S Z)
+
+-- An expression annotation with an explicit `forall` (type variables in an
+-- annotation are not quantified implicitly; see
+-- Nonexamples_Illtyped/ClassInstPatAnnotUnboundTyVar.sparcl). The
+-- abstraction must be parenthesized: in `(\{{d}} x -> x == x : T)` the
+-- annotation is part of the body `x == x : T`.
+sig t2 : Bool
+def t2 = ((\{{d}} x -> x == x) : forall a. {{Eq a}} -> a -> Bool) Z
+
+-- An expression annotation with a monotype.
+sig t3 : Bool
+def t3 = ((\{{d}} x y -> x == y) : {{Eq Nat}} -> Nat -> Nat -> Bool) Z (S Z)
+
+-- Expected values (compared with t1 .. t3 by test/Spec.hs)
+
+def t1' = True
+def t2' = True
+def t3' = False

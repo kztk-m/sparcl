@@ -1,0 +1,25 @@
+-- It is intentional that this program causes a type error.
+-- The head abstraction is checked before its argument `fs`, so the type of
+-- `g` is a meta variable when `g Z Z` is checked; no instance argument is
+-- inserted, and `g Z Z` makes the type of `g` an ordinary function type,
+-- which does not match `{{Eq Nat}} -> Nat -> Nat -> Bool` (D-5 in
+-- notes/extend-type-class_2026.txt). See Examples/ClassInstArgInList.sparcl
+-- for the accepted variants.
+
+data Nat = Z | S Nat
+data List a = Nil | Cons a (List a)
+
+class Eq a where
+    sig (==) : a -> a -> Bool
+end
+
+instance eqNat : Eq Nat where
+    def (==) Z     Z     = True
+           | (S n) (S m) = n == m
+           | _     _     = False
+end
+
+sig fs : List ({{Eq Nat}} -> Nat -> Nat -> Bool)
+def fs = Cons ((==) : {{Eq Nat}} -> Nat -> Nat -> Bool) Nil
+
+def t2 = (\xs -> case xs of Cons g _ -> g Z Z end) fs

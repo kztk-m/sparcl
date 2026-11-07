@@ -86,7 +86,23 @@ def t2 = bwd twice (S (S (S Z)))
 def t3 = fwd rsucc (Cons Z (Cons (S Z) Nil))
 def t4 = bwd rsucc (Cons (S Z) (Cons (S (S Z)) Nil))
 def t5 = fwd serialize (Cons (S Z) (Cons Z Nil))
+-- Without the signature, nothing would fix the `a` of the instance argument
+-- `Serialize a` of `serialize` (the argument of `bwd` is the output), so the
+-- instance could not be determined.
+sig t6 : List Nat
 def t6 = bwd serialize (Cons I (Cons I (Cons O (Cons I (Cons O (Cons O Nil))))))
 def t7 = fwd (radd (S (S Z))) (S Z)
 def t8 = bwd (radd (S (S Z))) (S (S (S Z)))
 def t9 = fwd (twice {{revSuccNat}}) Z
+
+-- Expected values (compared with t1 .. t9 by test/Spec.hs)
+
+def t1' = S (S (S Z))
+def t2' = S Z
+def t3' = Cons (S Z) (Cons (S (S Z)) Nil)
+def t4' = Cons Z (Cons (S Z) Nil)
+def t5' = Cons I (Cons I (Cons O (Cons I (Cons O (Cons O Nil)))))
+def t6' = Cons (S Z) (Cons Z Nil)
+def t7' = S (S (S Z))
+def t8' = S Z
+def t9' = S (S Z)

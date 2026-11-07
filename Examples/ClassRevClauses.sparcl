@@ -1,0 +1,39 @@
+-- Clauses with invertible patterns and an inserted instance argument.
+--
+-- `incAll` has no written instance pattern, so the type checker inserts one
+-- in each clause. The inserted patterns bind the same variable in all the
+-- clauses (C-2 in notes/extend-type-class_2026.txt), so the clauses, whose
+-- other patterns are invertible, are still desugared into one invertible
+-- case.
+
+data Nat = Z | S Nat
+data List a = Nil | Cons a (List a)
+
+def fwd f = case unlift f of (x, _) -> x end
+def bwd f = case unlift f of (_, x) -> x end
+
+sig isNil : List a -> Bool
+def isNil Nil = True
+    | _   = False
+
+class Inc a where
+    sig inc : rev a -o rev a
+end
+
+instance incNat : Inc Nat where
+    def inc x = rev S x
+end
+
+sig incAll : {{Inc a}} -> rev (List a) -o rev (List a)
+def incAll (rev Nil)       = rev Nil with isNil
+         | (rev Cons x xs) = rev Cons (inc x) (incAll xs)
+
+def t1 = fwd incAll (Cons Z (Cons (S Z) Nil))
+def t2 = bwd incAll (Cons (S Z) (Cons (S (S Z)) Nil))
+def t3 = fwd incAll (Nil : List Nat)
+
+-- Expected values (compared with t1 .. t3 by test/Spec.hs)
+
+def t1' = Cons (S Z) (Cons (S (S Z)) Nil)
+def t2' = Cons Z (Cons (S Z) Nil)
+def t3' = Nil

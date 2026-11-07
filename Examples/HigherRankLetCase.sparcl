@@ -24,3 +24,29 @@ sig ($$) : ((forall x. x -> x) -> (Int, Bool)) -> (forall x. x -> x) -> (Int, Bo
 def ($$) f k = f k
 
 def t5 = ex0 $$ (\y -> y)
+
+-- A scrutinee and a bound expression that need a trailing instance
+-- argument. They are inferred, but with the "expand last" flag set (D-2
+-- (F1)), so the instance argument after `3` is inserted; the pattern then
+-- fixes `a` to `Int`, and the goal `Default Int` is solved by `dInt`.
+data Box a = Box a
+
+class Default a where
+    sig dflt : a
+end
+
+instance dInt : Default Int where
+    def dflt = 0
+end
+
+sig pick : Int -> {{Default a}} -> Box a
+def pick _ = Box dflt
+
+def t6 = case pick 3 of Box n -> n + 1 end
+
+def t7 = let Box m <- pick 3 in m + 2
+
+-- Expected values (compared with t6 .. t7 by test/Spec.hs)
+
+def t6' = 1
+def t7' = 2

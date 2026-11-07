@@ -120,3 +120,12 @@ def t4 = compare (Cons 1 (Cons 2 Nil)) (Cons 1 (Cons 3 Nil))
 def t5 = countEq 1 (Cons 1 (Cons 2 (Cons 1 Nil)))
 -- explicitly passing a named instance
 def t6 = sort {{ordList {{ordNat}}}} (Cons (Cons (S Z) Nil) (Cons (Cons Z Nil) Nil))
+
+-- Expected values (compared with t1 .. t6 by test/Spec.hs)
+
+def t1' = 5
+def t2' = Cons 1 (Cons 2 (Cons 3 Nil))
+def t3' = Cons Z (Cons (S Z) (Cons (S (S Z)) Nil))
+def t4' = LT
+def t5' = 2
+def t6' = Cons (Cons Z Nil) (Cons (Cons (S Z) Nil) Nil)

@@ -1,0 +1,41 @@
+-- A limitation of the insertion of instance arguments (D-5 in
+-- notes/extend-type-class_2026.txt): no instance argument is inserted while
+-- the type of the applied function is still unknown (a meta variable).
+-- The order of checking can therefore matter when a function with
+-- instance arguments is stored in a data structure.
+
+data Nat = Z | S Nat
+data List a = Nil | Cons a (List a)
+
+class Eq a where
+    sig (==) : a -> a -> Bool
+end
+
+instance eqNat : Eq Nat where
+    def (==) Z     Z     = True
+           | (S n) (S m) = n == m
+           | _     _     = False
+end
+
+-- The annotation on `(==)` is needed for the same reason: the argument of
+-- `Cons` is checked against the unknown element type before the expected
+-- type `List (...)` is used, and without the annotation an instance argument
+-- would be inserted, making `(==)` an ordinary function `?a -> ?a -> Bool`.
+sig fs : List ({{Eq Nat}} -> Nat -> Nat -> Bool)
+def fs = Cons ((==) : {{Eq Nat}} -> Nat -> Nat -> Bool) Nil
+
+-- OK: the pattern gives `g` its type `{{Eq Nat}} -> ...` before `g Z Z`
+-- is checked, so the instance argument is inserted.
+def t1 = case fs of Cons g _ -> g Z Z end
+
+-- `(\xs -> case xs of Cons g _ -> g Z Z end) fs` is a type error
+-- (Nonexamples_Illtyped/ClassInstFunTyThroughMeta.sparcl): the abstraction
+-- is checked first, where the type of `g` is unknown. Workaround: annotate
+-- the abstraction.
+def t2 = ((\xs -> case xs of Cons g _ -> g Z Z end)
+            : List ({{Eq Nat}} -> Nat -> Nat -> Bool) -> Bool) fs
+
+-- Expected values (compared with t1 .. t2 by test/Spec.hs)
+
+def t1' = True
+def t2' = True
