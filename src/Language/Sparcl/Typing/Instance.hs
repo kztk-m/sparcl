@@ -19,7 +19,6 @@ module Language.Sparcl.Typing.Instance (
   reportLeftoverGoals,
   makeGoal,
   normTy,
-  superProjName,
   maxSearchDepth,
 ) where
 
@@ -31,16 +30,12 @@ import Data.List (nub)
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe, isJust)
 
-import Language.Sparcl.Multiplicity
 import Language.Sparcl.Name
 import Language.Sparcl.Pass
-import Language.Sparcl.Pretty hiding ((<$>))
 import Language.Sparcl.SrcLoc
 import Language.Sparcl.Surface.Syntax (Arg (..), Exp (..), LExp)
 import Language.Sparcl.Typing.TCMonad
 import Language.Sparcl.Typing.Type
-
-import Language.Sparcl.Exception (cannotHappen)
 
 -- | The depth limit of instance search (E-3 3), shared by the recursion on
 --   subgoals of global instances and the projection steps to superclasses
@@ -131,14 +126,6 @@ hasMetas = not . null . metaTyVars
 
 -- * Candidates
 
--- | The name of the projection of the i-th superclass of a class (H-4-3):
---   in the module declaring the class.
-superProjName :: Name -> Int -> Name
-superProjName (Original m base _) i =
-  let nb = System (NSuperProj base i)
-  in  Original m nb (Bare nb)
-superProjName c _ = cannotHappen $ "superProjName: a class must be a top-level name:" <+> ppr c
-
 -- | The local instances and their superclasses (E-3 (i), (ii)), in the
 --   order used to choose among several (E-4 (3)): direct ones before
 --   projections, and within each, the innermost first. Projections are
@@ -175,13 +162,8 @@ localCandidates budget locals = do
     supersOf _ = pure []
 
     projApp c ci i e =
-      let ps = ciParams ci
-          projTy =
-            TyForAll ps $
-              TyQual [] $
-                FunTy (TyMult Omega) (TyCon c (map TyVar ps)) (ciSupers ci !! i)
-          l = location e
-      in  Loc l (App (Loc l (Var (superProjName c i, projTy))) (ExplicitArg e))
+      let l = location e
+      in  Loc l (App (Loc l (Var (superProjName c i, superProjType c ci i))) (ExplicitArg e))
 
 -- | Splits an instance type @forall as. {{H1}} -> ... -> {{Hk}} -> C us@.
 splitInstTy :: Ty -> ([TyVar], [Ty], Ty)

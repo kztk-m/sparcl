@@ -219,12 +219,12 @@ shapeOf ty = stripSyn <$> (resolveSyn =<< zonkType ty)
 
 -- | A position of the argument patterns aligned with the arrows of a type
 --   (C-2): an ordinary argument, an instance argument bound by a written
---   instance pattern, or an instance argument for which a pattern is
---   inserted.
+--   instance pattern, or an instance argument for which a pattern binding
+--   the given variable is inserted.
 data Slot
   = Explicit PolyTy MultTy
   | Inst Ty
-  | Inserted Ty
+  | Inserted Name Ty
 
 isInstPat :: LPat p -> Bool
 isInstPat (Loc _ (PInst _)) = True
@@ -235,6 +235,13 @@ isInstPat _ = False
 --   most one pattern; an instance arrow without a written instance pattern
 --   gets an inserted one. A trailing instance arrow after the patterns is
 --   left to the abstraction insertion of the body (C-1).
+--
+--   The variable of an inserted pattern is generated here, once per
+--   definition, and shared by all its clauses (C-2), as variables written at
+--   the same position are (by renaming, they are 'Alpha' names compared by
+--   position). Otherwise clauses with invertible patterns could not be
+--   grouped into one invertible case by desugaring, which groups clauses
+--   whose other patterns are equal.
 alignPatsTy :: [LPat 'Renaming] -> BodyTy -> TC ([Slot], BodyTy)
 alignPatsTy [] ty = pure ([], ty)
 alignPatsTy ps@(p : rest) ty = do
@@ -242,7 +249,9 @@ alignPatsTy ps@(p : rest) ty = do
   case shape of
     InstFunTy c t
       | isInstPat p -> first (Inst c :) <$> alignPatsTy rest t
-      | otherwise -> first (Inserted c :) <$> alignPatsTy ps t
+      | otherwise -> do
+          d <- newGenName
+          first (Inserted d c :) <$> alignPatsTy ps t
     TyMetaV _ | isInstPat p -> atLoc (location p) $ do
       reportError InstPatNeedsAnnotation
       abortTyping
@@ -255,8 +264,8 @@ alignPatsTy ps@(p : rest) ty = do
       first (Explicit argTy m :) <$> alignPatsTy rest resTy
 
 -- | The patterns of a clause (or an abstraction) according to the slots:
---   instance arguments without written patterns get fresh instance patterns
---   (fresh per clause, C-2). Returns the patterns, their multiplicities and
+--   instance arguments without written patterns get instance patterns
+--   binding the variables of the slots (shared by the clauses, C-2). Returns the patterns, their multiplicities and
 --   types, and the local instances they bind (B-3).
 expandSlots :: [Slot] -> [LPat 'Renaming] -> TC ([LPat 'Renaming], [Multiplication], [PolyTy], [(Name, Ty)])
 expandSlots [] [] = pure ([], [], [], [])
@@ -272,8 +281,7 @@ expandSlots (Inst c : ss) (p : ps) = do
     instPatVar (Loc _ (PInst (Loc _ (PVar x)))) = x
     instPatVar (Loc _ (PInst (Loc _ (PWild x)))) = x
     instPatVar _ = cannotHappen $ text "expandSlots: an instance pattern must bind a variable"
-expandSlots (Inserted c : ss) ps = do
-  d <- newGenName
+expandSlots (Inserted d c : ss) ps = do
   (ps', qs, ts, ls) <- expandSlots ss ps
   pure (noLoc (PInst (noLoc (PVar d))) : ps', omega : qs, c : ts, (d, c) : ls)
 expandSlots _ _ = cannotHappen $ text "expandSlots: patterns and slots do not match"
@@ -1114,18 +1122,6 @@ stripSyn :: Ty -> Ty
 stripSyn (TySyn _ t) = stripSyn t
 stripSyn t = t
 
--- | The global type of a method (B-5): for @class C as@ and the method
---   signature @forall bs. cs => t@, @forall as bs. cs => {{C as}} -> t@
---   (all foralls in front). Renaming names the variables of the signature
---   apart from the class parameters.
-methodType :: Name -> [TyVar] -> Ty -> Ty
-methodType c params sigTy =
-  case sigTy of
-    TyForAll bs (TyQual cs t) -> TyForAll (params ++ bs) (TyQual cs (InstFunTy dict t))
-    t -> TyForAll params (TyQual [] (InstFunTy dict t))
-  where
-    dict = TyCon c (map TyVar params)
-
 inferTopDecls ::
   Decls 'Renaming (LDecl 'Renaming)
   -> [Loc (Name, [Name], [Loc (CDecl 'Renaming)])]
@@ -1237,9 +1233,12 @@ inferTopDecls decls dataDecls typeDecls classDecls instDecls = do
               typedInsts <- forM (zip3 instDecls instTys superDicts) $
                 \(Loc l (x, _, ids), (_, ty), (locals, sups)) -> do
                   (ms, defaulted) <- checkInstBodies l x ty ids
+                  c <- headName <$> instHead ty
                   pure $
                     TypedInstance
                       { tiName = x
+                      , tiType = ty
+                      , tiClass = c
                       , tiLocals = locals
                       , tiSupers = sups
                       , tiMethods = ms
@@ -1250,7 +1249,16 @@ inferTopDecls decls dataDecls typeDecls classDecls instDecls = do
             reportLeftoverGoals
             return
               ( decls'
-              , nts ++ methodTys ++ instTys
+              , -- H-4-5 2: also the values made by desugaring (projections,
+                -- defaults); dictionary constructors are not values
+                nts
+                  ++ methodTys
+                  ++ instTys
+                  ++ [ (superProjName c i, superProjType c ci i)
+                     | (c, ci) <- M.toList classTable
+                     , i <- [0 .. length (ciSupers ci) - 1]
+                     ]
+                  ++ [(defaultName (tdMethod td), tdType td) | td <- typedDefaults]
               , dataDecls'
               , typeDecls'
               , ctypeTable

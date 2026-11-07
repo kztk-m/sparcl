@@ -41,6 +41,10 @@ type ValueTable = M.Map Name Value
 type Env = M.Map Name Value
 
 instance NFData Value where
+  -- A dictionary (H-4-2) may contain itself through its superclass fields
+  -- when superclasses are cyclic (G-2 3), so its fields are evaluated only
+  -- to weak head normal form.
+  rnf (VCon c vs) | isDictName c = foldr seq () vs
   rnf (VCon c vs) = rnf (c, vs)
   rnf (VLit l) = rnf l
   rnf (VFun _) = ()
@@ -53,6 +57,9 @@ instance Pretty Value where
   pprPrec _ (VCon c vs)
     | Just _ <- checkNameWTuple c =
         text "&" <> D.tupled (map (pprPrec 0) vs)
+  -- A dictionary is printed without its fields, which are functions or
+  -- dictionaries, possibly cyclic (G-2 3).
+  pprPrec _ (VCon c _) | isDictName c = ppr c
   pprPrec _ (VCon c []) = ppr c
   pprPrec k (VCon c vs) =
     parensIf (k > 9) $

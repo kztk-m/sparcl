@@ -1,4 +1,5 @@
 {-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE ViewPatterns #-}
 
 module Language.Sparcl.Desugar (
@@ -10,6 +11,7 @@ module Language.Sparcl.Desugar (
 import Data.Function (on)
 import Data.IORef (readIORef)
 import Data.List (groupBy)
+import qualified Data.Map as M
 import Data.Void
 
 import Control.Monad
@@ -389,10 +391,84 @@ desugarPat = go . unLoc
     go (S.PCon (c, _ty) ps) = C.PCon c <$> mapM desugarPat ps
     go _ = error "desugarPat: Cannot happen."
 
-desugarTopDecls :: S.Decls 'TypeCheck (S.LDecl 'TypeCheck) -> Desugar (C.Bind Name)
-desugarTopDecls (S.Decls v _) = absurd v
-desugarTopDecls (S.HDecls _ bss) = do
+-- | Desugars the top-level declarations of a module. Besides the @def@s,
+--   it makes the values of the methods and superclass projections of the
+--   classes declared in the module (H-4-3), and of their default methods
+--   and the instances declared in the module (H-4-4); all are evaluated as
+--   one recursive group with the @def@s (H-4-5 1).
+desugarTopDecls ::
+  ClassTable -- classes declared in this module
+  -> ClassTable -- all classes in scope (an instance may be of an imported class)
+  -> [TypedDefault]
+  -> [TypedInstance]
+  -> S.Decls 'TypeCheck (S.LDecl 'TypeCheck)
+  -> Desugar (C.Bind Name)
+desugarTopDecls _ _ _ _ (S.Decls v _) = absurd v
+desugarTopDecls ownClasses allClasses defaults insts (S.HDecls _ bss) = do
   let defs = [(n, ty, pcs) | bs <- bss, Loc _ (S.DDef (n, ty) pcs) <- bs]
-  forM defs $ \(n, ty, pcs) -> do
+  defBinds <- forM defs $ \(n, ty, pcs) -> do
     e <- desugarRHS pcs
     return (n, ty, e)
+  classBinds <- concat <$> mapM (uncurry desugarClass) (M.toList ownClasses)
+  defaultBinds <- forM defaults $ \td -> do
+    e <- desugarRHS (tdClauses td)
+    return (defaultName (tdMethod td), tdType td, e)
+  instBinds <- mapM (desugarInstance allClasses) insts
+  return $ defBinds ++ classBinds ++ defaultBinds ++ instBinds
+
+-- | The methods and superclass projections of class @c@ (H-4-3 2, 3). A
+--   dictionary is @<dict C> [s_1, ..., s_m, f_1, ..., f_n]@ (H-4-2): the
+--   superclass dictionaries in @extends@ order, then the methods in
+--   signature order.
+desugarClass :: Name -> ClassInfo -> Desugar (C.Bind Name)
+desugarClass c ci = do
+  let m = length (ciSupers ci)
+      n = m + length (ciMethods ci)
+  methods <- forM (zip [m ..] (ciMethods ci)) $ \(j, (meth, sigTy)) -> do
+    e <- dictField c n j
+    return (meth, methodType c (ciParams ci) sigTy, e)
+  supers <- forM [0 .. m - 1] $ \i -> do
+    e <- dictField c n i
+    return (superProjName c i, superProjType c ci i, e)
+  return $ methods ++ supers
+
+-- | @\d -> case d of <dict C> x_0 ... x_(n-1) -> x_i@
+dictField :: Name -> Int -> Int -> Desugar (C.Exp Name)
+dictField c n i = withNewNames (n + 1) $ \case
+  d : xs -> return $ C.Abs d (C.Case (C.Var d) [(C.PCon (dictName c) (map C.PVar xs), C.Var (xs !! i))])
+  [] -> cannotHappen $ text "dictField: no names"
+
+-- | The value of an instance @x : forall as. {{H1}} -> ... -> {{Hk}} -> C ts@
+--   (H-4-4 1):
+--
+--   > x = \d1 ... dk -> let self = <dict C> [sup_1, ..., sup_m, impl_1, ..., impl_n] in self
+--
+--   where @d1 ... dk@ are the names used by its superclass dictionaries
+--   @sup_i@ (G-3 3), a defined method is its body applied to @d1 ... dk@
+--   (the body takes them first, C-1 / C-2), and an omitted one is its
+--   default applied to the dictionary itself.
+desugarInstance :: ClassTable -> TypedInstance -> Desugar (Name, T.Ty, C.Exp Name)
+desugarInstance cenv ti = do
+  let c = tiClass ti
+  ci <- maybe (cannotHappen $ text "desugarInstance: unknown class" <+> ppr c) return (M.lookup c cenv)
+  let ds = map fst (tiLocals ti)
+  unless (length (tiSupers ti) == length (ciSupers ci)) $
+    cannotHappen $
+      text "desugarInstance: superclass dictionaries of" <+> ppr (tiName ti)
+  e <- withNewName $ \self -> do
+    sups <- mapM desugarExp (tiSupers ti)
+    impls <- forM (ciMethods ci) $ \(meth, _) ->
+      case [pcs | (meth', _, pcs) <- tiMethods ti, meth' == meth] of
+        pcs : _ -> do
+          body <- desugarRHS pcs
+          return $ foldl C.App body (map C.Var ds)
+        []
+          | meth `elem` tiDefaulted ti -> return $ C.App (C.Var (defaultName meth)) (C.Var self)
+          | otherwise -> cannotHappen $ text "desugarInstance: no implementation of" <+> ppr meth
+    let dict = C.Con (dictName c) (sups ++ impls)
+    return $ C.Let [(self, headTy (tiType ti), dict)] (C.Var self)
+  return (tiName ti, tiType ti, foldr C.Abs e ds)
+  where
+    headTy (T.TyForAll _ (T.TyQual _ t)) = headTy t
+    headTy (T.InstFunTy _ t) = headTy t
+    headTy t = t

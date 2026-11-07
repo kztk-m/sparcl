@@ -281,7 +281,9 @@ restrictNames ns mi =
           , mcTypeTable = restrict (mcTypeTable mc)
           , mcConTable = restrict (mcConTable mc)
           , mcSynTable = restrict (mcSynTable mc)
-          , mcValueTable = restrict (mcValueTable mc)
+          , -- values referred to by expressions made by instance search and
+            -- desugaring are kept (H-4-5 3)
+            mcValueTable = M.filterWithKey (\n _ -> S.member n ns' || isImplicitValueName (mcInstTable mc) n) (mcValueTable mc)
           , -- Classes and instances are in effect whenever their module is
             -- loaded, so they are not filtered (B-4 (2)).
             mcClassTable = mcClassTable mc
@@ -304,6 +306,14 @@ restrictNames ns mi =
               Nothing
             else
               Just res
+
+-- | Values that expressions made by instance search and desugaring refer to
+--   without the user writing their names (H-4-5 3): instances (named or
+--   not), superclass projections and default methods. They are kept in
+--   value tables regardless of import and export lists.
+isImplicitValueName :: InstTable -> Name -> Bool
+isImplicitValueName insts n =
+  isSuperProjName n || isDefaultName n || any (M.member n) (M.elems insts)
 
 searchModule :: ModuleName -> Loader v FilePath
 searchModule mo = do
@@ -515,7 +525,7 @@ interpDecls mCurrentModuleName decls interp = do
   debugPrint 1 $ text "Type checking ..."
   debugPrint 2 $ text "under ty env" </> pprMap tyEnv
 
-  (typedDecls, nts, _dataDecls', _typeDecls', newCTypeTable, newSynTable, newClassTable, newInstTable, _typedDefaults, _typedInsts) <- do
+  (typedDecls, nts, _dataDecls', _typeDecls', newCTypeTable, newSynTable, newClassTable, newInstTable, typedDefaults, typedInsts) <- do
     tc <- askTC
     liftIO $
       execTCWith tc conEnv tyEnv synEnv classEnv instEnv $
@@ -525,7 +535,10 @@ interpDecls mCurrentModuleName decls interp = do
   debugPrint 1 $ text "Desugaring ..."
   bind <- do
     tc <- askTC
-    liftIO $ execTC tc $ runDesugar $ desugarTopDecls typedDecls
+    liftIO $
+      execTC tc $
+        runDesugar $
+          desugarTopDecls newClassTable (M.union newClassTable classEnv) typedDefaults typedInsts typedDecls
 
   debugPrint 1 $ text "Desugaring Ok."
   debugPrint 2 $ text "Desugared:" <> line <> align (vcat (map (\(x, _, e) -> ppr (x, e)) bind))
@@ -560,7 +573,10 @@ interpDecls mCurrentModuleName decls interp = do
                 , mcSynTable = newSynTable
                 , mcTypeTable = M.fromList nts
                 , mcConTable = newCTypeTable
-                , mcValueTable = M.fromList newValueEnv
+                , -- own values plus the imported values that expressions
+                  -- made by instance search and desugaring may refer to
+                  -- (transitive, H-4-5 4)
+                  mcValueTable = M.union (M.fromList newValueEnv) (M.filterWithKey (\n _ -> isImplicitValueName instEnv n) valEnv)
                 , -- own classes and instances plus the imported ones, with or
                   -- without an export list (transitive, B-4 (3))
                   mcClassTable = M.union newClassTable classEnv

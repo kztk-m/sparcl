@@ -300,6 +300,27 @@ instance Pretty ClassInfo where
 -- | Classes by name.
 type ClassTable = Map Name ClassInfo
 
+-- | The global type of a method (B-5): for @class C as@ and the method
+--   signature @forall bs. cs => t@, @forall as bs. cs => {{C as}} -> t@
+--   (all foralls in front). Renaming names the variables of the signature
+--   apart from the class parameters.
+methodType :: Name -> [TyVar] -> Ty -> Ty
+methodType c params sigTy =
+  case sigTy of
+    TyForAll bs (TyQual cs t) -> TyForAll (params ++ bs) (TyQual cs (InstFunTy dict t))
+    t -> TyForAll params (TyQual [] (InstFunTy dict t))
+  where
+    dict = TyCon c (map TyVar params)
+
+-- | The type of the projection of the i-th superclass of class @c@ (E-3):
+--   @forall as. C as -> Si@ (an ordinary unrestricted arrow).
+superProjType :: Name -> ClassInfo -> Int -> Ty
+superProjType c ci i =
+  let ps = ciParams ci
+  in  TyForAll ps $
+        TyQual [] $
+          FunTy (TyMult Omega) (TyCon c (map TyVar ps)) (ciSupers ci !! i)
+
 -- | Instances (B-2, B-4 (5)): class name -> instance name -> instance type.
 type InstTable = Map Name (Map Name Ty)
 
@@ -315,6 +336,8 @@ type TypedClauses = [([S.LPat 'TypeCheck], S.Clause 'TypeCheck)]
 --   (G-1 6, for H-4-4).
 data TypedInstance = TypedInstance
   { tiName :: !Name -- the instance (named or generated)
+  , tiType :: !Ty -- the instance type
+  , tiClass :: !Name -- the class of its head
   , tiLocals :: ![(Name, Ty)] -- its instance arguments d1 ... dk as local instances (G-3 3)
   , tiSupers :: ![S.LExp 'TypeCheck] -- dictionaries of the superclasses, in terms of d1 ... dk (G-3 3)
   , tiMethods :: ![(Name, PolyTy, TypedClauses)] -- defined methods, checked against their types (G-5 3)
