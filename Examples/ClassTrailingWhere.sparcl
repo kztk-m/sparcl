@@ -2,9 +2,14 @@
 -- written argument patterns (C-2 in notes/extend-type-class_2026.txt).
 --
 -- For `sig f : a -> {{Eq a}} -> Bool`, `def f x = ...` binds only `x`; the
--- instance argument is abstracted in the body, so `where` / `with` of the
--- clause do not see it (Nonexamples_Illtyped/ClassTrailingInstInWhere.sparcl).
--- Writing the instance pattern, even as `{{_}}`, binds it in the clause.
+-- instance argument is abstracted in the body, so a `where` declaration of
+-- the clause does not see it
+-- (Nonexamples_Illtyped/ClassTrailingInstInWhere.sparcl). With an
+-- invertible pattern, as in `g` below, the clause without the instance
+-- pattern is rejected for another reason: its result type would be
+-- `{{Eq a}} -> rev a`, but a clause with an invertible pattern must return
+-- a `rev` type. Writing the instance pattern, even as `{{_}}`, binds it in
+-- the clause and solves both.
 
 data Nat = Z | S Nat
 

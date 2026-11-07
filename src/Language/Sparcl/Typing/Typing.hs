@@ -265,8 +265,9 @@ alignPatsTy ps@(p : rest) ty = do
 
 -- | The patterns of a clause (or an abstraction) according to the slots:
 --   instance arguments without written patterns get instance patterns
---   binding the variables of the slots (shared by the clauses, C-2). Returns the patterns, their multiplicities and
---   types, and the local instances they bind (B-3).
+--   binding the variables of the slots (shared by the clauses, C-2).
+--   Returns the patterns, their multiplicities and types, and the local
+--   instances they bind (B-3).
 expandSlots :: [Slot] -> [LPat 'Renaming] -> TC ([LPat 'Renaming], [Multiplication], [PolyTy], [(Name, Ty)])
 expandSlots [] [] = pure ([], [], [], [])
 expandSlots (Explicit t m : ss) (p : ps) = do
@@ -1539,7 +1540,8 @@ checkTyPC ::
   -> ([LPat 'Renaming], Clause 'Renaming)
   -> TC (([LPat 'TypeCheck], Clause 'TypeCheck), UseMap)
 checkTyPC loc slots resTy (ps0, c) = atLoc loc $ do
-  -- inserted instance patterns are fresh per clause (C-2)
+  -- inserted instance patterns bind the variables of the slots, shared by
+  -- all clauses of the definition (C-2)
   (ps, muls, tys, locals) <- expandSlots slots ps0
 
   ((c', umap), ps', bind) <- checkPatsTyK ps muls (map Check tys) $ withLocalInsts locals $ do
