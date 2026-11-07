@@ -308,6 +308,27 @@ type InstTable = Map Name (Map Name Ty)
 mergeInstTable :: InstTable -> InstTable -> InstTable
 mergeInstTable = M.unionWith M.union
 
+-- | Typed clauses of a definition.
+type TypedClauses = [([S.LPat 'TypeCheck], S.Clause 'TypeCheck)]
+
+-- | What type checking gives desugaring about an instance declaration
+--   (G-1 6, for H-4-4).
+data TypedInstance = TypedInstance
+  { tiName :: !Name -- the instance (named or generated)
+  , tiLocals :: ![(Name, Ty)] -- its instance arguments d1 ... dk as local instances (G-3 3)
+  , tiSupers :: ![S.LExp 'TypeCheck] -- dictionaries of the superclasses, in terms of d1 ... dk (G-3 3)
+  , tiMethods :: ![(Name, PolyTy, TypedClauses)] -- defined methods, checked against their types (G-5 3)
+  , tiDefaulted :: ![Name] -- omitted methods, filled by their defaults (G-5 4)
+  }
+
+-- | A typed default method (G-1 6, G-5 2, for H-4-4).
+data TypedDefault = TypedDefault
+  { tdMethod :: !Name
+  , tdClass :: !Name
+  , tdType :: !PolyTy -- the global type of the method (B-5)
+  , tdClauses :: !TypedClauses
+  }
+
 dummyName :: Name
 dummyName = Original (ModuleName "") (User "") (Bare (User ""))
 

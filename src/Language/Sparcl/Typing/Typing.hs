@@ -1141,9 +1141,8 @@ inferTopDecls ::
       , SynTable
       , ClassTable -- classes declared in this module
       , InstTable -- instances declared in this module
-      , [(Name, [(Name, Ty)], [LExp 'TypeCheck])]
-      -- ^ for each instance: its instance arguments as local instances and
-      --   the dictionaries of its superclasses (G-3 3, for H-4-4)
+      , [TypedDefault] -- default methods of the classes declared in this module (G-5 2)
+      , [TypedInstance] -- instances declared in this module (G-3 3, G-5 3, 4)
       )
 inferTopDecls decls dataDecls typeDecls classDecls instDecls = do
   let dataDecls' =
@@ -1169,8 +1168,6 @@ inferTopDecls decls dataDecls typeDecls classDecls instDecls = do
   -- The order of registration and checks follows G-1 in the notes: type
   -- information first (data types and synonyms, classes, instances), then
   -- expressions.
-  -- TODO: superclass instances (G-3 3-b, stage 3); default methods and
-  -- instance bodies (G-5, stage 4) are not checked yet.
 
   -- G-1 stage 1: data types and type synonyms.
   withCons (M.toList ctypeTable) $
@@ -1219,12 +1216,37 @@ inferTopDecls decls dataDecls typeDecls classDecls instDecls = do
             -- G-1 stage 3-b: the superclass instances of each instance are
             -- solvable (G-3 3), once all instances are registered.
             superDicts <- forM (zip instDecls instTys) $ \(Loc l (x, _, _), (_, ty)) ->
-              atLoc l $ whenChecking (CheckingSuperclasses x) $ do
-                (locals, dicts) <- checkSuperInstances ty
-                pure (x, locals, dicts)
+              atLoc l $ whenChecking (CheckingSuperclasses x) $ checkSuperInstances ty
 
             -- G-1 stage 4: definitions.
             (decls', nts, _) <- inferDecls True decls
+
+            -- G-1 stage 5: default methods and instance bodies (G-5), with
+            -- the types of the definitions visible (a body may use a
+            -- definition without a signature). Errors are accumulated per
+            -- body (G-5 5).
+            (typedDefaults, typedInsts) <- withVars nts $ do
+              typedDefaults <- fmap concat $
+                forM classDecls $ \(Loc _ (c, _, _, _, defs)) ->
+                  forM [(l, m, pcs) | Loc l (DDef m pcs) <- defs] $ \(l, m, pcs) -> do
+                    -- renaming ensures that m is a method of c
+                    let polyTy = fromMaybe (cannotHappen $ text "No method type for" <+> ppr m) (lookup m methodTys)
+                    pcs' <- checkSigDef l m polyTy pcs
+                    pure $ TypedDefault{tdMethod = m, tdClass = c, tdType = polyTy, tdClauses = pcs'}
+
+              typedInsts <- forM (zip3 instDecls instTys superDicts) $
+                \(Loc l (x, _, ids), (_, ty), (locals, sups)) -> do
+                  (ms, defaulted) <- checkInstBodies l x ty ids
+                  pure $
+                    TypedInstance
+                      { tiName = x
+                      , tiLocals = locals
+                      , tiSupers = sups
+                      , tiMethods = ms
+                      , tiDefaulted = defaulted
+                      }
+              pure (typedDefaults, typedInsts)
+
             reportLeftoverGoals
             return
               ( decls'
@@ -1235,9 +1257,42 @@ inferTopDecls decls dataDecls typeDecls classDecls instDecls = do
               , synTable
               , classTable
               , instTable
-              , superDicts
+              , typedDefaults
+              , typedInsts
               )
   where
+    -- G-5 3, 4: the bodies of instance x of type ty. Skipped when the head
+    -- is not a class (reported at registration).
+    checkInstBodies l x ty ids = do
+      cenv <- asks tcClassEnv
+      hd <- instHead ty
+      case hd of
+        TyCon c _ | Just ci <- M.lookup c cenv -> do
+          let defined = [(l', m, pcs) | Loc l' (DDef m pcs) <- ids]
+          ms <- fmap catMaybes $
+            forM defined $ \(l', m, pcs) ->
+              case lookup m (ciMethods ci) of
+                Nothing -> do
+                  -- renaming resolves m but does not check that it is a
+                  -- method of c
+                  atLoc l' $ reportError $ NotAMethod x m
+                  pure Nothing
+                Just sigTy -> do
+                  let polyTy =
+                        fromMaybe
+                          (cannotHappen $ text "Instance type not of the form {{H1}} -> ... -> C ts:" <+> ppr ty)
+                          (instMethodType ty (ciParams ci) sigTy)
+                  pcs' <- checkSigDef l' m polyTy pcs
+                  pure $ Just (m, polyTy, pcs')
+          let omitted = [m | (m, _) <- ciMethods ci, m `notElem` [m' | (_, m', _) <- defined]]
+          forM_ omitted $ \m ->
+            unless (m `elem` ciDefaults ci) $
+              atLoc l $
+                reportError $
+                  MissingMethod x m
+          pure (ms, filter (`elem` ciDefaults ci) omitted)
+        _ -> pure ([], [])
+
     -- G-3 3: for @forall as. {{H1}} -> ... -> {{Hk}} -> C ts@, with the
     -- @as@ skolemized and @H1 ... Hk@ as local instances @d1 ... dk@, each
     -- superclass of @C ts@ must be solvable. Returns the local instances
@@ -1257,9 +1312,6 @@ inferTopDecls decls dataDecls typeDecls classDecls instDecls = do
             liftIO $ readIORef (goalRef g)
         _ -> pure [] -- not a class: reported at registration
       pure (locals, catMaybes dicts)
-
-    splitInstArrows (InstFunTy h t) = first (h :) (splitInstArrows t)
-    splitInstArrows t = ([], t)
 
     mkClassInfo ps sups sigs defs =
       ClassInfo
@@ -1509,6 +1561,86 @@ checkSigDefBody loc polyTy pcs = do
   ((pcs', umap), cs) <- gatherConstraint $ gatherAltUC =<< mapM (checkTyPC loc args resTy) pcs
 
   pure (pcs', umap, (skVars, given, cs))
+
+-- | Checks a top-level definition with a signature on its own, without
+--   binding its name (G-5 1): default methods and instance bodies, in
+--   which a method name refers to the global method. As for a top-level
+--   definition with a signature in 'inferMutual', the goals are solved
+--   right after the body (E-2) and the constraints must be solved here.
+checkSigDef ::
+  SrcSpan
+  -> Name
+  -> PolyTy
+  -> [([LPat 'Renaming], Clause 'Renaming)]
+  -> TC TypedClauses
+checkSigDef loc n polyTy pcs = atLoc loc $ do
+  ((pcs', _, (_, given, cs)), goals) <- pushLevel $ gatherGoals $ checkSigDefBody loc polyTy pcs
+  solveGoals (ReportAtTopLevel True) goals
+  finishSigDef True n polyTy given cs
+  pure pcs'
+
+-- | The type against which the body of method @m@ in an instance is
+--   checked (G-5 3). For the instance type
+--   @forall as. cs0 => {{H1}} -> ... -> {{Hk}} -> C ts@ and the signature
+--   @forall bs. cs => t@ of @m@ in @class C params@, it is
+--   @forall as bs. cs0, cs[ts/params] => {{H1}} -> ... -> {{Hk}} -> t[ts/params]@.
+--   Both types name their variables by 'Alpha' indices, so every variable
+--   of the signature other than the parameters (the @bs@ and those bound
+--   inside @t@) is first shifted above the indices of the instance type;
+--   otherwise a variable of @ts@ could be captured by them.
+instMethodType :: Ty -> [TyVar] -> Ty -> Maybe PolyTy
+instMethodType instTy params sigTy =
+  case splitInstArrows instBody of
+    (hs, TyCon _ ts) ->
+      let tbl = zip params ts
+      in  Just $
+            TyForAll
+              (as ++ bs)
+              (TyQual (cs0 ++ map (substTyC tbl) cs) (foldr InstFunTy (substTy tbl t) hs))
+    _ -> Nothing -- not of the form C ts: rejected by renaming
+  where
+    (as, cs0, instBody) = splitPoly instTy
+    (bs, cs, t) = splitPoly (mapBoundTv shift sigTy)
+
+    splitPoly (TyForAll vs (TyQual qs ty)) = (vs, qs, ty)
+    splitPoly ty = ([], [], ty)
+
+    offset = maximum (-1 : alphaIndices instTy) + 1
+    shift v@(BoundTv (Alpha i nb)) | v `notElem` params = BoundTv (Alpha (i + offset) nb)
+    shift v = v
+
+-- | Splits @{{H1}} -> ... -> {{Hk}} -> t@ into @[H1, ..., Hk]@ and @t@.
+splitInstArrows :: Ty -> ([Ty], Ty)
+splitInstArrows (InstFunTy h t) = first (h :) (splitInstArrows t)
+splitInstArrows t = ([], t)
+
+-- | Renames every bound type variable, including binders.
+mapBoundTv :: (TyVar -> TyVar) -> Ty -> Ty
+mapBoundTv f = go
+  where
+    go (TyVar v) = TyVar (f v)
+    go (TyCon c ts) = TyCon c (map go ts)
+    go (TyMetaV m) = TyMetaV m
+    go (TyForAll vs (TyQual qs ty)) = TyForAll (map f vs) (TyQual (map goC qs) (go ty))
+    go (TySyn o u) = TySyn (go o) (go u)
+    go (TyMult m) = TyMult m
+    goC (MSub t1 ts) = MSub (go t1) (map go ts)
+    goC (TyEq t1 t2) = TyEq (go t1) (go t2)
+
+-- | The 'Alpha' indices of the type variables in a type, including binders.
+alphaIndices :: Ty -> [Int]
+alphaIndices = go
+  where
+    go (TyVar v) = tv v
+    go (TyCon _ ts) = concatMap go ts
+    go (TyMetaV _) = []
+    go (TyForAll vs (TyQual qs ty)) = concatMap tv vs ++ concatMap goC qs ++ go ty
+    go (TySyn o u) = go o ++ go u
+    go (TyMult _) = []
+    goC (MSub t1 ts) = concatMap go (t1 : ts)
+    goC (TyEq t1 t2) = go t1 ++ go t2
+    tv (BoundTv (Alpha i _)) = [i]
+    tv _ = []
 
 -- | The part of checking a definition with a signature that is done after
 --   its group (G-5 1): the wanted constraints are solved under the given

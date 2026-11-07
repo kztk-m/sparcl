@@ -1,0 +1,22 @@
+-- It is intentional that this program causes a type error.
+-- An instance of `Ord` defines `eq`, which is a method of `Eq`, not of `Ord`
+-- (G-5 3 in notes/extend-type-class_2026.txt).
+
+data T = MkT
+
+class Eq a where
+    sig eq : a -> a -> Bool
+end
+
+class Ord a where
+    sig leq : a -> a -> Bool
+end
+
+instance eqT : Eq T where
+    def eq x y = True
+end
+
+instance ordT : Ord T where
+    def leq x y = True
+    def eq x y = True
+end

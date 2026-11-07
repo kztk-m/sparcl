@@ -515,7 +515,7 @@ interpDecls mCurrentModuleName decls interp = do
   debugPrint 1 $ text "Type checking ..."
   debugPrint 2 $ text "under ty env" </> pprMap tyEnv
 
-  (typedDecls, nts, _dataDecls', _typeDecls', newCTypeTable, newSynTable, newClassTable, newInstTable, _superDicts) <- do
+  (typedDecls, nts, _dataDecls', _typeDecls', newCTypeTable, newSynTable, newClassTable, newInstTable, _typedDefaults, _typedInsts) <- do
     tc <- askTC
     liftIO $
       execTCWith tc conEnv tyEnv synEnv classEnv instEnv $

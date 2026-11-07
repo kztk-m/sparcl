@@ -1,0 +1,14 @@
+-- It is intentional that this program causes a type error.
+-- An instance does not define `neq`, which has no default
+-- (G-5 4 in notes/extend-type-class_2026.txt).
+
+data T = MkT
+
+class Eq a where
+    sig eq : a -> a -> Bool
+    sig neq : a -> a -> Bool
+end
+
+instance eqT : Eq T where
+    def eq x y = True
+end

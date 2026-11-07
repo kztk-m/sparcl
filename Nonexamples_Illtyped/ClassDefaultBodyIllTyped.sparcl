@@ -1,0 +1,16 @@
+-- It is intentional that this program causes a type error.
+-- A default method is checked against the global type of the method,
+-- `forall a. {{Eq a}} -> a -> a -> Bool` (G-5 2 in
+-- notes/extend-type-class_2026.txt), so it cannot use a specific type.
+
+data Nat = Z | S Nat
+
+sig not : Bool -> Bool
+def not True  = False
+    | False = True
+
+class Eq a where
+    sig eq : a -> a -> Bool
+    sig neq : a -> a -> Bool
+    def neq x y = not (eq x Z)
+end
