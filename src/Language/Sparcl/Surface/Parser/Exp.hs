@@ -369,35 +369,25 @@ topDecl = typeDecl <|> dataDecl <|> (fmap DDecl <$> localDecl) <|> classDecl <|>
       where
         normalDecl c xs = do
           void $ symbol "="
-          DData c (map noKind xs) <$> (P.try cdecl <|> gadtCDecl c xs) `P.sepBy1` symbol "|"
+          DData c (map noKind xs) <$> (P.try cdecl <|> gadtCDecl xs) `P.sepBy1` symbol "|"
 
         gadtDecl c xs = do
           void $ keyword "where"
-          cs <- P.many (keyword "sig" *> gadtCDecl c xs)
+          cs <- P.many (keyword "sig" *> gadtCDecl xs)
           void $ keyword "end"
           return $ DData c (map noKind xs) cs
 
     -- kind annotations are not parsed yet (stage V3 of the notes)
     noKind x = TyBinder x Nothing
 
-    gadtCDecl tc xs = do
+    -- the existentials are the variables other than the parameters; the
+    -- form of the result is checked by the type checker
+    gadtCDecl xs = do
       start <- getSrcLoc
       c <- conName <* sp
       void $ symbol ":"
       ty <- arrTy
-      let (args, ret) = decomposeArrTy ty
-      targs <- maybe (fail $ "A return type of GADT-style definition must be headed by the type constructor.") return $ decomposeTyCon tc ret
-      let ftv = (nub $ freeTyVars args ++ freeTyVars targs) \\ xs
-      let l = start <> mconcat (map location targs)
-      let q =
-            map (\(x, y) -> TyEq (noLoc $ TVar x) y)
-              $ filter
-                ( \(x, y) -> case unLoc (stripTParens y) of
-                    TVar y' -> x /= y'
-                    _ -> True
-                )
-              $ zip xs targs
-      return $ Loc l $ GeneralC c ftv q args
+      return $ Loc (start <> location ty) $ GeneralC c (introForAllExcept xs ty)
 
     typeDecl = loc $ do
       void $ keyword "type"

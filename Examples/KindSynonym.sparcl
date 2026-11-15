@@ -1,0 +1,47 @@
+-- Type synonyms with kinds:
+--   * a synonym of a type constructor (F : Type -> Type), applied to more
+--     arguments than its parameters (F Int, G Bool Int);
+--   * a synonym standing for a class application, inside {{ }};
+--   * a synonym as the result type of a GADT-style constructor.
+
+data Maybe a = Nothing | Just a
+
+type F = Maybe
+
+sig x : F Int
+def x = Just 1
+
+type G a = Maybe
+
+sig y : G Bool Int
+def y = Nothing
+
+class Eq a where
+  sig eq : a -> a -> Bool
+end
+
+instance Eq Int where
+  def eq = eqInt
+end
+
+type EqI = Eq Int
+
+sig same : {{EqI}} -> Int -> Bool
+def same n = eq n n
+
+sig t1 : Bool
+def t1 = same 1
+
+sig t1' : Bool
+def t1' = True
+
+data T a where
+  sig MkT : TI
+  sig MkU : a -> (T a)
+end
+
+type TI = T Int
+
+sig tag : T a -> Int
+def tag MkT = 1
+      | (MkU _) = 2

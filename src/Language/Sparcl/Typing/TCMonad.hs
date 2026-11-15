@@ -80,9 +80,14 @@ data ErrorDetail
   | InstArgUnknownFun -- {{e}} passed to a function of unknown type
   | InstPatNeedsAnnotation
   | NotAClass !Ty
-  | ClassArityMismatch !Name !Int !Int -- class, expected and actual numbers of arguments
+  | InstVarNotInHead !TyVar !Ty -- a quantified variable of an instance missing from its head
   | NotAMethod !Name !Name -- instance, definition
   | MissingMethod !Name !Name -- instance, method
+  | -- Kinds (D3-d, D6-d in the notes)
+    KindMismatch !Ty !Kind !Kind -- a type-level expression, the expected and its actual kind
+  | NotAFunctionKind !Ty !Kind -- a type-level expression applied to arguments, and its kind
+  | UnknownTypeName !Name -- a name without a kind where a type-level expression is written
+  | BadConResult !Name !Name !Ty -- constructor, its data type, the result type written
   | Other !D.Doc
 
 instance Pretty TypeError where
@@ -248,14 +253,35 @@ instance Pretty TypeError where
             D.text "An instance pattern {{...}} needs a type annotation."
           go (NotAClass ty) =
             D.text "Not a class:" <+> D.align (ppr ty)
-          go (ClassArityMismatch c expected actual) =
+          go (InstVarNotInHead x hd) =
+            D.hsep [D.text "Type variable", ppr x, D.text "does not occur in the instance head", D.align (ppr hd)]
+          go (KindMismatch t expected actual) =
+            D.text "Kinds do not match:"
+              <+> D.align (ppr t)
+              <> D.nest
+                2
+                ( D.line
+                    <> D.text "has kind"
+                    <+> D.align (ppr actual)
+                    <> D.comma
+                    <> D.line
+                    <> D.text "but kind"
+                    <+> D.align (ppr expected)
+                    <+> D.text "is expected."
+                )
+          go (NotAFunctionKind t k) =
+            D.text "Applied to arguments, but its kind is not of the form k1 -> k2:"
+              <+> D.align (ppr t)
+              <> D.nest 2 (D.line <> D.text "has kind" <+> D.align (ppr k) <> D.text ".")
+          go (UnknownTypeName n) =
+            D.text "Not a type constructor, a synonym or a class:" <+> ppr n
+          go (BadConResult c tn ty) =
             D.hsep
-              [ D.text "Class"
+              [ D.text "The result type of constructor"
               , ppr c
-              , D.text "expects"
-              , ppr expected
-              , D.text "argument(s), but is given"
-              , ppr actual <> D.text "."
+              , D.text "must be an application of"
+              , ppr tn <> D.text ":"
+              , D.align (ppr ty)
               ]
           go (NotAMethod inst n) =
             D.hsep [ppr n, D.text "is not a method of the class of instance", ppr inst <> D.text "."]
@@ -905,9 +931,13 @@ resolveSyn ty = do
       case M.lookup c synMap of
         Nothing ->
           TyCon c <$> mapM (go synMap) ts
+        -- a synonym may be applied to more arguments than its parameters
+        -- (item 1.5 in the notes), e.g. F Int for type F = Maybe
         Just (ns, tyBody)
-          | length ns == length ts ->
-              TySyn orig <$> go synMap (substTy (zip ns ts) tyBody)
+          | length ns <= length ts ->
+              let (as, rest) = splitAt (length ns) ts
+              in  TySyn orig <$> go synMap (foldl TyApp (substTy (zip ns as) tyBody) rest)
+        -- partial applications are rejected by ty2ty; kept as a safeguard
         Just _ -> do
           reportError $ Other $ D.hsep [D.text "Type synonym", D.dquotes (ppr c), D.text "must be fully-applied."]
           abortTyping
@@ -1071,6 +1101,8 @@ zonkErrorDetail (AmbiguousGoal ty) = AmbiguousGoal <$> zonkType ty
 zonkErrorDetail (CannotInferInstArg ty) = CannotInferInstArg <$> zonkType ty
 zonkErrorDetail (InstSearchTooDeep ty) = InstSearchTooDeep <$> zonkType ty
 zonkErrorDetail (NotAClass ty) = NotAClass <$> zonkType ty
+zonkErrorDetail (KindMismatch t k1 k2) = KindMismatch <$> zonkType t <*> zonkType k1 <*> zonkType k2
+zonkErrorDetail (NotAFunctionKind t k) = NotAFunctionKind <$> zonkType t <*> zonkType k
 zonkErrorDetail res = pure res
 
 skolemize :: PolyTy -> TC ([TyVar], QualTy)
@@ -1117,13 +1149,17 @@ unifyWork (TyInstFun c t) (TyInstFun c' t') = do
 unifyWork (TyMult m) (TyMult m') | m == m' = return ()
 unifyWork (TyVar x1) (TyVar x2) | x1 == x2 = return ()
 unifyWork (TyVar x) t = do
-  icLevel <- currentIcLevel
-  when (icLevel == 0) $ reportError $ UnMatchTy (TyVar x) t
-  addConstraint [TyEq (TyVar x) t]
+  ok <- checkBindKind (tyVarKind x) t
+  when ok $ do
+    icLevel <- currentIcLevel
+    when (icLevel == 0) $ reportError $ UnMatchTy (TyVar x) t
+    addConstraint [TyEq (TyVar x) t]
 unifyWork t (TyVar x) = do
-  icLevel <- currentIcLevel
-  when (icLevel == 0) $ reportError $ UnMatchTy (TyVar x) t
-  addConstraint [TyEq t (TyVar x)]
+  ok <- checkBindKind (tyVarKind x) t
+  when ok $ do
+    icLevel <- currentIcLevel
+    when (icLevel == 0) $ reportError $ UnMatchTy (TyVar x) t
+    addConstraint [TyEq t (TyVar x)]
 unifyWork pty1@(TyForAll tvs1 _) (TyForAll tvs2 qty2)
   | length tvs1 == length tvs2 = do
       (skVars, TyQual cs1 ty1) <- skolemize pty1
@@ -1172,10 +1208,12 @@ unifyUnboundMetaTyVar mv (TyMetaV mv2) = do
     Nothing ->
       if
         | mv == mv2 -> return ()
-        | sw ->
-            substituteUnif cIcLevel mv2 (TyMetaV mv)
-        | otherwise ->
-            substituteUnif cIcLevel mv (TyMetaV mv2)
+        | otherwise -> do
+            ok <- checkBindKind (metaKind mv) (TyMetaV mv2)
+            when ok $
+              if sw
+                then substituteUnif cIcLevel mv2 (TyMetaV mv)
+                else substituteUnif cIcLevel mv (TyMetaV mv2)
     Just ty2' -> unifyUnboundMetaTyVar mv ty2'
 unifyUnboundMetaTyVar mv ty2 = do
   ty2' <- zonkType ty2
@@ -1187,7 +1225,52 @@ unifyUnboundMetaTyVar mv ty2 = do
       -- We abort typing when occurrence check fails; otherwise, zonkType can diverge.
       abortTyping
     else do
-      substituteUnif cIcLevel mv ty2'
+      ok <- checkBindKind (metaKind mv) ty2'
+      when ok $ substituteUnif cIcLevel mv ty2'
+
+-- | Checks that binding a meta or a rigid variable of kind @k@ to @ty@
+--   preserves kinds (D3-a in the notes); reports 'KindMismatch' otherwise
+--   (the binding is then not made). Kinds are compared structurally: they
+--   contain no kind metas outside kind inference (D3-b). Kind metas (whose
+--   kind is the marker 'sortKi') are not unified here but by 'unifyKind'.
+checkBindKind :: Kind -> Ty -> TC Bool
+checkBindKind k ty
+  | k == sortKi = pure True
+  | otherwise = do
+      k' <- askKindOf ty
+      if k == k'
+        then pure True
+        else do
+          reportError $ KindMismatch ty k k'
+          pure False
+
+-- | The kind of a well-kinded type-level expression, by the kind table of
+--   the context.
+askKindOf :: Ty -> TC Kind
+askKindOf ty = do
+  tbl <- asks tcTyEnv
+  pure $ kindOf tbl ty
+
+-- | Unifies two kinds during kind inference (D5, D6 in the notes): binds
+--   kind metas, with the occurs check. Returns whether it succeeded; the
+--   caller reports 'KindMismatch' (the messages of 'unify' speak of types).
+unifyKind :: Kind -> Kind -> TC Bool
+unifyKind k1 k2 = do
+  k1' <- zonkType k1
+  k2' <- zonkType k2
+  case (k1', k2') of
+    (TyMetaV m1, TyMetaV m2) | m1 == m2 -> pure True
+    (TyMetaV m, k) -> bind m k
+    (k, TyMetaV m) -> bind m k
+    (TyConst a, TyConst b) -> pure (a == b)
+    (TyApp a1 a2, TyApp b1 b2) -> do
+      ok <- unifyKind a1 b1
+      if ok then unifyKind a2 b2 else pure False
+    _ -> pure False
+  where
+    bind m k
+      | m `elem` metaTyVars k = pure False
+      | otherwise = writeTyVar m k >> pure True
 
 -- Assumption: ty is already zonked.
 substituteUnif :: IcLevel -> MetaTyVar -> MonoTy -> TC ()

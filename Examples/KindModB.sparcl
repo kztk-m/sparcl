@@ -1,0 +1,12 @@
+-- Kinds across modules (2/2): see Examples.KindModA.
+--
+-- `z` has no signature, so its type is a meta variable bound to T, a type
+-- that is not imported; binding it needs the kind of T.
+
+module Examples.KindModB where
+
+import Examples.KindModA (mk, isMk)
+
+def z = mk
+
+def b = isMk z

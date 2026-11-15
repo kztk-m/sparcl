@@ -15,8 +15,6 @@ module Language.Sparcl.Surface.Syntax (
   TyBinder (..),
   tyBinderName,
   stripTParens,
-  decomposeArrTy,
-  decomposeTyCon,
   LPat,
   Pat (..),
   LExp,
@@ -141,24 +139,6 @@ instance (AllPretty p) => Pretty (TConstraint p) where
 stripTParens :: LTy p -> LTy p
 stripTParens (unLoc -> TParens t) = stripTParens t
 stripTParens t = t
-
--- | Splits a function type @t1 # m1 -> ... -> tn # mn -> t@ into the
---   pairs @(ti, mi)@ and @t@ (through parentheses).
-decomposeArrTy :: LTy p -> ([(LTy p, LTy p)], LTy p)
-decomposeArrTy (stripTParens -> Loc _ (TArr m t2 t3)) =
-  let (args, ret) = decomposeArrTy t3
-  in  ((t2, m) : args, ret)
-decomposeArrTy ty = ([], ty)
-
--- | The arguments of an application of the type constructor @c@ (through
---   parentheses). Used for the result types of GADT constructors until
---   their check moves to type checking (stage V2-2 of the notes).
-decomposeTyCon :: (Eq (XTId p)) => XTId p -> LTy p -> Maybe [LTy p]
-decomposeTyCon c = go []
-  where
-    go acc (stripTParens -> Loc _ (TApp t1 t2)) = go (t2 : acc) t1
-    go acc (stripTParens -> Loc _ (TCon c')) | c == c' = Just acc
-    go _ _ = Nothing
 
 instance (AllPretty p) => Pretty (TyBinder p) where
   ppr (TyBinder x Nothing) = ppr x
@@ -470,9 +450,9 @@ data CDecl p
       ![LTy p] -- constructor argument
   | GeneralC
       !(XId p) -- constructor name
-      ![XTId p] -- xs of forall xs. C => ...
-      ![TConstraint p] -- C  of forall xs. C => ...
-      ![(LTy p, LTy p)] -- arguments together with their multiplicity
+      !(LTy p) -- its signature as written, quantified over the variables
+      -- other than the data type's parameters (the existentials); the form
+      -- of its result is checked by the type checker
 
 instance (AllPretty p) => Pretty (Loc (CDecl p)) where
   ppr (Loc l d) =
@@ -485,13 +465,7 @@ instance (AllPretty p) => Pretty (CDecl p) where
   ppr (NormalC c []) = ppr c
   ppr (NormalC c args) =
     ppr c D.<+> D.hsep [pprPrec 2 a | a <- args]
-  ppr (GeneralC c xs ctxt args) =
-    text "exists"
-      <+> vcat (map ppr xs)
-      <> text "."
-        <+> case ctxt of [] -> empty; _ -> ppr ctxt <+> text "=>"
-        <+> ppr c
-        <+> hsep [parens (pprPrec 1 a <+> text "#" <+> pprPrec 1 m) | (a, m) <- args]
+  ppr (GeneralC c ty) = ppr c <+> text ":" <+> D.align (ppr ty)
 
 data Decls p x
   = Decls (XDecls p) [x]

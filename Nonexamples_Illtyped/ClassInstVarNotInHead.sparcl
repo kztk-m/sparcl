@@ -1,0 +1,10 @@
+-- Every type variable of an instance must occur in its head, so that
+-- matching the head fixes it.
+
+class C a where
+  sig m : a -> Int
+end
+
+instance {{C b}} -> C Int where
+  def m _ = 1
+end

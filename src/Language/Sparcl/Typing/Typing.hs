@@ -4,6 +4,10 @@
 module Language.Sparcl.Typing.Typing (
   inferExp,
   inferTopDecls,
+  -- exported for the unit tests of kinds (test/Spec.hs)
+  convertWrittenTy,
+  instantiateQ,
+  quantify,
 ) where
 
 import Control.Monad
@@ -44,63 +48,217 @@ import Language.Sparcl.Pretty as D hiding ((<$>))
 
 -- import Data.Maybe (isNothing)
 
-import Data.List (foldl', nub, (\\))
+import Data.Graph (flattenSCC, stronglyConnComp)
+import Data.List (foldl', nub, zip4, (\\))
 
 -- import Control.Exception (evaluate)
 -- import           Debug.Trace
 
--- TODO: Implement kind checking
-ty2ty :: S.LTy 'Renaming -> Ty
-ty2ty (Loc _ ty) = go ty
+-- * Written types: conversion with kind checking (D6 in the notes)
+
+-- | Converts a written type-level expression and infers its kind (not
+--   bidirectional: callers unify the kind with the one they expect). The
+--   map gives the type variables bound outside the written type (the
+--   parameters of a data type or a class); renaming guarantees that every
+--   variable is bound. A kind error is reported at the subtree and aborts
+--   type checking (D6-d). Kind metas may be left in the kinds of the type
+--   variables; callers default and zonk them ('zonkKinds').
+ty2ty :: M.Map Name TyVar -> S.LTy 'Renaming -> TC (Ty, Kind)
+ty2ty env lty = do
+  -- outside a forall nothing floats, so no constraint is returned
+  (t, _, k) <- convTy False env lty
+  pure (t, k)
+
+-- | 'ty2ty' with an expected kind.
+ty2tyAt :: M.Map Name TyVar -> Kind -> S.LTy 'Renaming -> TC Ty
+ty2tyAt env k lty = do
+  (t, k') <- ty2ty env lty
+  expectKind lty t k' k
+  pure t
+
+-- | Converts a written type (a signature, an annotation, an instance type)
+--   of kind @Type@, with its kinds fixed (D6-c in the notes).
+convertWrittenTy :: S.LTy 'Renaming -> TC Ty
+convertWrittenTy lty = ty2tyAt M.empty typeKi lty >>= zonkKinds
+
+-- | The conversion behind 'ty2ty'. In the floating mode (the body of a
+--   forall) the constraints of nested qualified types float up to the
+--   enclosing forall; otherwise a qualified type stays where it is, as an
+--   unquantified 'TyForAll'.
+convTy :: Bool -> M.Map Name TyVar -> S.LTy 'Renaming -> TC (Ty, [TyConstraint], Kind)
+convTy fl env lty@(Loc loc ty) = case ty of
+  S.TVar x -> case M.lookup x env of
+    Just v -> pure (TyVar v, [], tyVarKind v)
+    Nothing -> cannotHappen $ text "ty2ty: unbound type variable" <+> ppr x
+  S.TCon c -> do
+    checkSynArity loc c 0
+    k <- kindOfTyName loc c
+    pure (TyConst c, [], k)
+  S.TApp _ _ -> do
+    case unLoc (fst (splitSurfaceApp lty)) of
+      S.TCon c -> checkSynArity loc c (length (snd (splitSurfaceApp lty)))
+      _ -> pure ()
+    convApp fl env lty
+  S.TParens t -> convTy fl env t
+  S.TArr m t1 t2 -> do
+    (m', csm) <- convAt fl env multKi m
+    (t1', cs1) <- convAt fl env typeKi t1
+    (t2', cs2) <- convAt fl env typeKi t2
+    pure (TyFun m' t1' t2', csm ++ cs1 ++ cs2, typeKi)
+  S.TInstArr c t -> do
+    (c', csc) <- convAt fl env typeKi c
+    (t', cst) <- convAt fl env typeKi t
+    pure (TyInstFun c' t', csc ++ cst, typeKi)
+  S.TForall _ _ -> do
+    t' <- convForall env [] lty
+    pure (t', [], typeKi)
+  S.TKind t kd -> do
+    (t', cs, k) <- convTy fl env t
+    let k' = kindFromSurface kd
+    expectKind t t' k k'
+    pure (t', cs, k')
+  S.TQual cs t -> do
+    cs' <- concat <$> mapM (convConstraint env) cs
+    (t', cs2) <- convAt True env typeKi t
+    if fl
+      then pure (t', cs' ++ cs2, typeKi)
+      else pure (TyForAll [] (TyQual (cs' ++ cs2) t'), [], typeKi)
+  S.TMult m -> pure (TyMult m, [], multKi)
+
+-- | 'convTy' with an expected kind.
+convAt :: Bool -> M.Map Name TyVar -> Kind -> S.LTy 'Renaming -> TC (Ty, [TyConstraint])
+convAt fl env k lty = do
+  (t, cs, k') <- convTy fl env lty
+  expectKind lty t k' k
+  pure (t, cs)
+
+-- | An application: the head must have a kind @k1 -> k2@ and the argument
+--   kind @k1@. The head is converted without the check of partial
+--   applications of synonyms, which is made once for the whole spine.
+convApp :: Bool -> M.Map Name TyVar -> S.LTy 'Renaming -> TC (Ty, [TyConstraint], Kind)
+convApp fl env lty@(Loc loc ty) = case ty of
+  S.TApp t1 t2 -> do
+    (t1', cs1, k1) <- convApp fl env t1
+    (t2', cs2, k2) <- convTy fl env t2
+    k1' <- zonkType k1
+    (ka, kr) <- case k1' of
+      TyCon a [ka, kr] | a == nameKiArr -> pure (ka, kr)
+      TyMetaV _ -> do
+        ka <- newMetaKind
+        kr <- newMetaKind
+        _ <- unifyKind k1' (arrKi ka kr)
+        pure (ka, kr)
+      _ -> atLoc loc $ do
+        reportError $ NotAFunctionKind t1' k1'
+        abortTyping
+    expectKind t2 t2' k2 ka
+    pure (TyApp t1' t2', cs1 ++ cs2, kr)
+  S.TParens t -> convApp fl env t
+  S.TCon c -> do
+    k <- kindOfTyName loc c
+    pure (TyConst c, [], k)
+  _ -> convTy fl env lty
+
+-- | Consecutive foralls (through parentheses) with the body, whose
+--   constraints float up to them.
+convForall :: M.Map Name TyVar -> [TyVar] -> S.LTy 'Renaming -> TC Ty
+convForall env vs lty = case unLoc (S.stripTParens lty) of
+  S.TForall b t -> do
+    v <- binderTyVar b
+    convForall (M.insert (S.tyBinderName b) v env) (v : vs) t
+  _ -> do
+    (t', cs) <- convAt True env typeKi lty
+    pure $ TyForAll (reverse vs) (TyQual cs t')
+
+-- | A type variable for a binder: the annotated kind, or a kind meta.
+binderTyVar :: S.TyBinder 'Renaming -> TC TyVar
+binderTyVar (S.TyBinder x mk) = BoundTv x <$> maybe newMetaKind (pure . kindFromSurface) mk
+
+convConstraint :: M.Map Name TyVar -> S.TConstraint 'Renaming -> TC [TyConstraint]
+convConstraint env (S.MSub ts1 ts2) =
+  msub <$> mapM (ty2tyAt env multKi) ts1 <*> mapM (ty2tyAt env multKi) ts2
+convConstraint env (S.TyEq t1 t2) = do
+  (t1', k1) <- ty2ty env t1
+  t2' <- ty2tyAt env k1 t2
+  pure [TyEq t1' t2']
+
+-- | Unifies the kind of a converted type-level expression with the
+--   expected one; a mismatch is reported at it and aborts type checking.
+expectKind :: S.LTy 'Renaming -> Ty -> Kind -> Kind -> TC ()
+expectKind lty t actual expected = do
+  ok <- unifyKind actual expected
+  unless ok $ atLoc (location lty) $ do
+    reportError $ KindMismatch t expected actual
+    abortTyping
+
+-- | The kind of a type constructor, a synonym or a class.
+kindOfTyName :: SrcSpan -> Name -> TC Kind
+kindOfTyName loc c = do
+  tbl <- asks tcTyEnv
+  case kindOfName tbl c of
+    Just k -> pure k
+    Nothing -> atLoc loc $ do
+      reportError $ UnknownTypeName c
+      abortTyping
+
+-- | Synonyms must not be partially applied (n arguments are given).
+checkSynArity :: SrcSpan -> Name -> Int -> TC ()
+checkSynArity loc c n = do
+  syns <- asks tcSyn
+  case M.lookup c syns of
+    Just (ns, _) | n < length ns -> atLoc loc $ do
+      reportError $ Other $ D.hsep [D.text "Type synonym", D.dquotes (ppr c), D.text "must be fully-applied."]
+      abortTyping
+    _ -> pure ()
+
+-- | The head and the arguments of a written application (through
+--   parentheses around heads).
+splitSurfaceApp :: S.LTy 'Renaming -> (S.LTy 'Renaming, [S.LTy 'Renaming])
+splitSurfaceApp = go []
   where
-    go (S.TVar x) = TyVar (BoundTv x placeholderKind)
-    go (S.TCon c) = TyConst c
-    go (S.TApp t1 t2) = TyApp (ty2ty t1) (ty2ty t2)
-    go (S.TParens t) = ty2ty t
-    go (S.TArr m t1 t2) = TyFun (ty2ty m) (ty2ty t1) (ty2ty t2)
-    go (S.TInstArr c t) = TyInstFun (ty2ty c) (ty2ty t)
-    go (S.TForall x t) = gatherBoundTv [binderTv x] t
-    go (S.TKind t _) = ty2ty t -- kind annotations are given meaning at stage V2-2
-    go (S.TMult m) = TyMult m
-    go t@(S.TQual _ _) =
-      let (t', cs') = gatherConstraints t
-      in  TyForAll [] $ TyQual cs' t'
+    go acc (Loc _ (S.TApp t1 t2)) = go (t2 : acc) t1
+    go acc (Loc _ (S.TParens t)) = go acc t
+    go acc t = (t, acc)
 
-    binderTv b = BoundTv (S.tyBinderName b) placeholderKind
+-- | A written kind (built only from @Type@, @Multiplicity@ and the kind
+--   arrow, D7-c4 in the notes).
+kindFromSurface :: S.LTy 'Renaming -> Kind
+kindFromSurface (Loc _ k) = case k of
+  S.TCon c -> TyConst c
+  S.TApp k1 k2 -> TyApp (kindFromSurface k1) (kindFromSurface k2)
+  S.TParens k' -> kindFromSurface k'
+  _ -> cannotHappen $ text "kindFromSurface: not a kind"
 
-    gatherBoundTv xs (unLoc . S.stripTParens -> S.TForall y t) = gatherBoundTv (binderTv y : xs) t
-    gatherBoundTv xs t =
-      let (t', cs) = gatherConstraintsL t
-      in  TyForAll (reverse xs) $ TyQual cs t'
+-- | Fixes the kinds in a converted type: zonks the kinds of its type
+--   variables and binders, defaulting the kind metas left to @Type@
+--   (D5-e, D6-c in the notes).
+zonkKinds :: Ty -> TC Ty
+zonkKinds = go
+  where
+    go (TyVar v) = TyVar <$> zonkTyVarKind v
+    go (TyConst c) = pure (TyConst c)
+    go (TyMetaV m) = pure (TyMetaV m)
+    go (TyApp t1 t2) = TyApp <$> go t1 <*> go t2
+    go (TyFun m t1 t2) = TyFun <$> go m <*> go t1 <*> go t2
+    go (TyInstFun c t) = TyInstFun <$> go c <*> go t
+    go (TyForAll vs (TyQual cs t)) =
+      TyForAll <$> mapM zonkTyVarKind vs <*> (TyQual <$> mapM goC cs <*> go t)
+    go (TySyn o u) = TySyn <$> go o <*> go u
+    go (TyMult m) = pure (TyMult m)
+    goC (MSub t ts) = MSub <$> go t <*> mapM go ts
+    goC (TyEq t1 t2) = TyEq <$> go t1 <*> go t2
 
-    gatherConstraintsL = gatherConstraints . unLoc
+zonkTyVarKind :: TyVar -> TC TyVar
+zonkTyVarKind (BoundTv n k) = BoundTv n <$> zonkDefaultKind k
+zonkTyVarKind v = pure v
 
-    gatherConstraints (S.TVar x) = (TyVar (BoundTv x placeholderKind), [])
-    gatherConstraints (S.TCon c) = (TyConst c, [])
-    gatherConstraints (S.TApp t1 t2) =
-      let (t1', cs1) = gatherConstraintsL t1
-          (t2', cs2) = gatherConstraintsL t2
-      in  (TyApp t1' t2', cs1 ++ cs2)
-    gatherConstraints (S.TParens t) = gatherConstraintsL t
-    gatherConstraints (S.TArr m t1 t2) =
-      let (m', csm) = gatherConstraintsL m
-          (t1', cs1) = gatherConstraintsL t1
-          (t2', cs2) = gatherConstraintsL t2
-      in  (TyFun m' t1' t2', csm ++ cs1 ++ cs2)
-    gatherConstraints (S.TInstArr c t) =
-      let (c', csc) = gatherConstraintsL c
-          (t', cst) = gatherConstraintsL t
-      in  (TyInstFun c' t', csc ++ cst)
-    gatherConstraints (S.TForall x t) = (gatherBoundTv [binderTv x] t, [])
-    gatherConstraints (S.TKind t _) = gatherConstraintsL t
-    gatherConstraints (S.TQual cs t) =
-      let (t', cs') = gatherConstraintsL t
-      in  (t', concatMap c2c cs ++ cs')
-    gatherConstraints (S.TMult m) = (TyMult m, [])
-
-c2c :: S.TConstraint 'Renaming -> [TyConstraint]
-c2c (S.MSub t1 t2) = msub (map ty2ty t1) (map ty2ty t2)
-c2c (S.TyEq t1 t2) = [TyEq (ty2ty t1) (ty2ty t2)]
+-- | Zonks a kind, defaulting its remaining kind metas to @Type@ (they are
+--   written, so every occurrence agrees).
+zonkDefaultKind :: Kind -> TC Kind
+zonkDefaultKind k = do
+  k' <- zonkType k
+  forM_ (metaTyVars k') $ \m -> writeTyVar m typeKi
+  zonkType k'
 
 msub :: [Ty] -> [Ty] -> [TyConstraint]
 msub ts1 ts2 = [MSub t1 ts2 | t1 <- ts1]
@@ -712,8 +870,8 @@ checkTy lexp@(Loc loc expr) expectedTy = do
       instantiatePoly tyOfC expectedTy
       return (Con (c, tyOfC), M.empty)
     go (Sig e ty_) = do
-      let annTy = ty2ty ty_
-      checkClassTypesL ty_
+      annTy <- convertWrittenTy ty_
+      checkClassTypesAt (location ty_) annTy
       (e', umap) <- checkPolyTy e annTy
       instantiatePoly annTy expectedTy
       pure (unLoc e', umap)
@@ -1032,7 +1190,7 @@ inferDecls isTopLevel (HDecls _ dss) = do
       (rest', bs', umap') <- withVars bind $ go (bind ++ bs) rest
       return (ds' : rest', bs', mergeUseMap umap umap')
 
--- | Checks the contents of @{{ }}@ and the numbers of class arguments in a type.
+-- | Checks the contents of @{{ }}@ in a type.
 checkClassTypes :: Ty -> TC ()
 checkClassTypes ty = resolveSyn ty >>= go
   where
@@ -1042,30 +1200,16 @@ checkClassTypes ty = resolveSyn ty >>= go
       checkClassApp c
       go c
       go t
-    go (TyConst n) = checkArity n []
-    -- the whole spine is handled here, so that its head is inspected once
-    go t@(TyApp _ _) =
-      case splitTyApp t of
-        (TyConst n, ts) -> checkArity n ts
-        (h, ts) -> go h >> mapM_ go ts
+    go (TyConst _) = pure ()
+    go (TyApp t1 t2) = go t1 >> go t2
     go (TyFun m t1 t2) = mapM_ go [m, t1, t2]
     go (TyVar _) = pure ()
     go (TyMetaV _) = pure ()
     go (TyMult _) = pure ()
 
-    -- an application @n ts@ of a type constructor
-    checkArity n ts = do
-      cenv <- asks tcClassEnv
-      case M.lookup n cenv of
-        Just ci
-          | length (ciParams ci) /= length ts ->
-              reportError $ ClassArityMismatch n (length (ciParams ci)) (length ts)
-        _ -> pure ()
-      mapM_ go ts
-
--- | 'checkClassTypes' for a written type.
-checkClassTypesL :: LTy 'Renaming -> TC ()
-checkClassTypesL lty = atLoc (location lty) $ checkClassTypes (ty2ty lty)
+-- | 'checkClassTypes' located at a written type.
+checkClassTypesAt :: SrcSpan -> Ty -> TC ()
+checkClassTypesAt loc ty = atLoc loc $ checkClassTypes ty
 
 -- | Checks that a type is an application of a class.
 checkClassApp :: Ty -> TC ()
@@ -1098,72 +1242,74 @@ inferTopDecls ::
       , [TypedDefault] -- default methods of the classes declared in this module
       , [TypedInstance] -- instances declared in this module
       )
-inferTopDecls decls dataDeclsB typeDeclsB classDeclsB instDecls = do
-  -- Only the names of the parameters are used; kind annotations are given
-  -- meaning at stage V2-2 of the notes.
-  let names = map S.tyBinderName
-  let dataDecls = [Loc l (n, names bs, cds) | Loc l (n, bs, cds) <- dataDeclsB]
-  let typeDecls = [Loc l (n, names bs, t) | Loc l (n, bs, t) <- typeDeclsB]
-  let classDecls = [Loc l (c, names bs, sups, sigs, defs) | Loc l (c, bs, sups, sigs, defs) <- classDeclsB]
+inferTopDecls decls dataDecls typeDecls classDecls instDecls0 = do
+  -- kinds of the type-level declarations
+  (declKinds, declsK) <-
+    inferTyDeclKinds $
+      [TDData l n bs cds | Loc l (n, bs, cds) <- dataDecls]
+        ++ [TDSyn l n bs t | Loc l (n, bs, t) <- typeDecls]
+        ++ [TDClass l c bs sups sigs | Loc l (c, bs, sups, sigs, _) <- classDecls]
 
-  let dataDecls' =
-        [ C.DDecl n (map (`BoundTv` placeholderKind) ns) [convConDecl cd | Loc _ cd <- cdecls]
-        | Loc _ (n, ns, cdecls) <- dataDecls
-        ]
-
-  let typeDecls' = [C.TDecl n (map (`BoundTv` placeholderKind) ns) (ty2ty lty) | Loc _ (n, ns, lty) <- typeDecls]
-
-  let synTable = M.fromList $
-        flip map typeDecls $ \(Loc _ (n, ns, lty)) ->
-          let ty = ty2ty lty
-          in  (n, (map (`BoundTv` placeholderKind) ns, ty))
-
-  let ctypeTable = M.fromList $ concat [mkConTable (n, ns, cdecls) | Loc _ (n, ns, cdecls) <- dataDecls]
-  -- [ (n, foldr ((-@) . const typeKi) typeKi ns) | Loc _ (n, ns, _) <- dataDecls ]
-  -- ++
-  -- [ (cn, TyForAll tvs $ TyQual [] (foldr ((-@) . ty2ty) (TyCon n $ map TyVar tvs) tys)) |
-  --   Loc _ (n, ns, cdecls) <- dataDecls,
-  --   let tvs = map BoundTv ns,
-  --   Loc _ (CDecl cn tys) <- cdecls ]
+  let synTable = M.fromList [(n, (vs, t)) | TKSyn n vs t <- declsK]
+      typeDecls' = [C.TDecl n vs t | TKSyn n vs t <- declsK]
 
   -- data types and type synonyms
-  withCons (M.toList ctypeTable) $
-    withSyns (M.toList synTable) $ do
+  withVars declKinds $ withSyns (M.toList synTable) $ do
+    dataK <- forM [(n, vs, cons) | TKData n vs cons <- declsK] $ \(n, vs, cons) ->
+      (n,vs,) <$> mapM (conTyOf n vs) cons
+    let ctypeTable = M.fromList [(cn, cty) | (_, _, cs) <- dataK, (cn, cty, _) <- cs]
+        dataDecls' = [C.DDecl n vs [core | (_, _, core) <- cs] | (n, vs, cs) <- dataK]
+
+    withCons (M.toList ctypeTable) $ do
       -- classes
-      let classTable = M.fromList [(c, mkClassInfo ps sups sigs defs) | Loc _ (c, ps, sups, sigs, defs) <- classDecls]
+      let classesK = [(c, vs, sups, sigs) | TKClass c vs sups sigs <- declsK]
+          defaultsOf c = [n | Loc _ (c', _, _, _, defs) <- classDecls, c' == c, Loc _ (DDef n _) <- defs]
+          classTable =
+            M.fromList
+              [ ( c
+                , ClassInfo
+                    { ciParams = vs
+                    , ciSupers = map snd sups
+                    , ciMethods = [(m, t) | (m, _, t) <- sigs]
+                    , ciDefaults = defaultsOf c
+                    }
+                )
+              | (c, vs, sups, sigs) <- classesK
+              ]
       withClassesAndInstances classTable M.empty $ do
         -- fields of data constructors
-        forM_ dataDecls $ \(Loc _ (_, _, cdecls)) ->
-          forM_ cdecls $ \(Loc _ cd) -> mapM_ checkClassTypesL (fieldTys cd)
+        forM_ [cons | TKData _ _ cons <- declsK] $ \cons ->
+          forM_ cons $ \con -> forM_ (conFieldTys con) (uncurry checkClassTypesAt)
 
         -- superclasses and method signatures
-        forM_ classDecls $ \(Loc _ (_, _, sups, sigs, _)) -> do
-          forM_ sups $ \s -> atLoc (location s) $ do
-            checkClassTypes (ty2ty s)
-            checkClassApp (ty2ty s)
-          forM_ sigs $ \(Loc _ (_, t)) -> checkClassTypesL t
+        forM_ classesK $ \(_, _, sups, sigs) -> do
+          forM_ sups $ \(l, s) -> atLoc l $ do
+            checkClassTypes s
+            checkClassApp s
+          forM_ sigs $ \(_, l, t) -> checkClassTypesAt l t
 
         let methodTys =
-              [ (m, methodType c (map (`BoundTv` placeholderKind) ps) (ty2ty t))
-              | Loc _ (c, ps, _, sigs, _) <- classDecls
-              , Loc _ (m, t) <- sigs
+              [ (m, methodType c vs t)
+              | (c, vs, _, sigs) <- classesK
+              , (m, _, t) <- sigs
               ]
 
         -- instances
-        instTys <- forM instDecls $ \(Loc _ (x, lty, _)) -> do
-          let ty = ty2ty lty
+        instsChecked <- forM instDecls0 $ \d@(Loc _ (x, lty, _)) -> do
+          ty <- convertWrittenTy lty
+          hd <- instHead ty
           atLoc (location lty) $ do
             checkClassTypes ty
-            checkClassApp =<< instHead ty
-          pure (x, ty)
-        instTable <-
-          M.fromListWith M.union
-            <$> sequence
-              [ do
-                  hd <- instHead ty
-                  pure (headName hd, M.singleton x ty)
-              | (x, ty) <- instTys
-              ]
+            checkClassApp hd
+            checkInstVars ty hd
+          pure $ case hd of
+            TyCon c _ -> Just (d, (x, ty), c)
+            _ -> Nothing
+        let insts = catMaybes instsChecked
+            instDecls = [d | (d, _, _) <- insts]
+            instTys = [xt | (_, xt, _) <- insts]
+            instClasses = [c | (_, _, c) <- insts]
+            instTable = M.fromListWith M.union [(c, M.singleton x ty) | (_, (x, ty), c) <- insts]
 
         withClassesAndInstances M.empty instTable $
           withVars (methodTys ++ instTys) $ do
@@ -1183,10 +1329,9 @@ inferTopDecls decls dataDeclsB typeDeclsB classDeclsB instDecls = do
                     pcs' <- checkSigDef l m polyTy pcs
                     pure $ TypedDefault{tdMethod = m, tdClass = c, tdType = polyTy, tdClauses = pcs'}
 
-              typedInsts <- forM (zip3 instDecls instTys superDicts) $
-                \(Loc l (x, _, ids), (_, ty), (locals, sups)) -> do
+              typedInsts <- forM (zip4 instDecls instTys instClasses superDicts) $
+                \(Loc l (x, _, ids), (_, ty), c, (locals, sups)) -> do
                   (ms, defaulted) <- checkInstBodies l x ty ids
-                  c <- headName <$> instHead ty
                   pure $
                     TypedInstance
                       { tiName = x
@@ -1203,6 +1348,7 @@ inferTopDecls decls dataDeclsB typeDeclsB classDeclsB instDecls = do
             return
               ( decls'
               , nts
+                  ++ declKinds
                   ++ methodTys
                   ++ instTys
                   ++ [ (superProjName c i, superProjType c ci i)
@@ -1265,17 +1411,6 @@ inferTopDecls decls dataDeclsB typeDeclsB classDeclsB instDecls = do
         _ -> pure []
       pure (locals, catMaybes dicts)
 
-    mkClassInfo ps sups sigs defs =
-      ClassInfo
-        { ciParams = map (`BoundTv` placeholderKind) ps
-        , ciSupers = map ty2ty sups
-        , ciMethods = [(m, ty2ty t) | Loc _ (m, t) <- sigs]
-        , ciDefaults = [n | Loc _ (DDef n _) <- defs]
-        }
-
-    fieldTys (NormalC _ tys) = tys
-    fieldTys (GeneralC _ _ _ tyms) = map fst tyms
-
     instHead ty = stripSyn . go <$> resolveSyn ty
       where
         go (TySyn _ t) = go t
@@ -1283,23 +1418,189 @@ inferTopDecls decls dataDeclsB typeDeclsB classDeclsB instDecls = do
         go (TyInstFun _ t) = go t
         go t = t
 
-    headName (TyCon n _) = n
-    headName _ = error "Cannot happen: the head of an instance must be C t1 ... tn."
+    checkInstVars ty hd = case ty of
+      TyForAll vs _ ->
+        forM_ vs $ \v ->
+          unless (v `elem` (freeTyVars hd :: [TyVar])) $
+            reportError $
+              InstVarNotInHead v hd
+      _ -> pure ()
 
-    convConDecl (NormalC cn tys) = (cn, [], [], map ty2ty tys)
-    convConDecl (GeneralC cn xs q tys) = (cn, xs, concatMap c2c q, map (ty2ty . fst) tys)
+-- | The type of a constructor of data type @n@ with parameters @vs@, and
+--   its Core form. The result of a GADT constructor must be an application
+--   of @n@ (checked after synonyms are expanded); its arguments other than
+--   the parameters themselves become equality constraints on them.
+conTyOf :: Name -> [TyVar] -> ConK -> TC (Name, ConTy, (Name, [Name], [TyConstraint], [Ty]))
+conTyOf n vs con = case con of
+  ConKNormal cn fields -> do
+    let tys = map snd fields
+    pure (cn, ConTy vs [] [] [(t, TyMult One) | t <- tys] retTy, (cn, [], [], tys))
+  ConKGADT cn (rloc, res) exs fields -> do
+    res' <- stripSyn <$> resolveSyn res
+    q <- case res' of
+      TyCon n' us
+        | n' == n && length us == length vs ->
+            pure [TyEq (TyVar v) u | (v, u) <- zip vs us, u /= TyVar v]
+      _ -> do
+        atLoc rloc $ reportError $ BadConResult cn n res
+        pure []
+    let tyms = [(t, m) | ((_, t), m) <- fields]
+    pure (cn, ConTy vs exs q tyms retTy, (cn, [x | BoundTv x _ <- exs], q, map fst tyms))
+  where
+    retTy = TyCon n (map TyVar vs)
 
-    mkConTable (n, ns, cdecls) =
-      let tvs = map (`BoundTv` placeholderKind) ns
-          retTy = TyCon n $ map TyVar tvs
-      in  flip map cdecls $ \case
-            (Loc _ (NormalC cn tys)) ->
-              (cn, ConTy tvs [] [] [(ty2ty ty, TyMult one) | ty <- tys] retTy)
-            (Loc _ (GeneralC cn xs q tyms)) ->
-              let xs' = map (`BoundTv` placeholderKind) xs
-                  q' = concatMap c2c q
-                  tyms' = map (\(t, m) -> (ty2ty t, ty2ty m)) tyms
-              in  (cn, ConTy tvs xs' q' tyms' retTy)
+-- | The located field types of a constructor.
+conFieldTys :: ConK -> [(SrcSpan, Ty)]
+conFieldTys (ConKNormal _ fields) = fields
+conFieldTys (ConKGADT _ _ _ fields) = map fst fields
+
+-- * Kinds of type-level declarations (D5 in the notes)
+
+-- | A type-level declaration of the module: a data type, a synonym or a
+--   class (location, name, parameters, bodies).
+data TyDecl
+  = TDData !SrcSpan !Name ![S.TyBinder 'Renaming] ![Loc (CDecl 'Renaming)]
+  | TDSyn !SrcSpan !Name ![S.TyBinder 'Renaming] !(LTy 'Renaming)
+  | TDClass !SrcSpan !Name ![S.TyBinder 'Renaming] ![LTy 'Renaming] ![Loc (Name, LTy 'Renaming)]
+
+-- | A type-level declaration converted with its kinds fixed.
+data TyDeclK
+  = -- | data type, parameters, constructors
+    TKData !Name ![TyVar] ![ConK]
+  | -- | synonym, parameters, body
+    TKSyn !Name ![TyVar] !Ty
+  | -- | class, parameters, superclasses, method signatures
+    TKClass !Name ![TyVar] ![(SrcSpan, Ty)] ![(Name, SrcSpan, Ty)]
+
+-- | A converted constructor: normal (located fields), or GADT-style
+--   (located result, existentials, located fields with multiplicities).
+data ConK
+  = ConKNormal !Name ![(SrcSpan, Ty)]
+  | ConKGADT !Name !(SrcSpan, Ty) ![TyVar] ![((SrcSpan, Ty), Ty)]
+
+tyDeclName :: TyDecl -> Name
+tyDeclName (TDData _ n _ _) = n
+tyDeclName (TDSyn _ n _ _) = n
+tyDeclName (TDClass _ n _ _ _) = n
+
+tyDeclBinders :: TyDecl -> [S.TyBinder 'Renaming]
+tyDeclBinders (TDData _ _ bs _) = bs
+tyDeclBinders (TDSyn _ _ bs _) = bs
+tyDeclBinders (TDClass _ _ bs _ _) = bs
+
+-- | The type-level names a declaration refers to (constructor fields,
+--   synonym bodies, superclasses, method signatures).
+tyDeclRefs :: TyDecl -> [Name]
+tyDeclRefs d = nub $ concatMap surfaceTyConNames $ case d of
+  TDData _ _ _ cds -> concat [conTys cd | Loc _ cd <- cds]
+  TDSyn _ _ _ t -> [t]
+  TDClass _ _ _ sups sigs -> sups ++ [t | Loc _ (_, t) <- sigs]
+  where
+    conTys (NormalC _ tys) = tys
+    conTys (GeneralC _ t) = [t]
+
+-- | The type constructor names in a written type-level expression.
+surfaceTyConNames :: LTy 'Renaming -> [Name]
+surfaceTyConNames (Loc _ ty) = case ty of
+  S.TVar _ -> []
+  S.TCon c -> [c]
+  S.TApp t1 t2 -> surfaceTyConNames t1 ++ surfaceTyConNames t2
+  S.TParens t -> surfaceTyConNames t
+  S.TArr m t1 t2 -> concatMap surfaceTyConNames [m, t1, t2]
+  S.TInstArr c t -> surfaceTyConNames c ++ surfaceTyConNames t
+  S.TForall _ t -> surfaceTyConNames t
+  S.TKind t _ -> surfaceTyConNames t
+  S.TQual cs t -> concatMap conNames cs ++ surfaceTyConNames t
+  S.TMult _ -> []
+  where
+    conNames (S.MSub ts1 ts2) = concatMap surfaceTyConNames (ts1 ++ ts2)
+    conNames (S.TyEq t1 t2) = surfaceTyConNames t1 ++ surfaceTyConNames t2
+
+-- | Infers the kinds of the type-level declarations per group of mutually
+--   dependent ones, dependencies first (D5-a): kind metas (or annotated
+--   kinds) for the parameters, bodies checked by 'ty2ty', kinds left
+--   undetermined defaulted to @Type@ at the end of each group, then the
+--   converted bodies zonked (D5-e). Returns the kinds of the declared names
+--   and the converted declarations.
+inferTyDeclKinds :: [TyDecl] -> TC ([(Name, Kind)], [TyDeclK])
+inferTyDeclKinds ds =
+  go $ map flattenSCC $ stronglyConnComp [(d, tyDeclName d, tyDeclRefs d) | d <- ds]
+  where
+    go [] = pure ([], [])
+    go (grp : grps) = do
+      (ks, rs) <- inferTyDeclGroup grp
+      -- later groups see the kinds and the synonyms of this one
+      let syns = [(n, (vs, t)) | TKSyn n vs t <- rs]
+      (ks', rs') <- withVars ks $ withSyns syns $ go grps
+      pure (ks ++ ks', rs ++ rs')
+
+inferTyDeclGroup :: [TyDecl] -> TC ([(Name, Kind)], [TyDeclK])
+inferTyDeclGroup grp = do
+  heads <- forM grp $ \d -> do
+    vs <- mapM binderTyVar (tyDeclBinders d)
+    -- a synonym's body may be of any kind (D5-c); data types and classes
+    -- are of kind k1 -> ... -> kn -> Type (D5-b, D5-d)
+    res <- case d of
+      TDSyn {} -> newMetaKind
+      _ -> pure typeKi
+    pure (d, vs, res, foldr (arrKi . tyVarKind) res vs)
+  let nameKinds = [(tyDeclName d, k) | (d, _, _, k) <- heads]
+  rs <- withVars nameKinds $ forM heads $ \(d, vs, res, _) -> inferTyDeclBody d vs res
+  nameKinds' <- forM nameKinds $ \(n, k) -> (n,) <$> zonkDefaultKind k
+  rs' <- mapM zonkTyDeclK rs
+  pure (nameKinds', rs')
+
+inferTyDeclBody :: TyDecl -> [TyVar] -> Kind -> TC TyDeclK
+inferTyDeclBody d vs res = case d of
+  TDData _ n _ cds -> TKData n vs <$> mapM (inferCon . unLoc) cds
+  TDSyn _ n _ rhs -> do
+    (t, k) <- ty2ty env rhs
+    expectKind rhs t k res
+    pure $ TKSyn n vs t
+  TDClass _ c _ sups sigs -> do
+    sups' <- forM sups $ \s -> (location s,) <$> ty2tyAt env typeKi s
+    sigs' <- forM sigs $ \(Loc _ (m, t)) -> (m,location t,) <$> ty2tyAt env typeKi t
+    pure $ TKClass c vs sups' sigs'
+  where
+    env = M.fromList [(x, v) | v@(BoundTv x _) <- vs]
+
+    inferCon (NormalC cn tys) =
+      ConKNormal cn <$> forM tys (\t -> (location t,) <$> ty2tyAt env typeKi t)
+    inferCon (GeneralC cn sig) = do
+      -- forall exs. t1 # m1 -> ... -> tk # mk -> T u1 ... un
+      (exs, env', sigBody) <- peelForalls [] env sig
+      let (fields, result) = splitArrows sigBody
+      fields' <- forM fields $ \(t, m) -> do
+        t' <- ty2tyAt env' typeKi t
+        m' <- ty2tyAt env' multKi m
+        pure ((location t, t'), m')
+      result' <- ty2tyAt env' typeKi result
+      pure $ ConKGADT cn (location result, result') (reverse exs) fields'
+
+    peelForalls exs e lty = case unLoc (S.stripTParens lty) of
+      S.TForall b t -> do
+        v <- binderTyVar b
+        peelForalls (v : exs) (M.insert (S.tyBinderName b) v e) t
+      _ -> pure (exs, e, lty)
+
+    -- the arrows of the result position (through parentheses there)
+    splitArrows lty = case unLoc (S.stripTParens lty) of
+      S.TArr m t1 t2 -> let (fs, r) = splitArrows t2 in ((t1, m) : fs, r)
+      _ -> ([], lty)
+
+zonkTyDeclK :: TyDeclK -> TC TyDeclK
+zonkTyDeclK (TKData n vs cons) = TKData n <$> mapM zonkTyVarKind vs <*> mapM zonkCon cons
+  where
+    zonkCon (ConKNormal cn fs) = ConKNormal cn <$> mapM zonkLoc fs
+    zonkCon (ConKGADT cn r exs fs) =
+      ConKGADT cn <$> zonkLoc r <*> mapM zonkTyVarKind exs <*> mapM (\(f, m) -> (,) <$> zonkLoc f <*> zonkKinds m) fs
+    zonkLoc (l, t) = (l,) <$> zonkKinds t
+zonkTyDeclK (TKSyn n vs t) = TKSyn n <$> mapM zonkTyVarKind vs <*> zonkKinds t
+zonkTyDeclK (TKClass c vs sups sigs) =
+  TKClass c
+    <$> mapM zonkTyVarKind vs
+    <*> mapM (\(l, t) -> (l,) <$> zonkKinds t) sups
+    <*> mapM (\(m, l, t) -> (m,l,) <$> zonkKinds t) sigs
 
 inferMutual ::
   Bool --
@@ -1308,8 +1609,11 @@ inferMutual ::
 inferMutual isTopLevel decls = do
   let names = [n | Loc _ (DDef n _) <- decls]
   let defs = [(loc, n, pcs) | Loc loc (DDef n pcs) <- decls]
-  let sigMap = M.fromList [(n, ty2ty t) | Loc _ (DSig n t) <- decls]
-  mapM_ checkClassTypesL [t | Loc _ (DSig _ t) <- decls]
+  sigMap <- fmap M.fromList $
+    forM [(n, t) | Loc _ (DSig n t) <- decls] $ \(n, t) -> do
+      ty <- convertWrittenTy t
+      checkClassTypesAt (location t) ty
+      pure (n, ty)
 
   (nts0g, umap) <- pushLevel $ do
     tys <- forM names $ \n -> case M.lookup n sigMap of

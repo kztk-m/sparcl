@@ -191,12 +191,6 @@ tyVarKind :: TyVar -> Kind
 tyVarKind (BoundTv _ k) = k
 tyVarKind (SkolemTv v _ _) = tyVarKind v
 
--- | Kinds of type variables not inferred yet (written types, parameters of
---   declarations). To be removed at stage V2-2 of the notes, where kind
---   inference gives them; deleting it makes the compiler find every use.
-placeholderKind :: Kind
-placeholderKind = typeKi
-
 instance Pretty TyVar where
   ppr (BoundTv n _) = ppr n
   ppr (SkolemTv n i lv) = ppr n D.<> D.text "_" D.<> ppr i D.<> D.text "@" D.<> ppr lv
@@ -482,6 +476,24 @@ kindOfName tbl c = case c of
   _ -> M.lookup c tbl
   where
     tupleKi n = foldr arrKi typeKi (replicate n typeKi)
+
+-- | The type constructor names occurring in a type-level expression (used
+--   to keep the kinds of reachable names across modules, D4-c in the
+--   notes).
+tyConNames :: Ty -> S.Set Name
+tyConNames = go
+  where
+    go (TyConst c) = S.singleton c
+    go (TyVar _) = S.empty
+    go (TyMetaV _) = S.empty
+    go (TyApp t1 t2) = go t1 <> go t2
+    go (TyFun m t1 t2) = go m <> go t1 <> go t2
+    go (TyInstFun c t) = go c <> go t
+    go (TyForAll _ (TyQual cs t)) = foldMap goC cs <> go t
+    go (TySyn o u) = go o <> go u
+    go (TyMult _) = S.empty
+    goC (MSub t ts) = foldMap go (t : ts)
+    goC (TyEq t1 t2) = go t1 <> go t2
 
 -- | Replaces the kind metas left in a zonked kind by @Type@ (no kind
 --   polymorphism, D1-b in the notes).

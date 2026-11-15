@@ -1,0 +1,11 @@
+-- The method signature fixes the kind of the class parameter f to Type, so
+-- C Maybe is a kind error.
+
+data Maybe a = Nothing | Just a
+
+class C f where
+  sig m : f -> f
+end
+
+sig g : {{C Maybe}} -> Int
+def g = 1

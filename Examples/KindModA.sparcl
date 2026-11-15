@@ -1,0 +1,15 @@
+-- Kinds across modules (1/2): see Examples.KindModB.
+--
+-- The export list names the values but not the type T, which their types
+-- mention. The kind of T must still reach importing modules, since the
+-- type checker looks it up whenever it binds a meta variable to T.
+
+module Examples.KindModA (mk, isMk) where
+
+data T = MkT
+
+sig mk : T
+def mk = MkT
+
+sig isMk : T -> Bool
+def isMk MkT = True

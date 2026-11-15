@@ -21,7 +21,10 @@ import Language.Sparcl.Name
 import Language.Sparcl.Typing.Instance (V (..), unifyPure)
 import Language.Sparcl.Multiplicity (Multiplicity (..))
 import Language.Sparcl.Pretty (prettyShow)
-import Language.Sparcl.Typing.TCMonad (TC, TypingContext, execTCWith, initTypingContext, newMetaTy, newMetaTyWithKind, unify, zonkType)
+import Language.Sparcl.SrcLoc (noLoc)
+import qualified Language.Sparcl.Surface.Syntax as S
+import Language.Sparcl.Typing.TCMonad (TC, TypingContext, execTCWith, initTypingContext, newMetaKind, newMetaTy, newMetaTyVar, newMetaTyWithKind, unify, zonkType)
+import Language.Sparcl.Typing.Typing (convertWrittenTy, instantiateQ, quantify)
 import Language.Sparcl.Typing.Type
 import Language.Sparcl.Value (Value (..), eqCheck, runEval)
 
@@ -99,10 +102,27 @@ boolT, intT :: Ty
 boolT = TyCon nameTyBool []
 intT = TyCon nameTyInt []
 
+nameMaybe :: Name
+nameMaybe = nameInBase (User "Maybe")
+
+tyArrKi :: Kind
+tyArrKi = arrKi typeKi typeKi
+
+-- | The kind table of the unit tests: the built-in kinds, and Either, Maybe
+--   and a class C without parameters.
+testKinds :: TypeTable
+testKinds =
+  M.union (mcTypeTable (miModuleContext baseModuleInfo)) $
+    M.fromList
+      [ (nameEither, arrKi typeKi tyArrKi)
+      , (nameMaybe, tyArrKi)
+      , (nameC, typeKi)
+      ]
+
 -- | Runs a type-checking computation in a fresh context (no errors left
---   by earlier tests).
+--   by earlier tests) with the kinds of 'testKinds'.
 runTCFresh :: TypingContext -> TC a -> IO a
-runTCFresh tc = execTCWith tc M.empty M.empty M.empty M.empty M.empty
+runTCFresh tc = execTCWith tc M.empty testKinds M.empty M.empty M.empty
 
 unificationSpec :: TypingContext -> Spec
 unificationSpec tc = describe "binary type applications (unit tests)" $ do
@@ -112,42 +132,59 @@ unificationSpec tc = describe "binary type applications (unit tests)" $ do
 
   it "unifies ?f ?a with Either Bool Int, giving ?f := Either Bool and ?a := Int" $ do
     res <- runTCFresh tc $ do
-      f <- newMetaTy
+      f <- newMetaTyWithKind tyArrKi
       a <- newMetaTy
       unify (TyApp f a) (TyCon nameEither [boolT, intT])
       (,) <$> zonkType f <*> zonkType a
     res `shouldBe` (TyCon nameEither [boolT], intT)
 
   it "does not decompose a function type: ?f ?b ~ (Int -> Bool) fails" $
-    runTCFresh tc (do f <- newMetaTy; b <- newMetaTy; unify (TyApp f b) (intT *-> boolT))
+    runTCFresh tc (do f <- newMetaTyWithKind tyArrKi; b <- newMetaTy; unify (TyApp f b) (intT *-> boolT))
       `shouldThrow` staticError
 
   it "does not decompose an instance-argument function type: ?f ?b ~ ({{C}} -> Bool) fails" $
-    runTCFresh tc (do f <- newMetaTy; b <- newMetaTy; unify (TyApp f b) (TyInstFun (TyCon nameC []) boolT))
+    runTCFresh tc (do f <- newMetaTyWithKind tyArrKi; b <- newMetaTy; unify (TyApp f b) (TyInstFun (TyCon nameC []) boolT))
       `shouldThrow` staticError
 
   it "fails the occurs check for ?f ?a ~ ?f ?b ?c" $
     runTCFresh tc
       ( do
-          [f, a, b, c] <- mapM (const newMetaTy) [1 :: Int .. 4]
+          f <- newMetaTyWithKind tyArrKi
+          [a, b, c] <- mapM (const newMetaTy) [1 :: Int .. 3]
           unify (TyApp f a) (TyApp (TyApp f b) c)
+      )
+      `shouldThrow` staticError
+
+  it "binds only to an expression of the same kind: ?f ?a ~ Maybe Int fails for ?f : (Type -> Type) -> Type" $
+    -- e.g. sig g : f a -> f List used at Maybe Int (D3 in the notes)
+    runTCFresh tc
+      ( do
+          f <- newMetaTyWithKind (arrKi tyArrKi typeKi)
+          a <- newMetaTyWithKind tyArrKi
+          unify (TyApp f a) (TyCon nameMaybe [intT])
       )
       `shouldThrow` staticError
 
   describe "unifyPure (instance search)" $ do
     it "unifies ?f ?a with Either Bool Int" $ do
-      (f, a) <- runTCFresh tc ((,) <$> newMetaTy <*> newMetaTy)
-      let res = unifyPure [] True (TyApp f a) (TyCon nameEither [boolT, intT])
+      (f, a) <- runTCFresh tc ((,) <$> newMetaTyWithKind tyArrKi <*> newMetaTy)
+      let res = unifyPure testKinds [] True (TyApp f a) (TyCon nameEither [boolT, intT])
       fmap (map (\(v, t) -> (isMetaOf f v, isMetaOf a v, t))) res
         `shouldBe` Just [(False, True, intT), (True, False, TyCon nameEither [boolT])]
 
     it "does not decompose a function type" $ do
-      (f, b) <- runTCFresh tc ((,) <$> newMetaTy <*> newMetaTy)
-      fmap length (unifyPure [] True (TyApp f b) (intT *-> boolT)) `shouldBe` Nothing
+      (f, b) <- runTCFresh tc ((,) <$> newMetaTyWithKind tyArrKi <*> newMetaTy)
+      fmap length (unifyPure testKinds [] True (TyApp f b) (intT *-> boolT)) `shouldBe` Nothing
 
     it "fails the occurs check for ?f ?a ~ ?f ?b ?c" $ do
-      [f, a, b, c] <- runTCFresh tc (mapM (const newMetaTy) [1 :: Int .. 4])
-      fmap length (unifyPure [] True (TyApp f a) (TyApp (TyApp f b) c)) `shouldBe` Nothing
+      f <- runTCFresh tc (newMetaTyWithKind tyArrKi)
+      [a, b, c] <- runTCFresh tc (mapM (const newMetaTy) [1 :: Int .. 3])
+      fmap length (unifyPure testKinds [] True (TyApp f a) (TyApp (TyApp f b) c)) `shouldBe` Nothing
+
+    it "binds only to an expression of the same kind" $ do
+      f <- runTCFresh tc (newMetaTyWithKind (arrKi tyArrKi typeKi))
+      a <- runTCFresh tc (newMetaTyWithKind tyArrKi)
+      fmap length (unifyPure testKinds [] True (TyApp f a) (TyCon nameMaybe [intT])) `shouldBe` Nothing
   where
     isMetaOf (TyMetaV m) (VM m') = m == m'
     isMetaOf _ _ = False
@@ -182,6 +219,70 @@ kindSpec tc = describe "kinds (unit tests)" $ do
     prettyShow (arrKi tyArr typeKi) `shouldBe` "(Type -> Type) -> Type"
     prettyShow (arrKi multKi tyArr) `shouldBe` "Multiplicity -> Type -> Type"
 
+-- * Unit tests of kind inference and checking (stage V2-2 of the notes;
+--   they build written types directly, since variable heads and kind
+--   annotations cannot be written before stage V3)
+
+kindCheckSpec :: TypingContext -> Spec
+kindCheckSpec tc = describe "kind inference and checking (unit tests)" $ do
+  let l = noLoc
+      f = Alpha 0 (User "f")
+      a = Alpha 0 (User "a")
+      tInt = l (S.TCon nameTyInt)
+      kType = l (S.TCon nameKindType)
+      kMult = l (S.TCon nameKindMultiplicity)
+      kArr k1 k2 = l (S.TApp (l (S.TApp (l (S.TCon nameKiArr)) k1)) k2)
+      arr m t1 t2 = l (S.TArr (l m) t1 t2)
+      forallK x mk t = l (S.TForall (S.TyBinder x mk) t)
+      tyArr = arrKi typeKi typeKi
+      binderKinds (TyForAll vs _) = map tyVarKind vs
+      binderKinds _ = []
+
+  it "infers the kind of a variable applied to an argument: forall f. f Int -> Int gives f : Type -> Type" $ do
+    t <- runTCFresh tc $ convertWrittenTy $
+      forallK f Nothing (arr (S.TMult Omega) (l (S.TApp (l (S.TVar f)) tInt)) tInt)
+    binderKinds t `shouldBe` [tyArr]
+
+  it "defaults an undetermined kind to Type: forall a. Int -> Int" $ do
+    t <- runTCFresh tc $ convertWrittenTy $ forallK a Nothing (arr (S.TMult Omega) tInt tInt)
+    binderKinds t `shouldBe` [typeKi]
+
+  it "uses the kind annotation of a forall binder" $ do
+    -- forall (a : Multiplicity). Int # a -> Int
+    t <- runTCFresh tc $ convertWrittenTy $
+      forallK a (Just kMult) (arr (S.TVar a) tInt tInt)
+    binderKinds t `shouldBe` [multKi]
+    -- forall (a : Type). Int # a -> Int
+    runTCFresh tc (convertWrittenTy (forallK a (Just kType) (arr (S.TVar a) tInt tInt)))
+      `shouldThrow` staticError
+    -- forall (f : Type -> Type). f Int -> Int
+    t' <- runTCFresh tc $ convertWrittenTy $
+      forallK f (Just (kArr kType kType)) (arr (S.TMult Omega) (l (S.TApp (l (S.TVar f)) tInt)) tInt)
+    binderKinds t' `shouldBe` [tyArr]
+
+  it "checks a kind annotation (t : k)" $ do
+    _ <- runTCFresh tc $ convertWrittenTy $ arr (S.TMult Omega) (l (S.TKind tInt kType)) tInt
+    runTCFresh tc (convertWrittenTy (arr (S.TMult Omega) (l (S.TKind tInt kMult)) tInt))
+      `shouldThrow` staticError
+
+  it "instantiates a binder with a meta of its kind" $ do
+    let p = BoundTv (mkName "p") multKi
+    TyQual _ t <- runTCFresh tc $ instantiateQ (TyForAll [p] (TyQual [] (TyVar p)))
+    case t of
+      TyMetaV m -> metaKind m `shouldBe` multKi
+      _ -> expectationFailure "not a meta"
+
+  it "generalizes a meta to a binder of its kind, defaulting kind metas to Type" $ do
+    t <- runTCFresh tc $ do
+      m <- newMetaTyVar multKi
+      quantify [m] (TyQual [] (TyMetaV m))
+    binderKinds t `shouldBe` [multKi]
+    t' <- runTCFresh tc $ do
+      k <- newMetaKind
+      m <- newMetaTyVar k
+      quantify [m] (TyQual [] (TyMetaV m))
+    binderKinds t' `shouldBe` [typeKi]
+
 main :: IO ()
 main = hspec $ do
   files <- runIO $ recursivelyListDirectories "./Examples"
@@ -195,6 +296,7 @@ main = hspec $ do
 
   unificationSpec tc
   kindSpec tc
+  kindCheckSpec tc
 
   describe "evaluator" $ do
     forM_ ["./TestCases/RuntimeError1.sparcl", "./TestCases/RuntimeError2.sparcl"] $ \fp ->
@@ -233,6 +335,8 @@ main = hspec $ do
       , ("ClassMethodWithoutParam.sparcl", "Main", tNames 2)
       , ("ClassInstArgInList.sparcl", "Main", tNames 2)
       , ("HigherRankLetCase.sparcl", "Main", ["t6", "t7"])
+      , -- a class application written with a synonym
+        ("KindSynonym.sparcl", "Main", ["t1"])
       ]
       $ \(f, m, ns) ->
         loadEval tc ("./Examples" </> f) `before` checkExpected f m ns

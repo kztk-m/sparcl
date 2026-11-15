@@ -469,7 +469,7 @@ renameTopDecls currentModule (Decls _ topdecls) = do
   let namedInsts = [ (loc, unBare x) | Loc loc (DInst (Just x) _ _) <- topdecls ]
 
   let conName (NormalC c _)      = c
-      conName (GeneralC c _ _ _) = c
+      conName (GeneralC c _) = c
   let names = ns
               ++ [ n | (_, n, _, _) <- dataDecls ]
               ++ [ unBare n | (_, _, _, cds) <- dataDecls, n <- map (conName . unLoc) cds ]
@@ -521,16 +521,11 @@ renameTopDecls currentModule (Decls _ topdecls) = do
         (Loc cloc (NormalC c tys)) -> do
           tys' <- mapM (renameTy (length tyns) nm) tys
           return $ Loc cloc (NormalC (toOrig $ unBare c) tys')
-        (Loc cloc (GeneralC c xs q ts)) -> do
-          let xs' = zipWith Alpha [length tyns..] $ map unBare xs
-          let lv  = length tyns + length xs
-          let nm' = foldr (uncurry M.insert) nm $ zip (map unBare xs) xs'
-          q'  <- mapM (renameTyC lv nm') q
-          ts' <- mapM (\(m,t) -> do
-                          m' <- renameTy lv nm' m
-                          t' <- renameTy lv nm' t
-                          return (m', t')) ts
-          return $ Loc cloc $ GeneralC (toOrig $ unBare c) xs' q' ts'
+        (Loc cloc (GeneralC c ty)) -> do
+          -- the parameters are in scope; the existentials are bound by the
+          -- signature's foralls
+          ty' <- renameTy (length tyns) nm ty
+          return $ Loc cloc $ GeneralC (toOrig $ unBare c) ty'
       return $ Loc loc (toOrig n, bs', cdecls')
 
     renameLocalDeclsWork level' M.empty currnames (Decls () decls) $ \ds' _ _ _boundVars _ opTable ->
@@ -557,11 +552,7 @@ renameTopDecls currentModule (Decls _ topdecls) = do
       let lv  = length xs
       let nm  = M.fromList $ zip xs xs'
 
-      sups' <- forM sups $ \s -> do
-        s' <- renameTy lv nm s
-        unless (isClassAppTy s') $
-          throwError (location s, text "A superclass must be of the form C t1 ... tn:" <+> ppr s)
-        return s'
+      sups' <- forM sups $ renameTy lv nm
 
       let sigs = [ (l, unBare n, t) | Loc l (DSig n t) <- cds ]
       let ms   = [ n | (_, n, _) <- sigs ]
@@ -582,8 +573,8 @@ renameTopDecls currentModule (Decls _ topdecls) = do
       return $ Loc loc (toOrig c, bs', sups', sigs', dms')
 
     renameInstDecl (loc, n, ty, ids) = do
+      -- the form of the instance type is checked by the type checker
       ty' <- renameTy 0 M.empty ty
-      checkInstTy ty'
 
       forM_ ids $ \case
         Loc l (DSig _ _) ->
@@ -617,35 +608,6 @@ renameTyBinders = zipWithM $ \(TyBinder _ mk) n' -> TyBinder n' <$> traverse (re
 -- | Renamed instance: name (generated if omitted), type, method definitions.
 type InstDeclR = (Name, LTy 'Renaming, [LDecl 'Renaming])
 
--- | Checks if a type has the form @C t1 ... tn@.
-isClassAppTy :: LTy 'Renaming -> Bool
-isClassAppTy lty = case unLoc (stripTParens lty) of
-  TCon _     -> True
-  TApp t _   -> isClassAppTy t
-  _          -> False
-
--- | Checks that an instance type has the form @forall as. {{T1}} -> ... -> {{Tm}} -> C ts@.
-checkInstTy :: LTy 'Renaming -> Renaming ()
-checkInstTy lty = do
-  let (xs, ty)   = peelForall lty
-  let (args, hd) = peelInstArr ty
-  forM_ args $ \a ->
-    unless (isClassAppTy a) $
-      throwError (location a, text "An instance argument of an instance must be of the form C t1 ... tn:" <+> ppr a)
-  unless (isClassAppTy hd) $
-    throwError (location hd, text "The head of an instance must be of the form C t1 ... tn:" <+> ppr hd)
-  let fvs = freeTyVars hd :: [Name]
-  forM_ xs $ \x ->
-    unless (x `elem` fvs) $
-      throwError (location lty, text "Type variable" <+> ppr x <+> text "does not occur in the instance head" <+> ppr hd)
-  where
-    peelForall t = case unLoc (stripTParens t) of
-      TForall x t' -> first (tyBinderName x :) (peelForall t')
-      _            -> ([], t)
-
-    peelInstArr t = case unLoc (stripTParens t) of
-      TInstArr a t' -> first (a:) (peelInstArr t')
-      _             -> ([], t)
 
   -- where
   --   mapDecls f (Decls i ds)   = Decls  i (map f ds)

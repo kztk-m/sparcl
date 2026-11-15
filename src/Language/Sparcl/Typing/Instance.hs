@@ -62,8 +62,8 @@ data V = VB TyVar | VM MetaTyVar
 type Sub = [(V, Ty)]
 
 -- | Unification over the given variables (and metas if @metasFlexible@) that writes no metas.
-unifyPure :: [TyVar] -> Bool -> Ty -> Ty -> Maybe Sub
-unifyPure vs metasFlexible = go []
+unifyPure :: TypeTable -> [TyVar] -> Bool -> Ty -> Ty -> Maybe Sub
+unifyPure tbl vs metasFlexible = go []
   where
     varOf (TyVar v) | v `elem` vs = Just (VB v)
     varOf (TyMetaV m) | metasFlexible = Just (VM m)
@@ -94,7 +94,11 @@ unifyPure vs metasFlexible = go []
 
     bind s v t
       | occurs s v t = Nothing
+      | kindOfV v /= kindOf tbl t = Nothing
       | otherwise = Just ((v, t) : s)
+
+    kindOfV (VB x) = tyVarKind x
+    kindOfV (VM m) = metaKind m
 
     occurs s v t =
       let t' = walk s t
@@ -172,8 +176,9 @@ searchTy _ depth ty
   | depth > maxSearchDepth = pure (STooDeep ty)
 searchTy g depth ty@(TyCon c _) = do
   (locals, cut) <- localCandidates (maxSearchDepth - depth) (goalLocals g)
-  let matching = [e | (lt, e) <- locals, isJust (unifyPure [] False lt ty)]
-      unifiable = [() | (lt, _) <- locals, isJust (unifyPure [] True lt ty)]
+  tbl <- asks tcTyEnv
+  let matching = [e | (lt, e) <- locals, isJust (unifyPure tbl [] False lt ty)]
+      unifiable = [() | (lt, _) <- locals, isJust (unifyPure tbl [] True lt ty)]
   case matching of
     e : _ -> pure (SFound e [])
     []
@@ -182,13 +187,14 @@ searchTy g depth ty@(TyCon c _) = do
   where
     globals cut = do
       ienv <- asks tcInstEnv
+      tbl <- asks tcTyEnv
       cands <- forM (maybe [] M.toList (M.lookup c ienv)) $ \(x, ity) -> do
         ity' <- normTy ity
         pure (x, ity, splitInstTy ity')
-      let us = [cand | cand@(_, _, (vs, _, hd)) <- cands, isJust (unifyPure vs True hd ty)]
+      let us = [cand | cand@(_, _, (vs, _, hd)) <- cands, isJust (unifyPure tbl vs True hd ty)]
       case us of
         [] -> pure (if cut then STooDeep ty else SNoInstance ty)
-        [(x, ity, (vs, hs, hd))] -> case unifyPure vs False hd ty of
+        [(x, ity, (vs, hs, hd))] -> case unifyPure tbl vs False hd ty of
           Nothing -> pure SStuck
           Just s -> commit x ity (map (applySub s) hs)
         _

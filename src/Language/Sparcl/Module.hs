@@ -281,7 +281,10 @@ restrictNames ns mi =
         ModuleContext
           { mcNameTable = M.mapMaybe conv (mcNameTable mc)
           , mcOpTable = restrict (mcOpTable mc)
-          , mcTypeTable = restrict (mcTypeTable mc)
+          , -- the kinds of the type-level names reachable from what is kept
+            -- are kept too (D4-c in the notes): types of imported values
+            -- may mention types that are not imported
+            mcTypeTable = M.restrictKeys (mcTypeTable mc) (S.union ns' reachableTyNames)
           , mcConTable = restrict (mcConTable mc)
           , mcSynTable = restrict (mcSynTable mc)
           , mcValueTable = M.filterWithKey (\n _ -> S.member n ns' || isImplicitValueName (mcInstTable mc) n) (mcValueTable mc)
@@ -295,6 +298,24 @@ restrictNames ns mi =
 
     restrict :: M.Map Name a -> M.Map Name a
     restrict x = M.restrictKeys x ns'
+
+    -- type constructor names in the kept values, constructors and synonyms
+    -- and in the whole class and instance tables, closed under the bodies
+    -- of the synonyms reached
+    reachableTyNames = closeSyns (S.unions (map tyConNames roots)) S.empty
+      where
+        roots =
+          M.elems (restrict (mcTypeTable mc))
+            ++ map conTy2Ty (M.elems (restrict (mcConTable mc)))
+            ++ map snd (M.elems (restrict (mcSynTable mc)))
+            ++ concat [ciSupers ci ++ map snd (ciMethods ci) | ci <- M.elems (mcClassTable mc)]
+            ++ concatMap M.elems (M.elems (mcInstTable mc))
+    closeSyns todo done
+      | S.null todo = done
+      | otherwise =
+          let done' = S.union done todo
+              new = S.unions [tyConNames body | n <- S.toList todo, Just (_, body) <- [M.lookup n (mcSynTable mc)]]
+          in  closeSyns (new `S.difference` done') done'
 
     mnsI = S.fromList [(mn, n) | Original mn n _ <- ns]
 
