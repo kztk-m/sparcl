@@ -57,10 +57,10 @@ runDesugar m = runReaderT m 0
 
 numberOfArgs :: T.Ty -> Int
 numberOfArgs (T.TyForAll _ (T.TyQual _ t)) = numberOfArgs t
-numberOfArgs (T.TyCon n [_, _, t]) | n == nameTyArr = numberOfArgs t + 1
+numberOfArgs (T.TyFun _ _ t) = numberOfArgs t + 1
 -- TODO: no constructor takes instance arguments yet; counted for when
 -- constructors may take them.
-numberOfArgs (T.TyCon n [_, t]) | n == nameTyInstArr = numberOfArgs t + 1
+numberOfArgs (T.TyInstFun _ t) = numberOfArgs t + 1
 numberOfArgs _ = 0
 
 desugarExp :: S.LExp 'TypeCheck -> Desugar (C.Exp Name)
@@ -448,5 +448,5 @@ desugarInstance cenv ti = do
   return (tiName ti, tiType ti, foldr C.Abs e ds)
   where
     headTy (T.TyForAll _ (T.TyQual _ t)) = headTy t
-    headTy (T.InstFunTy _ t) = headTy t
+    headTy (T.TyInstFun _ t) = headTy t
     headTy t = t

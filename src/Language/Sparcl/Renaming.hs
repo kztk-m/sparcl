@@ -21,7 +21,7 @@ import           Data.Void
 import           Data.Graph                     as G
 import           Data.List                      (partition)
 
-import           Control.Monad                  (when, unless, forM, forM_)
+import           Control.Monad                  (when, unless, forM, forM_, zipWithM)
 import           Control.Monad.Except
 import           Control.Monad.Reader
 import           Control.Monad.State
@@ -443,8 +443,8 @@ renameLocalDecls level localnames ds@(Decls _ decls) cont = do
 renameTopDecls ::
   ModuleName -> Decls 'Parsing (Loc (TopDecl 'Parsing))
   -> Renaming (Decls 'Renaming (Loc (Decl 'Renaming)),
-               [Loc (Name, [Name], [Loc (CDecl 'Renaming)])],
-               [Loc (Name, [Name], LTy 'Renaming)],
+               [Loc (Name, [TyBinder 'Renaming], [Loc (CDecl 'Renaming)])],
+               [Loc (Name, [TyBinder 'Renaming], LTy 'Renaming)],
                [Loc ClassDeclR],
                [Loc InstDeclR],
                BoundVars,
@@ -454,11 +454,11 @@ renameTopDecls currentModule (Decls _ topdecls) = do
   let decls = [ Loc loc d | Loc loc (DDecl d) <- topdecls ]
   let defs = [ (loc, unBare n, pcs)  | Loc loc (DDef n pcs) <- decls ]
 
-  let dataDecls = [ (loc, unBare n, map unBare ns, cds) |
-                    Loc loc (DData n ns cds) <- topdecls ]
-  let typeDecls = [ (loc, unBare n, map unBare ns, ty) | Loc loc (DType n ns ty) <- topdecls ]
+  let dataDecls = [ (loc, unBare n, bs, cds) |
+                    Loc loc (DData n bs cds) <- topdecls ]
+  let typeDecls = [ (loc, unBare n, bs, ty) | Loc loc (DType n bs ty) <- topdecls ]
 
-  let classDecls = [ (loc, unBare c, map unBare xs, sups, declList cds) |
+  let classDecls = [ (loc, unBare c, xs, sups, declList cds) |
                      Loc loc (DClass c xs sups cds) <- topdecls ]
   let instDecls = [ (loc, maybe (System (NInstance k)) unBare mx, ty, declList ids) |
                     (k, Loc loc (DInst mx ty ids)) <- zip [0..] [ d | d@(Loc _ DInst {}) <- topdecls ] ]
@@ -505,13 +505,17 @@ renameTopDecls currentModule (Decls _ topdecls) = do
 
   local (\rnEnv -> rnEnv { rnNameTable = M.unionWith S.union nameTbl (rnNameTable rnEnv),
                            rnOpTable   = M.union classOpTable (rnOpTable rnEnv) }) $ do
-    typeDecls' <- forM typeDecls $ \(loc, n, tyns, ty) -> do
+    typeDecls' <- forM typeDecls $ \(loc, n, bs, ty) -> do
+      let tyns  = binderBases bs
       let tyns' = zipWith Alpha [0..] tyns
       ty' <- renameTy (length tyns) (M.fromList $ zip tyns tyns') ty
-      return $ Loc loc (toOrig n, tyns', ty')
+      bs' <- renameTyBinders bs tyns'
+      return $ Loc loc (toOrig n, bs', ty')
 
-    dataDecls' <- forM dataDecls $ \(loc, n, tyns, cdecls) -> do
+    dataDecls' <- forM dataDecls $ \(loc, n, bs, cdecls) -> do
+      let tyns  = binderBases bs
       let tyns' = zipWith Alpha [0..] tyns
+      bs' <- renameTyBinders bs tyns'
       let nm = M.fromList $ zip tyns tyns'
       cdecls' <- forM cdecls $ \case
         (Loc cloc (NormalC c tys)) -> do
@@ -527,7 +531,7 @@ renameTopDecls currentModule (Decls _ topdecls) = do
                           t' <- renameTy lv nm' t
                           return (m', t')) ts
           return $ Loc cloc $ GeneralC (toOrig $ unBare c) xs' q' ts'
-      return $ Loc loc (toOrig n, tyns', cdecls')
+      return $ Loc loc (toOrig n, bs', cdecls')
 
     renameLocalDeclsWork level' M.empty currnames (Decls () decls) $ \ds' _ _ _boundVars _ opTable ->
       local (\rnEnv -> rnEnv { rnOpTable = M.union opTable (rnOpTable rnEnv) }) $ do
@@ -546,8 +550,10 @@ renameTopDecls currentModule (Decls _ topdecls) = do
     declList (Decls _ ds)  = ds
     declList (HDecls v _) = absurd v
 
-    renameClassDecl (loc, c, xs, sups, cds) = do
+    renameClassDecl (loc, c, bs, sups, cds) = do
+      let xs  = binderBases bs
       let xs' = zipWith Alpha [0..] xs
+      bs' <- renameTyBinders bs xs'
       let lv  = length xs
       let nm  = M.fromList $ zip xs xs'
 
@@ -573,7 +579,7 @@ renameTopDecls currentModule (Decls _ topdecls) = do
         (pcs', _) <- renameDefClauses 0 M.empty l n pcs
         return $ Loc l (DDef (toOrig n) pcs')
 
-      return $ Loc loc (toOrig c, xs', sups', sigs', dms')
+      return $ Loc loc (toOrig c, bs', sups', sigs', dms')
 
     renameInstDecl (loc, n, ty, ids) = do
       ty' <- renameTy 0 M.empty ty
@@ -597,15 +603,26 @@ renameTopDecls currentModule (Decls _ topdecls) = do
       return $ Loc loc (toOrig n, ty', ims')
 
 -- | Renamed class: name, parameters, superclasses, method sigs, default methods.
-type ClassDeclR = (Name, [Name], [LTy 'Renaming], [Loc (Name, LTy 'Renaming)], [LDecl 'Renaming])
+type ClassDeclR = (Name, [TyBinder 'Renaming], [LTy 'Renaming], [Loc (Name, LTy 'Renaming)], [LDecl 'Renaming])
+
+-- | The base names of binders of type variables.
+binderBases :: [TyBinder 'Parsing] -> [NameBase]
+binderBases = map (unBare . tyBinderName)
+
+-- | Renames binders of type variables to the given names; kind annotations
+--   mention only built-in names.
+renameTyBinders :: [TyBinder 'Parsing] -> [Name] -> Renaming [TyBinder 'Renaming]
+renameTyBinders = zipWithM $ \(TyBinder _ mk) n' -> TyBinder n' <$> traverse (renameTy 0 M.empty) mk
 
 -- | Renamed instance: name (generated if omitted), type, method definitions.
 type InstDeclR = (Name, LTy 'Renaming, [LDecl 'Renaming])
 
 -- | Checks if a type has the form @C t1 ... tn@.
 isClassAppTy :: LTy 'Renaming -> Bool
-isClassAppTy (Loc _ (TCon c _)) = c `notElem` [nameTyArr, nameTyInstArr]
-isClassAppTy _                  = False
+isClassAppTy lty = case unLoc (stripTParens lty) of
+  TCon _     -> True
+  TApp t _   -> isClassAppTy t
+  _          -> False
 
 -- | Checks that an instance type has the form @forall as. {{T1}} -> ... -> {{Tm}} -> C ts@.
 checkInstTy :: LTy 'Renaming -> Renaming ()
@@ -622,11 +639,13 @@ checkInstTy lty = do
     unless (x `elem` fvs) $
       throwError (location lty, text "Type variable" <+> ppr x <+> text "does not occur in the instance head" <+> ppr hd)
   where
-    peelForall (Loc _ (TForall x t)) = first (x:) (peelForall t)
-    peelForall t                     = ([], t)
+    peelForall t = case unLoc (stripTParens t) of
+      TForall x t' -> first (tyBinderName x :) (peelForall t')
+      _            -> ([], t)
 
-    peelInstArr (Loc _ (TCon c [a, t])) | c == nameTyInstArr = first (a:) (peelInstArr t)
-    peelInstArr t                                             = ([], t)
+    peelInstArr t = case unLoc (stripTParens t) of
+      TInstArr a t' -> first (a:) (peelInstArr t')
+      _             -> ([], t)
 
   -- where
   --   mapDecls f (Decls i ds)   = Decls  i (map f ds)
@@ -660,16 +679,40 @@ renameTy level localnames lty = go level localnames lty (\lty' _ _ -> return lty
         Just n  -> k (TVar n) lv nm
         Nothing -> throwError (loc, text "Unbound type variable:" <+> ppr x)
 
-    go' lv nm loc (TCon c ts) k = do
+    go' lv nm loc (TCon c) k = do
       c' <- resolveImportedName loc c
-      gos lv nm ts $ \ts' lv' nm' ->
-        k (TCon c' ts') lv' nm'
+      k (TCon c') lv nm
 
-    go' lv nm _loc (TForall x t) k = do
+    go' lv nm _loc (TApp t1 t2) k =
+      go lv  nm  t1 $ \t1' lv1 nm1 ->
+      go lv1 nm1 t2 $ \t2' lv2 nm2 ->
+      k (TApp t1' t2') lv2 nm2
+
+    go' lv nm _loc (TParens t) k =
+      go lv nm t $ \t' lv' nm' -> k (TParens t') lv' nm'
+
+    go' lv nm _loc (TArr m t1 t2) k =
+      go lv  nm  m  $ \m'  lv1 nm1 ->
+      go lv1 nm1 t1 $ \t1' lv2 nm2 ->
+      go lv2 nm2 t2 $ \t2' lv3 nm3 ->
+      k (TArr m' t1' t2') lv3 nm3
+
+    go' lv nm _loc (TInstArr c t) k =
+      go lv  nm  c $ \c' lv1 nm1 ->
+      go lv1 nm1 t $ \t' lv2 nm2 ->
+      k (TInstArr c' t') lv2 nm2
+
+    go' lv nm _loc (TForall (TyBinder x mk) t) k = do
       let bn = unBare x
       let x'  = Alpha lv bn
       let nm' = M.insert bn x' nm
-      go (lv+1) nm' t $ \t' lv'' nm'' -> k (TForall x' t') lv'' nm''
+      -- kind annotations mention only built-in names
+      mk' <- traverse (renameTy 0 M.empty) mk
+      go (lv+1) nm' t $ \t' lv'' nm'' -> k (TForall (TyBinder x' mk') t') lv'' nm''
+
+    go' lv nm _loc (TKind t kd) k = do
+      kd' <- renameTy 0 M.empty kd
+      go lv nm t $ \t' lv' nm' -> k (TKind t' kd') lv' nm'
 
     go' lv nm _loc (TMult m) k = k (TMult m) lv nm
     go' lv nm _loc (TQual cs t) k =

@@ -301,8 +301,8 @@ type ClassTable = Map Name ClassInfo
 methodType :: Name -> [TyVar] -> Ty -> Ty
 methodType c params sigTy =
   case sigTy of
-    TyForAll bs (TyQual cs t) -> TyForAll (params ++ bs) (TyQual cs (InstFunTy dict t))
-    t -> TyForAll params (TyQual [] (InstFunTy dict t))
+    TyForAll bs (TyQual cs t) -> TyForAll (params ++ bs) (TyQual cs (TyInstFun dict t))
+    t -> TyForAll params (TyQual [] (TyInstFun dict t))
   where
     dict = TyCon c (map TyVar params)
 
@@ -312,7 +312,7 @@ superProjType c ci i =
   let ps = ciParams ci
   in  TyForAll ps $
         TyQual [] $
-          FunTy (TyMult Omega) (TyCon c (map TyVar ps)) (ciSupers ci !! i)
+          TyFun (TyMult Omega) (TyCon c (map TyVar ps)) (ciSupers ci !! i)
 
 -- | Instances: class name -> instance name -> instance type.
 type InstTable = Map Name (Map Name Ty)
@@ -889,7 +889,18 @@ resolveSyn ty = do
     go _synMap (TyMetaV m) = return (TyMetaV m)
     go synMap (TySyn origTy actualTy) =
       TySyn origTy <$> go synMap actualTy
-    go synMap orig@(TyCon c ts) =
+    go synMap orig@(TyConst c) = goSpine synMap orig c []
+    -- the whole spine is handled here, so that its head is inspected once
+    go synMap orig@(TyApp _ _) =
+      case splitTyApp orig of
+        (TyConst c, ts) -> goSpine synMap orig c ts
+        (h, ts) -> foldl TyApp <$> go synMap h <*> mapM (go synMap) ts
+    go synMap (TyFun m t1 t2) = TyFun <$> go synMap m <*> go synMap t1 <*> go synMap t2
+    go synMap (TyInstFun c t) = TyInstFun <$> go synMap c <*> go synMap t
+    go _ (TyMult m) = return $ TyMult m
+
+    -- an application @c ts@ of a type constructor (@orig@ itself)
+    goSpine synMap orig c ts =
       case M.lookup c synMap of
         Nothing ->
           TyCon c <$> mapM (go synMap) ts
@@ -899,7 +910,6 @@ resolveSyn ty = do
         Just _ -> do
           reportError $ Other $ D.hsep [D.text "Type synonym", D.dquotes (ppr c), D.text "must be fully-applied."]
           abortTyping
-    go _ (TyMult m) = return $ TyMult m
 
 -- withVar x ty mult =
 --   local (\tc -> tc { tcTyEnv = M.insert x (ty, mult) (tcTyEnv tc) })
@@ -969,8 +979,10 @@ zonkMetaTyVar mv = {- trace "zonk!" $ -} do
 
 zonkType :: Ty -> TC Ty
 zonkType (TyVar n) = return $ TyVar n
-zonkType (TyCon c ts) =
-  TyCon c <$> traverse zonkType ts
+zonkType (TyConst c) = return (TyConst c)
+zonkType (TyApp t1 t2) = TyApp <$> zonkType t1 <*> zonkType t2
+zonkType (TyFun m t1 t2) = TyFun <$> zonkType m <*> zonkType t1 <*> zonkType t2
+zonkType (TyInstFun c t) = TyInstFun <$> zonkType c <*> zonkType t
 zonkType (TyForAll ns t) =
   TyForAll ns <$> zonkTypeQ t
 zonkType (TyMetaV m) = zonkMetaTyVar m
@@ -1030,9 +1042,14 @@ zonkErrorDetail (LessPolymorphic ty1@(TyMetaV mv) ty2 escaped) = do
       LessPolymorphic <$> zonkType ty1 <*> pure ty2' <*> pure escaped
   where
     containsForAll (TyForAll _ _) = True
-    containsForAll (TyCon _ ts) = any containsForAll ts
+    containsForAll (TyApp t1 t2) = containsForAll t1 || containsForAll t2
+    containsForAll (TyFun m t1 t2) = any containsForAll [m, t1, t2]
+    containsForAll (TyInstFun c t) = containsForAll c || containsForAll t
     containsForAll (TySyn _ t) = containsForAll t
-    containsForAll _ = False
+    containsForAll (TyConst _) = False
+    containsForAll (TyVar _) = False
+    containsForAll (TyMetaV _) = False
+    containsForAll (TyMult _) = False
 zonkErrorDetail (LessPolymorphic ty1 ty2 escaped) =
   LessPolymorphic <$> zonkType ty1 <*> zonkType ty2 <*> pure escaped
 zonkErrorDetail (NoInstance ty) = NoInstance <$> zonkType ty
@@ -1048,9 +1065,9 @@ skolemize (TyForAll tvs ty) = do
   sks1 <- localIcLevel (const (-1)) $ mapM newSkolemTyVar tvs
   (sks2, TyQual cs2 ty2) <- skolemizeQ $ substTyQ (zip tvs $ map TyVar sks1) ty
   return (sks1 ++ sks2, TyQual cs2 ty2)
-skolemize (FunTy m argTy resTy) = do
+skolemize (TyFun m argTy resTy) = do
   (sks, TyQual cs resTy') <- skolemize resTy
-  pure (sks, TyQual cs (FunTy m argTy resTy'))
+  pure (sks, TyQual cs (TyFun m argTy resTy'))
 skolemize ty = return ([], TyQual [] ty)
 
 skolemizeQ :: QualTy -> TC ([TyVar], QualTy)
@@ -1071,12 +1088,19 @@ unifyWork t1 (TySyn _ t2) = unifyWork t1 t2
 unifyWork (TyMetaV mv1) (TyMetaV mv2) | mv1 == mv2 = return ()
 unifyWork (TyMetaV mv) ty = unifyMetaTyVar mv ty
 unifyWork ty (TyMetaV mv) = unifyMetaTyVar mv ty
-unifyWork (TyCon c ts) (TyCon c' ts') | c == c' = do
-  when (length ts /= length ts') $
-    reportError $
-      Other $
-        D.hsep [D.text "Type construtor", ppr c, D.text "has different number of arguments."]
-  zipWithM_ unifyWork ts ts'
+unifyWork (TyConst c) (TyConst c') | c == c' = return ()
+-- applications are decomposed from the right, whatever their heads are
+unifyWork (TyApp t1 t2) (TyApp t1' t2') = do
+  unifyWork t1 t1'
+  unifyWork t2 t2'
+-- function types are never decomposed into applications
+unifyWork (TyFun m t1 t2) (TyFun m' t1' t2') = do
+  unifyWork m m'
+  unifyWork t1 t1'
+  unifyWork t2 t2'
+unifyWork (TyInstFun c t) (TyInstFun c' t') = do
+  unifyWork c c'
+  unifyWork t t'
 unifyWork (TyMult m) (TyMult m') | m == m' = return ()
 unifyWork (TyVar x1) (TyVar x2) | x1 == x2 = return ()
 unifyWork (TyVar x) t = do

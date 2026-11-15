@@ -12,8 +12,9 @@ module Language.Sparcl.Surface.Syntax (
   LTy,
   Ty (..),
   TConstraint (..),
-  isTyArr,
-  isTyInstArr,
+  TyBinder (..),
+  tyBinderName,
+  stripTParens,
   decomposeArrTy,
   decomposeTyCon,
   LPat,
@@ -73,12 +74,29 @@ The following would be a bit generous definition, but
 we want to allow types that are parameterized by multiplicity.
 -}
 
+-- Type-level expressions as written: applications are binary and may be
+-- headed by any type-level expression (kinds decide what is accepted), and
+-- parentheses are kept. The two kinds of function types are constructs of
+-- their own, not applications of type constructors.
 data Ty (p :: Pass)
   = TVar !(XTId p)
-  | TCon !(XTId p) ![LTy p]
-  | TForall !(XTId p) !(LTy p)
+  | TCon !(XTId p) -- unapplied
+  | TApp !(LTy p) !(LTy p)
+  | TParens !(LTy p) -- ( t )
+  | TArr !(LTy p) !(LTy p) !(LTy p) -- a # m -> b, as TArr m a b
+  | TInstArr !(LTy p) !(LTy p) -- {{C}} -> t
+  | TForall !(TyBinder p) !(LTy p)
+  | TKind !(LTy p) !(LTy p) -- (t : k)
   | TQual ![TConstraint p] !(LTy p)
   | TMult !Multiplicity
+
+-- | A binder of a type variable with an optional kind annotation:
+--   @x@ or @(x : k)@ (parameters of data types, synonyms and classes, and
+--   @forall@).
+data TyBinder p = TyBinder !(XTId p) !(Maybe (LTy p))
+
+tyBinderName :: TyBinder p -> XTId p
+tyBinderName (TyBinder x _) = x
 
 -- TODO: Maybe, we should add Eq or Ord later.
 data TConstraint p
@@ -90,8 +108,13 @@ instance (Ord a, a ~ XTId p) => FreeTyVars (LTy p) a where
 
 instance (Ord a, a ~ XTId p) => FreeTyVars (Ty p) a where
   foldMapVars f _ (TVar x) = f x
-  foldMapVars f b (TCon _ ts) = foldMapVars f b ts
-  foldMapVars f b (TForall x t) = b x $ foldMapVars f b t
+  foldMapVars _ _ (TCon _) = mempty
+  foldMapVars f b (TApp t1 t2) = foldMapVars f b t1 <> foldMapVars f b t2
+  foldMapVars f b (TParens t) = foldMapVars f b t
+  foldMapVars f b (TArr m t1 t2) = foldMapVars f b m <> foldMapVars f b t1 <> foldMapVars f b t2
+  foldMapVars f b (TInstArr c t) = foldMapVars f b c <> foldMapVars f b t
+  foldMapVars f b (TForall x t) = b (tyBinderName x) $ foldMapVars f b t
+  foldMapVars f b (TKind t _) = foldMapVars f b t -- kinds contain no variables
   foldMapVars f b (TQual cs t) = foldMapVars f b cs <> foldMapVars f b t
   foldMapVars _ _ (TMult _) = mempty
 
@@ -114,50 +137,47 @@ instance (AllPretty p) => Pretty (TConstraint p) where
       go x [] = ppr x
       go x (y : ys) = ppr x <> text "*" <> go y ys
 
-isTyArr :: forall p. (Typeable p) => Proxy p -> XTId p -> Bool
-isTyArr _ n =
-  case eqT @p @'Parsing of
-    Just Refl -> n == BuiltIn nameTyArr
-    Nothing ->
-      case eqT @p @'Renaming of
-        Just Refl -> n == nameTyArr
-        _ -> False
+-- | Removes the parentheses around a type-level expression.
+stripTParens :: LTy p -> LTy p
+stripTParens (unLoc -> TParens t) = stripTParens t
+stripTParens t = t
 
--- | Checks if the name is the type constructor of {{C}} -> t (TCon nameTyInstArr [C, t]).
-isTyInstArr :: forall p. (Typeable p) => Proxy p -> XTId p -> Bool
-isTyInstArr _ n =
-  case eqT @p @'Parsing of
-    Just Refl -> n == BuiltIn nameTyInstArr
-    Nothing ->
-      case eqT @p @'Renaming of
-        Just Refl -> n == nameTyInstArr
-        _ -> False
-
-decomposeArrTy :: forall p. (Typeable p) => LTy p -> ([(LTy p, LTy p)], LTy p)
-decomposeArrTy (unLoc -> TCon c [m, t2, t3])
-  | isTyArr @p Proxy c =
-      let (args, ret) = decomposeArrTy t3
-      in  ((t2, m) : args, ret)
+-- | Splits a function type @t1 # m1 -> ... -> tn # mn -> t@ into the
+--   pairs @(ti, mi)@ and @t@ (through parentheses).
+decomposeArrTy :: LTy p -> ([(LTy p, LTy p)], LTy p)
+decomposeArrTy (stripTParens -> Loc _ (TArr m t2 t3)) =
+  let (args, ret) = decomposeArrTy t3
+  in  ((t2, m) : args, ret)
 decomposeArrTy ty = ([], ty)
 
+-- | The arguments of an application of the type constructor @c@ (through
+--   parentheses). Used for the result types of GADT constructors until
+--   their check moves to type checking (stage V2-2 of the notes).
 decomposeTyCon :: (Eq (XTId p)) => XTId p -> LTy p -> Maybe [LTy p]
-decomposeTyCon c (unLoc -> TCon c' ts) | c == c' = Just ts
-decomposeTyCon _ _ = Nothing
+decomposeTyCon c = go []
+  where
+    go acc (stripTParens -> Loc _ (TApp t1 t2)) = go (t2 : acc) t1
+    go acc (stripTParens -> Loc _ (TCon c')) | c == c' = Just acc
+    go _ _ = Nothing
+
+instance (AllPretty p) => Pretty (TyBinder p) where
+  ppr (TyBinder x Nothing) = ppr x
+  ppr (TyBinder x (Just k)) = parens (ppr x <+> text ":" <+> ppr k)
 
 instance (AllPretty p) => Pretty (Ty p) where
   pprPrec _ (TVar n) = ppr n
-  pprPrec k (TCon c [m, t1, t2])
-    | isTyArr (Proxy :: Proxy p) c =
-        let arr = case unLoc m of
-              TMult Omega -> line <> text "->"
-              TMult One -> line <> text "-o"
-              _ -> text " " <> text "#" <+> ppr m D.<$> text "->"
-        in  parensIf (k > 0) $ D.group $ pprPrec 1 t1 <> arr <+> pprPrec 0 t2
-  pprPrec k (TCon c [t1, t2])
-    | isTyInstArr (Proxy :: Proxy p) c =
-        parensIf (k > 0) $ D.group $ D.text "{{" <> pprPrec 0 t1 <> D.text "}}" <> line <> text "->" <+> pprPrec 0 t2
-  pprPrec _ (TCon c []) = ppr c
-  pprPrec k (TCon c ts) = parensIf (k > 1) $ ppr c D.<+> D.hsep (map (pprPrec 2) ts)
+  pprPrec _ (TCon c) = ppr c
+  pprPrec k (TApp t1 t2) = parensIf (k > 1) $ pprPrec 1 t1 D.<+> pprPrec 2 t2
+  pprPrec _ (TParens t) = parens (pprPrec 0 t)
+  pprPrec k (TArr m t1 t2) =
+    let arr = case unLoc m of
+          TMult Omega -> line <> text "->"
+          TMult One -> line <> text "-o"
+          _ -> text " " <> text "#" <+> ppr m D.<$> text "->"
+    in  parensIf (k > 0) $ D.group $ pprPrec 1 t1 <> arr <+> pprPrec 0 t2
+  pprPrec k (TInstArr t1 t2) =
+    parensIf (k > 0) $ D.group $ D.text "{{" <> pprPrec 0 t1 <> D.text "}}" <> line <> text "->" <+> pprPrec 0 t2
+  pprPrec _ (TKind t kd) = parens (pprPrec 0 t <+> text ":" <+> pprPrec 0 kd)
   pprPrec k (TQual cs t) =
     parensIf (k > 0) $
       align $
@@ -171,6 +191,7 @@ instance (AllPretty p) => Pretty (Ty p) where
                 D.text "forall" D.<+> hsep (map ppr ns) <> text "." D.<$> pprPrec 0 t
     where
       gatherVars ns (TQual [] t) = gatherVars ns (unLoc t)
+      gatherVars ns (TParens t) = gatherVars ns (unLoc t)
       gatherVars ns (TForall m t) = gatherVars (m : ns) (unLoc t)
       gatherVars ns t = (reverse ns, t)
   pprPrec _ (TMult m) = ppr m
@@ -491,9 +512,9 @@ type family XHDecls p where
 
 data TopDecl p
   = DDecl !(Decl p)
-  | DData !(XId p) ![XId p] ![Loc (CDecl p)] -- data type declaration
-  | DType !(XId p) ![XId p] !(LTy p)
-  | DClass !(XTId p) ![XTId p] ![LTy p] !(Decls p (LDecl p)) -- class C a1 ... an extends S1, ..., Sm where ... end
+  | DData !(XTId p) ![TyBinder p] ![Loc (CDecl p)] -- data type declaration
+  | DType !(XTId p) ![TyBinder p] !(LTy p)
+  | DClass !(XTId p) ![TyBinder p] ![LTy p] !(Decls p (LDecl p)) -- class C a1 ... an extends S1, ..., Sm where ... end
   | DInst !(Maybe (XId p)) !(LTy p) !(Decls p (LDecl p)) -- instance [x :] {{S1}} -> ... -> C t1 ... tn where ... end
 
 data Decl p

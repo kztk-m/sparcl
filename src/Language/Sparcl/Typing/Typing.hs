@@ -54,14 +54,21 @@ ty2ty :: S.LTy 'Renaming -> Ty
 ty2ty (Loc _ ty) = go ty
   where
     go (S.TVar x) = TyVar (BoundTv x)
-    go (S.TCon c ts) = TyCon c $ map ty2ty ts
-    go (S.TForall x t) = gatherBoundTv [BoundTv x] t
+    go (S.TCon c) = TyConst c
+    go (S.TApp t1 t2) = TyApp (ty2ty t1) (ty2ty t2)
+    go (S.TParens t) = ty2ty t
+    go (S.TArr m t1 t2) = TyFun (ty2ty m) (ty2ty t1) (ty2ty t2)
+    go (S.TInstArr c t) = TyInstFun (ty2ty c) (ty2ty t)
+    go (S.TForall x t) = gatherBoundTv [binderTv x] t
+    go (S.TKind t _) = ty2ty t -- kind annotations are given meaning at stage V2-2
     go (S.TMult m) = TyMult m
     go t@(S.TQual _ _) =
       let (t', cs') = gatherConstraints t
       in  TyForAll [] $ TyQual cs' t'
 
-    gatherBoundTv xs (unLoc -> S.TForall y t) = gatherBoundTv (BoundTv y : xs) t
+    binderTv = BoundTv . S.tyBinderName
+
+    gatherBoundTv xs (unLoc . S.stripTParens -> S.TForall y t) = gatherBoundTv (binderTv y : xs) t
     gatherBoundTv xs t =
       let (t', cs) = gatherConstraintsL t
       in  TyForAll (reverse xs) $ TyQual cs t'
@@ -69,10 +76,23 @@ ty2ty (Loc _ ty) = go ty
     gatherConstraintsL = gatherConstraints . unLoc
 
     gatherConstraints (S.TVar x) = (TyVar (BoundTv x), [])
-    gatherConstraints (S.TCon c ts) =
-      let tcs = map gatherConstraintsL ts
-      in  (TyCon c (map fst tcs), concatMap snd tcs)
-    gatherConstraints (S.TForall x t) = (gatherBoundTv [BoundTv x] t, [])
+    gatherConstraints (S.TCon c) = (TyConst c, [])
+    gatherConstraints (S.TApp t1 t2) =
+      let (t1', cs1) = gatherConstraintsL t1
+          (t2', cs2) = gatherConstraintsL t2
+      in  (TyApp t1' t2', cs1 ++ cs2)
+    gatherConstraints (S.TParens t) = gatherConstraintsL t
+    gatherConstraints (S.TArr m t1 t2) =
+      let (m', csm) = gatherConstraintsL m
+          (t1', cs1) = gatherConstraintsL t1
+          (t2', cs2) = gatherConstraintsL t2
+      in  (TyFun m' t1' t2', csm ++ cs1 ++ cs2)
+    gatherConstraints (S.TInstArr c t) =
+      let (c', csc) = gatherConstraintsL c
+          (t', cst) = gatherConstraintsL t
+      in  (TyInstFun c' t', csc ++ cst)
+    gatherConstraints (S.TForall x t) = (gatherBoundTv [binderTv x] t, [])
+    gatherConstraints (S.TKind t _) = gatherConstraintsL t
     gatherConstraints (S.TQual cs t) =
       let (t', cs') = gatherConstraintsL t
       in  (t', concatMap c2c cs ++ cs')
@@ -140,13 +160,13 @@ subsumptionCheckBody isRightGiven ty1_ ty2_ = do
     (TyForAll _ _, _) -> do
       bodyTy1 <- instantiate ty1 -- discharge constraint
       subsumptionCheckBody isRightGiven bodyTy1 ty2
-    (InstFunTy c1 r1, InstFunTy c2 r2) -> do
+    (TyInstFun c1 r1, TyInstFun c2 r2) -> do
       if isRightGiven then tryUnify c1 c2 else tryUnify c2 c1
       subsumptionCheckBody isRightGiven r1 r2
-    (FunTy m1 a1 r1, _) -> do
+    (TyFun m1 a1 r1, _) -> do
       (a2, m2, r2) <- ensureFunTy ty2
       subsumptionCheckFun isRightGiven a1 m1 r1 a2 m2 r2
-    (_, FunTy m2 a2 r2) -> do
+    (_, TyFun m2 a2 r2) -> do
       (a1, m1, r1) <- ensureFunTy ty1
       subsumptionCheckFun isRightGiven a1 m1 r1 a2 m2 r2
     _ ->
@@ -201,12 +221,12 @@ ensureRevTy ty = do
   return argTy
 
 ensureFunTy :: BodyTy -> TC (PolyTy, MultTy, BodyTy)
-ensureFunTy (FunTy m argTy resTy) = pure (argTy, m, resTy)
+ensureFunTy (TyFun m argTy resTy) = pure (argTy, m, resTy)
 ensureFunTy ty = do
   argTy <- newMetaTy
   m <- newMetaTy
   resTy <- newMetaTy
-  tryUnify (FunTy m argTy resTy) ty
+  tryUnify (TyFun m argTy resTy) ty
   return (argTy, m, resTy)
 
 -- | Zonks a type and expands the synonyms at its top.
@@ -229,7 +249,7 @@ alignPatsTy [] ty = pure ([], ty)
 alignPatsTy ps@(p : rest) ty = do
   shape <- shapeOf ty
   case shape of
-    InstFunTy c t
+    TyInstFun c t
       | isInstPat p -> first (Inst c :) <$> alignPatsTy rest t
       | otherwise -> do
           d <- newGenName
@@ -388,7 +408,7 @@ checkPatTyWork isUnderRev (Loc loc pat) pmult expected = do
             ps
             args
 
-      let tyOfC = foldr (\(t, m) r -> TyCon nameTyArr [m, t, r]) ret args
+      let tyOfC = foldr (\(t, m) r -> TyFun m t r) ret args
       return (not (null q) || not (null ys) || req, q ++ cs, PCon (c, tyOfC) ps', bind)
     go (PREV p) = do
       when isUnderRev $
@@ -520,13 +540,13 @@ checkSpine hd args expectedTy = do
         (TyForAll _ _, _) -> do
           ty' <- instantiate shape
           goArgs f f' ty' (a : as)
-        (InstFunTy c t, InstArg e) -> do
+        (TyInstFun c t, InstArg e) -> do
           (e', umapE) <- checkTyM e (Check c) omega
           let l = location f <> location e
           (res, rTy, umapR) <-
             goArgs (Loc l (App f a)) (Loc l (App f' (InstArg e'))) t as
           pure (res, rTy, mergeUseMap umapE umapR)
-        (InstFunTy c t, ExplicitArg _) -> do
+        (TyInstFun c t, ExplicitArg _) -> do
           hole <- atExp f $ atLoc (location f) $ newGoal c
           goArgs f (Loc (location f) (App f' (InstArg hole))) t (a : as)
         (TyMetaV _, InstArg e) -> atExp f $ atLoc (location e) $ do
@@ -552,7 +572,7 @@ checkSpine hd args expectedTy = do
         TyForAll _ _ -> do
           ty' <- instantiate shape
           insertTrailing f' ty'
-        InstFunTy c t -> do
+        TyInstFun c t -> do
           hole <- atLoc (location f') $ newGoal c
           insertTrailing (Loc (location f') (App f' (InstArg hole))) t
         _ -> pure (f', ty)
@@ -591,7 +611,7 @@ checkTy lexp@(Loc loc expr) expectedTy = do
     Check t | not (bindsItself expr) -> do
       shape <- shapeOf t
       pure $ case shape of
-        InstFunTy c t' -> Just (c, t')
+        TyInstFun c t' -> Just (c, t')
         _ -> Nothing
     _ -> pure Nothing
   case inserted of
@@ -627,7 +647,7 @@ checkTy lexp@(Loc loc expr) expectedTy = do
       let ti = tys !! i
       let wTupleTy = TyCon (nameTyWTuple n) tys
 
-      instantiatePoly (FunTy (TyMult One) wTupleTy ti) expectedTy
+      instantiatePoly (TyFun (TyMult One) wTupleTy ti) expectedTy
       pure (WProj i n, emptyUseMap)
     go (Var x) = checkSpine (Loc loc (Var x)) [] expectedTy
     go (Lit l) = do
@@ -738,7 +758,7 @@ checkTy lexp@(Loc loc expr) expectedTy = do
       where
         addRev (TyForAll xs (TyQual cs t)) = TyForAll xs (TyQual cs $ addRev t)
         -- FIXME: m must be one
-        addRev (TyCon t [m, t1, t2]) | t == nameTyArr = TyCon t [m, revTy t1, addRev t2]
+        addRev (TyFun m t1 t2) = TyFun m (revTy t1) (addRev t2)
         addRev t = revTy t
     go (Let decls e) = do
       (decls', bind, umapLet) <- inferDecls False decls
@@ -1018,11 +1038,23 @@ checkClassTypes ty = resolveSyn ty >>= go
   where
     go (TySyn _ t) = go t
     go (TyForAll _ (TyQual _ t)) = go t
-    go (InstFunTy c t) = do
+    go (TyInstFun c t) = do
       checkClassApp c
       go c
       go t
-    go (TyCon n ts) = do
+    go (TyConst n) = checkArity n []
+    -- the whole spine is handled here, so that its head is inspected once
+    go t@(TyApp _ _) =
+      case splitTyApp t of
+        (TyConst n, ts) -> checkArity n ts
+        (h, ts) -> go h >> mapM_ go ts
+    go (TyFun m t1 t2) = mapM_ go [m, t1, t2]
+    go (TyVar _) = pure ()
+    go (TyMetaV _) = pure ()
+    go (TyMult _) = pure ()
+
+    -- an application @n ts@ of a type constructor
+    checkArity n ts = do
       cenv <- asks tcClassEnv
       case M.lookup n cenv of
         Just ci
@@ -1030,7 +1062,6 @@ checkClassTypes ty = resolveSyn ty >>= go
               reportError $ ClassArityMismatch n (length (ciParams ci)) (length ts)
         _ -> pure ()
       mapM_ go ts
-    go _ = pure ()
 
 -- | 'checkClassTypes' for a written type.
 checkClassTypesL :: LTy 'Renaming -> TC ()
@@ -1051,9 +1082,9 @@ stripSyn t = t
 
 inferTopDecls ::
   Decls 'Renaming (LDecl 'Renaming)
-  -> [Loc (Name, [Name], [Loc (CDecl 'Renaming)])]
-  -> [Loc (Name, [Name], LTy 'Renaming)]
-  -> [Loc (Name, [Name], [LTy 'Renaming], [Loc (Name, LTy 'Renaming)], [LDecl 'Renaming])] -- classes
+  -> [Loc (Name, [S.TyBinder 'Renaming], [Loc (CDecl 'Renaming)])]
+  -> [Loc (Name, [S.TyBinder 'Renaming], LTy 'Renaming)]
+  -> [Loc (Name, [S.TyBinder 'Renaming], [LTy 'Renaming], [Loc (Name, LTy 'Renaming)], [LDecl 'Renaming])] -- classes
   -> [Loc (Name, LTy 'Renaming, [LDecl 'Renaming])] -- instances
   -> TC
       ( Decls 'TypeCheck (LDecl 'TypeCheck)
@@ -1067,7 +1098,14 @@ inferTopDecls ::
       , [TypedDefault] -- default methods of the classes declared in this module
       , [TypedInstance] -- instances declared in this module
       )
-inferTopDecls decls dataDecls typeDecls classDecls instDecls = do
+inferTopDecls decls dataDeclsB typeDeclsB classDeclsB instDecls = do
+  -- Only the names of the parameters are used; kind annotations are given
+  -- meaning at stage V2-2 of the notes.
+  let names = map S.tyBinderName
+  let dataDecls = [Loc l (n, names bs, cds) | Loc l (n, bs, cds) <- dataDeclsB]
+  let typeDecls = [Loc l (n, names bs, t) | Loc l (n, bs, t) <- typeDeclsB]
+  let classDecls = [Loc l (c, names bs, sups, sigs, defs) | Loc l (c, bs, sups, sigs, defs) <- classDeclsB]
+
   let dataDecls' =
         [ C.DDecl n (map BoundTv ns) [convConDecl cd | Loc _ cd <- cdecls]
         | Loc _ (n, ns, cdecls) <- dataDecls
@@ -1242,7 +1280,7 @@ inferTopDecls decls dataDecls typeDecls classDecls instDecls = do
       where
         go (TySyn _ t) = go t
         go (TyForAll _ (TyQual _ t)) = go t
-        go (InstFunTy _ t) = go t
+        go (TyInstFun _ t) = go t
         go t = t
 
     headName (TyCon n _) = n
@@ -1482,7 +1520,7 @@ instMethodType instTy params sigTy =
       in  Just $
             TyForAll
               (as ++ bs)
-              (TyQual (cs0 ++ map (substTyC tbl) cs) (foldr InstFunTy (substTy tbl t) hs))
+              (TyQual (cs0 ++ map (substTyC tbl) cs) (foldr TyInstFun (substTy tbl t) hs))
     _ -> Nothing
   where
     (as, cs0, instBody) = splitPoly instTy
@@ -1496,7 +1534,7 @@ instMethodType instTy params sigTy =
     shift v = v
 
 splitInstArrows :: Ty -> ([Ty], Ty)
-splitInstArrows (InstFunTy h t) = first (h :) (splitInstArrows t)
+splitInstArrows (TyInstFun h t) = first (h :) (splitInstArrows t)
 splitInstArrows t = ([], t)
 
 -- | Renames every bound type variable, including binders.
@@ -1504,7 +1542,10 @@ mapBoundTv :: (TyVar -> TyVar) -> Ty -> Ty
 mapBoundTv f = go
   where
     go (TyVar v) = TyVar (f v)
-    go (TyCon c ts) = TyCon c (map go ts)
+    go (TyConst c) = TyConst c
+    go (TyApp t1 t2) = TyApp (go t1) (go t2)
+    go (TyFun m t1 t2) = TyFun (go m) (go t1) (go t2)
+    go (TyInstFun c t) = TyInstFun (go c) (go t)
     go (TyMetaV m) = TyMetaV m
     go (TyForAll vs (TyQual qs ty)) = TyForAll (map f vs) (TyQual (map goC qs) (go ty))
     go (TySyn o u) = TySyn (go o) (go u)
@@ -1517,7 +1558,10 @@ alphaIndices :: Ty -> [Int]
 alphaIndices = go
   where
     go (TyVar v) = tv v
-    go (TyCon _ ts) = concatMap go ts
+    go (TyConst _) = []
+    go (TyApp t1 t2) = go t1 ++ go t2
+    go (TyFun m t1 t2) = go m ++ go t1 ++ go t2
+    go (TyInstFun c t) = go c ++ go t
     go (TyMetaV _) = []
     go (TyForAll vs (TyQual qs ty)) = concatMap tv vs ++ concatMap goC qs ++ go ty
     go (TySyn o u) = go o ++ go u
@@ -1729,7 +1773,10 @@ quantify mvs0 ty0 = do
     gatherMvInTyEq _ = []
 
     binders (TyForAll bs t) = bs ++ bindersQ t
-    binders (TyCon _ ts) = concatMap binders ts
+    binders (TyConst _) = []
+    binders (TyApp t1 t2) = binders t1 ++ binders t2
+    binders (TyFun m t1 t2) = binders m ++ binders t1 ++ binders t2
+    binders (TyInstFun c t) = binders c ++ binders t
     binders (TyVar _) = []
     binders (TySyn t _) = binders t
     binders (TyMetaV _) = []

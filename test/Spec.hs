@@ -18,7 +18,9 @@ import Language.Sparcl.Eval (evalUBind)
 import Language.Sparcl.Exception (RunTimeException, StaticException)
 import Language.Sparcl.Module
 import Language.Sparcl.Name
-import Language.Sparcl.Typing.TCMonad (TypingContext, initTypingContext)
+import Language.Sparcl.Typing.Instance (V (..), unifyPure)
+import Language.Sparcl.Typing.TCMonad (TC, TypingContext, execTCWith, initTypingContext, newMetaTy, unify, zonkType)
+import Language.Sparcl.Typing.Type
 import Language.Sparcl.Value (Value (..), eqCheck, runEval)
 
 recursivelyListDirectories :: FilePath -> IO [FilePath]
@@ -78,6 +80,76 @@ checkExpected fp m ns =
 tNames :: Int -> [String]
 tNames n = ["t" ++ show i | i <- [1 .. n]]
 
+-- * Unit tests of binary type applications and their unification
+--
+-- Stage V1 of the notes (higher-kinded classes): applications headed by
+-- variables or metas cannot be written yet, so the internal types are
+-- built directly. They are to be replaced by sample-based tests once the
+-- forms become writable (stage V3).
+
+nameEither :: Name
+nameEither = nameInBase (User "Either")
+
+nameC :: Name
+nameC = nameInBase (User "C")
+
+boolT, intT :: Ty
+boolT = TyCon nameTyBool []
+intT = TyCon nameTyInt []
+
+-- | Runs a type-checking computation in a fresh context (no errors left
+--   by earlier tests).
+runTCFresh :: TypingContext -> TC a -> IO a
+runTCFresh tc = execTCWith tc M.empty M.empty M.empty M.empty M.empty
+
+unificationSpec :: TypingContext -> Spec
+unificationSpec tc = describe "binary type applications (unit tests)" $ do
+  it "builds TyCon c [a, b] as TyApp (TyApp (TyConst c) a) b, and matches it back" $ do
+    TyCon nameEither [boolT, intT] `shouldBe` TyApp (TyApp (TyConst nameEither) boolT) intT
+    splitTyCon (TyApp (TyApp (TyConst nameEither) boolT) intT) `shouldBe` Just (nameEither, [boolT, intT])
+
+  it "unifies ?f ?a with Either Bool Int, giving ?f := Either Bool and ?a := Int" $ do
+    res <- runTCFresh tc $ do
+      f <- newMetaTy
+      a <- newMetaTy
+      unify (TyApp f a) (TyCon nameEither [boolT, intT])
+      (,) <$> zonkType f <*> zonkType a
+    res `shouldBe` (TyCon nameEither [boolT], intT)
+
+  it "does not decompose a function type: ?f ?b ~ (Int -> Bool) fails" $
+    runTCFresh tc (do f <- newMetaTy; b <- newMetaTy; unify (TyApp f b) (intT *-> boolT))
+      `shouldThrow` staticError
+
+  it "does not decompose an instance-argument function type: ?f ?b ~ ({{C}} -> Bool) fails" $
+    runTCFresh tc (do f <- newMetaTy; b <- newMetaTy; unify (TyApp f b) (TyInstFun (TyCon nameC []) boolT))
+      `shouldThrow` staticError
+
+  it "fails the occurs check for ?f ?a ~ ?f ?b ?c" $
+    runTCFresh tc
+      ( do
+          [f, a, b, c] <- mapM (const newMetaTy) [1 :: Int .. 4]
+          unify (TyApp f a) (TyApp (TyApp f b) c)
+      )
+      `shouldThrow` staticError
+
+  describe "unifyPure (instance search)" $ do
+    it "unifies ?f ?a with Either Bool Int" $ do
+      (f, a) <- runTCFresh tc ((,) <$> newMetaTy <*> newMetaTy)
+      let res = unifyPure [] True (TyApp f a) (TyCon nameEither [boolT, intT])
+      fmap (map (\(v, t) -> (isMetaOf f v, isMetaOf a v, t))) res
+        `shouldBe` Just [(False, True, intT), (True, False, TyCon nameEither [boolT])]
+
+    it "does not decompose a function type" $ do
+      (f, b) <- runTCFresh tc ((,) <$> newMetaTy <*> newMetaTy)
+      fmap length (unifyPure [] True (TyApp f b) (intT *-> boolT)) `shouldBe` Nothing
+
+    it "fails the occurs check for ?f ?a ~ ?f ?b ?c" $ do
+      [f, a, b, c] <- runTCFresh tc (mapM (const newMetaTy) [1 :: Int .. 4])
+      fmap length (unifyPure [] True (TyApp f a) (TyApp (TyApp f b) c)) `shouldBe` Nothing
+  where
+    isMetaOf (TyMetaV m) (VM m') = m == m'
+    isMetaOf _ _ = False
+
 main :: IO ()
 main = hspec $ do
   files <- runIO $ recursivelyListDirectories "./Examples"
@@ -88,6 +160,8 @@ main = hspec $ do
       load tc fp `shouldReturn` ()
     forM_ (sort nfiles) $ \fp -> it ("should not accept file " ++ fp) $ do
       load tc fp `shouldThrow` staticError
+
+  unificationSpec tc
 
   describe "evaluator" $ do
     forM_ ["./TestCases/RuntimeError1.sparcl", "./TestCases/RuntimeError2.sparcl"] $ \fp ->

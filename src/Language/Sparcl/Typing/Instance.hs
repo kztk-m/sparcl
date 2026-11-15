@@ -10,6 +10,10 @@ module Language.Sparcl.Typing.Instance (
   makeGoal,
   normTy,
   maxSearchDepth,
+  -- exported for the unit tests of unification (test/Spec.hs)
+  V (..),
+  Sub,
+  unifyPure,
 ) where
 
 import Control.Monad (foldM, forM, unless)
@@ -44,7 +48,9 @@ normTy :: Ty -> TC Ty
 normTy ty = dropSyn <$> (resolveSyn =<< zonkType ty)
   where
     dropSyn (TySyn _ t) = dropSyn t
-    dropSyn (TyCon c ts) = TyCon c (map dropSyn ts)
+    dropSyn (TyApp t1 t2) = TyApp (dropSyn t1) (dropSyn t2)
+    dropSyn (TyFun m t1 t2) = TyFun (dropSyn m) (dropSyn t1) (dropSyn t2)
+    dropSyn (TyInstFun c t) = TyInstFun (dropSyn c) (dropSyn t)
     dropSyn (TyForAll vs (TyQual cs t)) = TyForAll vs (TyQual cs (dropSyn t))
     dropSyn t = t
 
@@ -75,13 +81,16 @@ unifyPure vs metasFlexible = go []
             (Just v, _) -> bind s v t2'
             (_, Just v) -> bind s v t1'
             _ -> case (t1', t2') of
-              (TyCon c ts, TyCon d us)
-                | c == d && length ts == length us ->
-                    foldM (\s' (a, b) -> go s' a b) s (zip ts us)
+              (TyConst c, TyConst d) | c == d -> Just s
+              (TyApp a1 a2, TyApp b1 b2) -> goPairs s [(a1, b1), (a2, b2)]
+              (TyFun m a1 a2, TyFun n b1 b2) -> goPairs s [(m, n), (a1, b1), (a2, b2)]
+              (TyInstFun a1 a2, TyInstFun b1 b2) -> goPairs s [(a1, b1), (a2, b2)]
               (TyVar a, TyVar b) | a == b -> Just s
               (TyMetaV a, TyMetaV b) | a == b -> Just s
               (TyMult m, TyMult n) | m == n -> Just s
               _ -> Nothing
+
+    goPairs = foldM (\s' (a, b) -> go s' a b)
 
     bind s v t
       | occurs s v t = Nothing
@@ -92,14 +101,18 @@ unifyPure vs metasFlexible = go []
       in  case varOf t' of
             Just v' -> v == v'
             Nothing -> case t' of
-              TyCon _ ts -> any (occurs s v) ts
+              TyApp t1 t2 -> any (occurs s v) [t1, t2]
+              TyFun m t1 t2 -> any (occurs s v) [m, t1, t2]
+              TyInstFun c t2 -> any (occurs s v) [c, t2]
               _ -> False
 
 applySub :: Sub -> Ty -> Ty
 applySub s = substTy [(v, resolve t) | (VB v, t) <- s]
   where
     resolve t@(TyVar v) = maybe t resolve (lookup (VB v) s)
-    resolve (TyCon c ts) = TyCon c (map resolve ts)
+    resolve (TyApp t1 t2) = TyApp (resolve t1) (resolve t2)
+    resolve (TyFun m t1 t2) = TyFun (resolve m) (resolve t1) (resolve t2)
+    resolve (TyInstFun c t) = TyInstFun (resolve c) (resolve t)
     resolve t = t
 
 hasMetas :: Ty -> Bool
@@ -145,7 +158,7 @@ localCandidates budget locals = do
 splitInstTy :: Ty -> ([TyVar], [Ty], Ty)
 splitInstTy (TyForAll vs (TyQual _ t)) =
   let (vs', hs, hd) = splitInstTy t in (vs ++ vs', hs, hd)
-splitInstTy (InstFunTy h t) =
+splitInstTy (TyInstFun h t) =
   let (vs, hs, hd) = splitInstTy t in (vs, h : hs, hd)
 splitInstTy t = ([], [], t)
 
