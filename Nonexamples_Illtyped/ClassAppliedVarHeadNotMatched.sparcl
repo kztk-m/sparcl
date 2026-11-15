@@ -1,0 +1,27 @@
+-- The goal Size (Maybe ?a) of size Nothing unifies with the instance head
+-- Size (f Int) (f := Maybe, ?a := Int), but does not match it one way
+-- (?a is not known to be Int), so the instance is not committed to (E-4
+-- in notes/extend-type-class_2026.txt); nothing else fixes ?a, so the
+-- goal stays ambiguous.
+
+data Maybe a = Nothing | Just a
+
+class Functor f where
+    sig fmap : (a -> b) -> f a -> f b
+end
+
+instance Functor Maybe where
+    def fmap _ Nothing  = Nothing
+           | g (Just x) = Just (g x)
+end
+
+class Size a where
+    sig size : a -> Int
+end
+
+instance {{Functor f}} -> Size (f Int) where
+    def size _ = 7
+end
+
+sig bad : Int
+def bad = size Nothing

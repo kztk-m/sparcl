@@ -1,0 +1,16 @@
+-- In bad, f is a rigid type variable and no {{Functor f}} is given, so the
+-- goal Functor f has no instance (Functor Maybe does not match a rigid f).
+
+data Maybe a = Nothing | Just a
+
+class Functor f where
+    sig fmap : (a -> b) -> f a -> f b
+end
+
+instance Functor Maybe where
+    def fmap _ Nothing  = Nothing
+           | g (Just x) = Just (g x)
+end
+
+sig bad : f Int -> f Int
+def bad = fmap (\x -> x)

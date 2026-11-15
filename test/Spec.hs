@@ -277,6 +277,8 @@ main = hspec $ do
       , -- a class application written with a synonym
         ("KindSynonym.sparcl", "Main", ["t1"])
       , ("KindHigherKinded.sparcl", "Main", tNames 7)
+      , ("ClassFunctor.sparcl", "Main", tNames 7)
+      , ("ClassHigherKinded.sparcl", "Main", tNames 5)
       ]
       $ \(f, m, ns) ->
         loadEval tc ("./Examples" </> f) `before` checkExpected f m ns

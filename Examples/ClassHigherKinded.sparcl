@@ -1,0 +1,79 @@
+-- More cases of higher-kinded classes (K-3 in
+-- notes/extend-type-class_2026.txt), besides Examples/ClassFunctor.sparcl:
+--   * a local instance {{Eq (f a)}} for a rigid f: the global eqList
+--     (Eq (List a)) is not a candidate, since f ~ List cannot hold;
+--   * an instance whose head is an applied variable (Size (f Int)), with
+--     the subgoal Functor Maybe;
+--   * an instance for rev, unapplied (RevMap rev), run forwards and
+--     backwards;
+--   * a class parameter with a kind annotation.
+-- The corresponding errors are Nonexamples_Illtyped/ClassInstanceHeadKindMismatch.sparcl,
+-- ClassHigherKindedRigidNoInstance.sparcl and ClassAppliedVarHeadNotMatched.sparcl.
+
+data List a = Nil | Cons a (List a)
+data Maybe a = Nothing | Just a
+
+def fwd f = case unlift f of (x, _) -> x end
+def bwd f = case unlift f of (_, x) -> x end
+
+class Eq a where
+    sig eq : a -> a -> Bool
+end
+
+instance Eq Int where
+    def eq = eqInt
+end
+
+instance eqList : {{Eq a}} -> Eq (List a) where
+    def eq Nil         Nil         = True
+         | (Cons x xs) (Cons y ys) = case eq x y of True -> eq xs ys | False -> False end
+         | _           _           = False
+end
+
+-- the goal Eq (f a) is solved by the local instance
+sig eqF : {{Eq (f a)}} -> f a -> f a -> Bool
+def eqF x y = eq x y
+
+class Functor (f : Type -> Type) where
+    sig fmap : (a -> b) -> f a -> f b
+end
+
+instance Functor Maybe where
+    def fmap _ Nothing  = Nothing
+           | g (Just x) = Just (g x)
+end
+
+class Size a where
+    sig size : a -> Int
+end
+
+-- an applied variable as the instance head
+instance {{Functor f}} -> Size (f Int) where
+    def size _ = 7
+end
+
+-- a class over invertible computations; rev is its instance
+class RevMap (f : Type -> Type) where
+    sig rmap : (a -> b) -> (b -> a) -> f a -o f b
+end
+
+instance RevMap rev where
+    def rmap g h x = lift g h x
+end
+
+sig incR : rev Int -o rev Int
+def incR = rmap (\x -> x + 1) (\x -> x - 1)
+
+def t1 = eqF (Cons 1 (Cons 2 Nil)) (Cons 1 (Cons 2 Nil))
+def t2 = eqF (Cons 1 Nil) Nil
+def t3 = size (Just 3)
+def t4 = fwd incR 4
+def t5 = bwd incR 4
+
+-- Expected values (compared with t1 .. t5 by test/Spec.hs)
+
+def t1' = True
+def t2' = False
+def t3' = 7
+def t4' = 5
+def t5' = 3
