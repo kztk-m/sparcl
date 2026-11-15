@@ -373,7 +373,7 @@ ty2mult = zonkType >=> go
     go (TyVar t) = pure $ MSingle (MulVarRigid t)
     go t = do
       reportError $ Other $ text "Expected multiplicity, but received" <+> ppr t
-      m <- newMetaTyVar
+      m <- newMetaTyVar multKi
       return $ MSingle (MulVar m)
 
 data Mul = MulConst !Multiplicity | MulVar !MetaTyVar | MulVarRigid !TyVar
@@ -709,7 +709,7 @@ withClassesAndInstances cls insts =
 
 tupleConTy :: Int -> ConTy
 tupleConTy n =
-  let tvs = map BoundTv [Alpha i (User $ 't' : show i) | i <- [1 .. n]]
+  let tvs = [BoundTv (Alpha i (User $ 't' : show i)) typeKi | i <- [1 .. n]]
       tys = map TyVar tvs
   in  -- ConTy tvs [] [] $ foldr (-@) (tupleTy tys) tys
       ConTy tvs [] [] [(t, one) | t <- tys] (tupleTy tys)
@@ -718,7 +718,7 @@ tupleConTy n =
 
 -- | Make a unifiable type varible
 arbitraryTy :: TC Ty
-arbitraryTy = TyMetaV <$> newMetaTyVar
+arbitraryTy = newMetaTy
 
 abortTyping :: TC a
 abortTyping = throwM AbortTyping
@@ -820,15 +820,16 @@ askType l n = do
           atLoc l (reportError $ Undefined n)
           arbitraryTy
 
-newMetaTyVar :: TC MetaTyVar
-newMetaTyVar = do
+-- | A new meta of the given kind.
+newMetaTyVar :: Kind -> TC MetaTyVar
+newMetaTyVar k = do
   cref <- asks tcRefMvCount
   lv <- asks tcTcLevel
   ilv <- asks tcIcLevel
   cnt <- liftIO $ atomicModifyIORef' cref $ \cnt -> (cnt + 1, cnt)
   ref <- liftIO $ newIORef Nothing
   lref <- liftIO $ newIORef lv
-  return $ MetaTyVar cnt ref lref ilv
+  return $ MetaTyVar cnt ref lref ilv k
 
 readTyVar :: MetaTyVar -> TC (Maybe Ty)
 readTyVar mv =
@@ -955,8 +956,20 @@ withSyn tv v = local (\tc -> tc{tcSyn = M.insert tv v (tcSyn tc)})
 withCon :: Name -> ConTy -> TC a -> TC a
 withCon c ty = local (\tc -> tc{tcConEnv = M.insert c ty (tcConEnv tc)})
 
+-- | A new meta of kind @Type@.
 newMetaTy :: TC Ty
-newMetaTy = TyMetaV <$> newMetaTyVar
+newMetaTy = newMetaTyWithKind typeKi
+
+-- | A new meta of kind @Multiplicity@.
+newMetaMult :: TC Ty
+newMetaMult = newMetaTyWithKind multKi
+
+newMetaTyWithKind :: Kind -> TC Ty
+newMetaTyWithKind k = TyMetaV <$> newMetaTyVar k
+
+-- | A new kind meta (used by kind inference).
+newMetaKind :: TC Kind
+newMetaKind = newMetaTyWithKind sortKi
 
 withVars :: [(Name, Ty)] -> TC r -> TC r
 withVars ns m = foldr (uncurry withVar) m ns

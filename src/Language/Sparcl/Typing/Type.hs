@@ -164,25 +164,41 @@ data TyConstraint
   | TyEq !Ty !Ty
   deriving (Eq, Ord, Show)
 
+-- | Kinds are type-level expressions: 'typeKi', 'multKi', @'arrKi' k1 k2@
+--   and kind metas (D1 in the notes).
+type Kind = Ty
+
+-- | Type variables carry their kinds (D2-a in the notes); equality and
+--   order look only at names / numbers.
 data TyVar
-  = BoundTv !Name
+  = BoundTv !Name !Kind
   | SkolemTv !TyVar !Int !IcLevel
   -- used for checking of which type is more general.
   deriving Show
 
 instance Eq TyVar where
-  BoundTv n == BoundTv m = n == m
+  BoundTv n _ == BoundTv m _ = n == m
   SkolemTv _ i _ == SkolemTv _ j _ = i == j
   _ == _ = False
 
 instance Ord TyVar where
-  BoundTv n <= BoundTv m = n <= m
-  BoundTv _ <= _ = True
-  SkolemTv _ _ _ <= BoundTv _ = False
+  BoundTv n _ <= BoundTv m _ = n <= m
+  BoundTv _ _ <= _ = True
+  SkolemTv _ _ _ <= BoundTv _ _ = False
   SkolemTv _ i _ <= SkolemTv _ j _ = i <= j
 
+tyVarKind :: TyVar -> Kind
+tyVarKind (BoundTv _ k) = k
+tyVarKind (SkolemTv v _ _) = tyVarKind v
+
+-- | Kinds of type variables not inferred yet (written types, parameters of
+--   declarations). To be removed at stage V2-2 of the notes, where kind
+--   inference gives them; deleting it makes the compiler find every use.
+placeholderKind :: Kind
+placeholderKind = typeKi
+
 instance Pretty TyVar where
-  ppr (BoundTv n) = ppr n
+  ppr (BoundTv n _) = ppr n
   ppr (SkolemTv n i lv) = ppr n D.<> D.text "_" D.<> ppr i D.<> D.text "@" D.<> ppr lv
 
 instance FreeTyVars Ty TyVar where
@@ -247,6 +263,10 @@ instance Pretty Ty where
         parensIf (k > 1) $ D.text "!" D.<> pprPrec 1 t
     | c == nameTyRev =
         parensIf (k > 1) $ D.text "rev" D.<+> pprPrec 2 t
+  -- kinds k1 -> k2 (right associative)
+  pprPrec k (TyCon c [k1, k2])
+    | c == nameKiArr =
+        parensIf (k > 0) $ pprPrec 1 k1 D.<+> D.text "->" D.<+> pprPrec 0 k2
   pprPrec _ (TyConst c) = ppr c
   pprPrec k (TyCon c ts) =
     parensIf (k > 1) $
@@ -300,12 +320,15 @@ data MetaTyVar = MetaTyVar
   , metaRef :: !TyRef
   , metaTcLevelRef :: !(IORef TcLevel)
   , metaIcLevel :: !IcLevel
+  , metaKind :: !Kind
+  -- ^ the kind of the meta; for a kind meta, the marker
+  --   @TyConst nameSort@ (never inspected)
   }
 
 type TyRef = IORef (Maybe MonoTy)
 
 instance Pretty MetaTyVar where
-  ppr (MetaTyVar i _ r ic) =
+  ppr (MetaTyVar i _ r ic _) =
     let l = unsafePerformIO (readIORef r)
     in  D.text $ "_" ++ show i ++ "[" ++ show l ++ "]@" ++ show ic
 
@@ -436,11 +459,56 @@ charTy = TyCon nameTyChar []
 tupleTy :: [Ty] -> Ty
 tupleTy ts = TyCon (nameTyTuple $ length ts) ts
 
-typeKi :: Ty
-typeKi = TyCon nameKindType []
+typeKi :: Kind
+typeKi = TyConst nameKindType
 
-arrKi :: Ty -> Ty -> Ty
+multKi :: Kind
+multKi = TyConst nameKindMultiplicity
+
+arrKi :: Kind -> Kind -> Kind
 arrKi k1 k2 = TyCon nameKiArr [k1, k2]
+
+-- | The marker kept as the 'metaKind' of kind metas.
+sortKi :: Ty
+sortKi = TyConst nameSort
+
+-- | The kind of a type-level name, from the table (entries of type-level
+--   names in the 'TypeTable', D4-a in the notes); the kinds of tuple
+--   constructors of all arities are computed from their names.
+kindOfName :: TypeTable -> Name -> Maybe Kind
+kindOfName tbl c = case c of
+  Original _ (System (NTuple n)) _ -> Just (tupleKi n)
+  Original _ (System (NWTuple n)) _ -> Just (tupleKi n)
+  _ -> M.lookup c tbl
+  where
+    tupleKi n = foldr arrKi typeKi (replicate n typeKi)
+
+-- | Replaces the kind metas left in a zonked kind by @Type@ (no kind
+--   polymorphism, D1-b in the notes).
+defaultKind :: Kind -> Kind
+defaultKind (TyMetaV _) = typeKi
+defaultKind (TyApp k1 k2) = TyApp (defaultKind k1) (defaultKind k2)
+defaultKind k = k
+
+-- | The kind of a well-kinded type-level expression (D3-b in the notes):
+--   constants by the table, variables and metas by their own kinds.
+--   Ill-kinded applications are never built once kinds are checked, so
+--   they are internal errors here.
+kindOf :: TypeTable -> Ty -> Kind
+kindOf tbl = go
+  where
+    go (TyConst c) =
+      fromMaybe (error $ "kindOf: no kind for " ++ show c) (kindOfName tbl c)
+    go (TyVar x) = tyVarKind x
+    go (TyMetaV m) = metaKind m
+    go (TyApp t1 _) = case go t1 of
+      TyCon a [_, k2] | a == nameKiArr -> k2
+      _ -> error "kindOf: applying a type-level expression of a non-arrow kind"
+    go (TyFun {}) = typeKi
+    go (TyInstFun {}) = typeKi
+    go (TyForAll {}) = typeKi
+    go (TySyn _ t) = go t
+    go (TyMult _) = multKi
 
 infixr 4 -@
 infixr 4 :-@

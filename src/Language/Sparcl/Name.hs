@@ -23,6 +23,9 @@ data SystemName
     NWTuple !Int
   | -- | name for an arrow kind
     KArrow
+  | -- | the sort of kinds: the marker kept as the 'metaKind' of kind metas
+    --   (never inspected)
+    KSort
   | -- | name for unrestricted type constructor (to be removed)
     NBang
   | -- | name for invertible type constructor
@@ -41,6 +44,7 @@ instance Pretty SystemName where
   ppr (NTuple n) = text "<Tup" <+> ppr n <> text ">"
   ppr (NWTuple n) = text "<&Tup" <+> ppr n <> text ">"
   ppr KArrow = text "->"
+  ppr KSort = text "<Sort>"
   ppr NBang = text "!" -- TODO: will be removed
   ppr NRev = text "rev"
   ppr (NInstance k) = text "<instance #" <> ppr k <> text ">"
@@ -245,8 +249,14 @@ nameTyList = nameInBase (User "List")
 nameKiArr :: Name
 nameKiArr = nameInBase (System KArrow)
 
+nameSort :: Name
+nameSort = nameInBase (System KSort)
+
+-- The kind names print unqualified (`Type`, not `Base.Type`; D4-e in the
+-- notes): kinds are built by the type checker, not written by users, and
+-- they are reserved words (D7-c3), so they need no qualification.
 nameKindType :: Name
-nameKindType = nameInBase (User "Type")
+nameKindType = Original baseModule (User "Type") (Bare (User "Type"))
 
 nameKindMultiplicity :: Name
-nameKindMultiplicity = nameInBase (User "Multiplicity")
+nameKindMultiplicity = Original baseModule (User "Multiplicity") (Bare (User "Multiplicity"))

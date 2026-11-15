@@ -53,7 +53,7 @@ import Data.List (foldl', nub, (\\))
 ty2ty :: S.LTy 'Renaming -> Ty
 ty2ty (Loc _ ty) = go ty
   where
-    go (S.TVar x) = TyVar (BoundTv x)
+    go (S.TVar x) = TyVar (BoundTv x placeholderKind)
     go (S.TCon c) = TyConst c
     go (S.TApp t1 t2) = TyApp (ty2ty t1) (ty2ty t2)
     go (S.TParens t) = ty2ty t
@@ -66,7 +66,7 @@ ty2ty (Loc _ ty) = go ty
       let (t', cs') = gatherConstraints t
       in  TyForAll [] $ TyQual cs' t'
 
-    binderTv = BoundTv . S.tyBinderName
+    binderTv b = BoundTv (S.tyBinderName b) placeholderKind
 
     gatherBoundTv xs (unLoc . S.stripTParens -> S.TForall y t) = gatherBoundTv (binderTv y : xs) t
     gatherBoundTv xs t =
@@ -75,7 +75,7 @@ ty2ty (Loc _ ty) = go ty
 
     gatherConstraintsL = gatherConstraints . unLoc
 
-    gatherConstraints (S.TVar x) = (TyVar (BoundTv x), [])
+    gatherConstraints (S.TVar x) = (TyVar (BoundTv x placeholderKind), [])
     gatherConstraints (S.TCon c) = (TyConst c, [])
     gatherConstraints (S.TApp t1 t2) =
       let (t1', cs1) = gatherConstraintsL t1
@@ -202,7 +202,7 @@ instantiate t = do
 
 instantiateQ :: PolyTy -> TC QualTy
 instantiateQ (TyForAll ts qt) = do
-  ms <- mapM (const newMetaTy) ts
+  ms <- mapM (newMetaTyWithKind . tyVarKind) ts
   let subs = zip ts ms
   -- debugPrint 3 $ "Inst:" <+> align ((ppr $ TyForAll ts qt) <+> text "--->" <> line <> ppr (substTyQ subs qt) )
   return $ substTyQ subs qt
@@ -224,7 +224,7 @@ ensureFunTy :: BodyTy -> TC (PolyTy, MultTy, BodyTy)
 ensureFunTy (TyFun m argTy resTy) = pure (argTy, m, resTy)
 ensureFunTy ty = do
   argTy <- newMetaTy
-  m <- newMetaTy
+  m <- newMetaMult
   resTy <- newMetaTy
   tryUnify (TyFun m argTy resTy) ty
   return (argTy, m, resTy)
@@ -374,7 +374,7 @@ checkPatTyWork isUnderRev (Loc loc pat) pmult expected = do
       -- Reject GADT-style constructors in rev.
       when isUnderRev $ checkGADTConstructorInRev loc c
 
-      uvars <- mapM (const newMetaTyVar) xs
+      uvars <- mapM (newMetaTyVar . tyVarKind) xs
       evars <- mapM newSkolemTyVar ys
 
       let tbl = zip xs (map TyMetaV uvars) ++ zip ys (map TyVar evars)
@@ -672,7 +672,7 @@ checkTy lexp@(Loc loc expr) expectedTy = do
         abortTyping
       -- multiplicity of arguments
       ts <- mapM (const newMetaTy) pats
-      qs <- mapM (const newMetaTy) pats
+      qs <- mapM (const newMetaMult) pats
       qs' <- mapM ty2mult qs
 
       ((e', retTy, umap), pats', bind) <- checkPatsTyK pats qs' (map Check ts) $ do
@@ -691,7 +691,7 @@ checkTy lexp@(Loc loc expr) expectedTy = do
       in  checkSpine hd args expectedTy
     go (InstHole v _ _) = absurd v
     go (Let1 p e1 e2) = do
-      patMult <- ty2mult =<< newMetaTy
+      patMult <- ty2mult =<< newMetaMult
       (e1', ty1, umap1) <- inferTyExpandM e1 patMult
 
       ((e2', umap2), [p'], bind) <- checkPatsTyK [p] [patMult] [Check ty1] $ do
@@ -765,7 +765,7 @@ checkTy lexp@(Loc loc expr) expectedTy = do
       (e', umap) <- withVars bind $ checkTy e expectedTy
       return (Let decls' e', mergeUseMap umap umapLet)
     go (Case e0 alts) = do
-      p <- newMetaTyVar -- multiplicity of e0
+      p <- newMetaTyVar multKi -- multiplicity of e0
       mul <- ty2mult (TyMetaV p)
 
       (e0', tyPat, umap0) <- inferTyExpandM e0 mul
@@ -1107,16 +1107,16 @@ inferTopDecls decls dataDeclsB typeDeclsB classDeclsB instDecls = do
   let classDecls = [Loc l (c, names bs, sups, sigs, defs) | Loc l (c, bs, sups, sigs, defs) <- classDeclsB]
 
   let dataDecls' =
-        [ C.DDecl n (map BoundTv ns) [convConDecl cd | Loc _ cd <- cdecls]
+        [ C.DDecl n (map (`BoundTv` placeholderKind) ns) [convConDecl cd | Loc _ cd <- cdecls]
         | Loc _ (n, ns, cdecls) <- dataDecls
         ]
 
-  let typeDecls' = [C.TDecl n (map BoundTv ns) (ty2ty lty) | Loc _ (n, ns, lty) <- typeDecls]
+  let typeDecls' = [C.TDecl n (map (`BoundTv` placeholderKind) ns) (ty2ty lty) | Loc _ (n, ns, lty) <- typeDecls]
 
   let synTable = M.fromList $
         flip map typeDecls $ \(Loc _ (n, ns, lty)) ->
           let ty = ty2ty lty
-          in  (n, (map BoundTv ns, ty))
+          in  (n, (map (`BoundTv` placeholderKind) ns, ty))
 
   let ctypeTable = M.fromList $ concat [mkConTable (n, ns, cdecls) | Loc _ (n, ns, cdecls) <- dataDecls]
   -- [ (n, foldr ((-@) . const typeKi) typeKi ns) | Loc _ (n, ns, _) <- dataDecls ]
@@ -1144,7 +1144,7 @@ inferTopDecls decls dataDeclsB typeDeclsB classDeclsB instDecls = do
           forM_ sigs $ \(Loc _ (_, t)) -> checkClassTypesL t
 
         let methodTys =
-              [ (m, methodType c (map BoundTv ps) (ty2ty t))
+              [ (m, methodType c (map (`BoundTv` placeholderKind) ps) (ty2ty t))
               | Loc _ (c, ps, _, sigs, _) <- classDecls
               , Loc _ (m, t) <- sigs
               ]
@@ -1267,7 +1267,7 @@ inferTopDecls decls dataDeclsB typeDeclsB classDeclsB instDecls = do
 
     mkClassInfo ps sups sigs defs =
       ClassInfo
-        { ciParams = map BoundTv ps
+        { ciParams = map (`BoundTv` placeholderKind) ps
         , ciSupers = map ty2ty sups
         , ciMethods = [(m, ty2ty t) | Loc _ (m, t) <- sigs]
         , ciDefaults = [n | Loc _ (DDef n _) <- defs]
@@ -1290,13 +1290,13 @@ inferTopDecls decls dataDeclsB typeDeclsB classDeclsB instDecls = do
     convConDecl (GeneralC cn xs q tys) = (cn, xs, concatMap c2c q, map (ty2ty . fst) tys)
 
     mkConTable (n, ns, cdecls) =
-      let tvs = map BoundTv ns
+      let tvs = map (`BoundTv` placeholderKind) ns
           retTy = TyCon n $ map TyVar tvs
       in  flip map cdecls $ \case
             (Loc _ (NormalC cn tys)) ->
               (cn, ConTy tvs [] [] [(ty2ty ty, TyMult one) | ty <- tys] retTy)
             (Loc _ (GeneralC cn xs q tyms)) ->
-              let xs' = map BoundTv xs
+              let xs' = map (`BoundTv` placeholderKind) xs
                   q' = concatMap c2c q
                   tyms' = map (\(t, m) -> (ty2ty t, ty2ty m)) tyms
               in  (cn, ConTy tvs xs' q' tyms' retTy)
@@ -1530,7 +1530,7 @@ instMethodType instTy params sigTy =
     splitPoly ty = ([], [], ty)
 
     offset = maximum (-1 : alphaIndices instTy) + 1
-    shift v@(BoundTv (Alpha i nb)) | v `notElem` params = BoundTv (Alpha (i + offset) nb)
+    shift v@(BoundTv (Alpha i nb) k) | v `notElem` params = BoundTv (Alpha (i + offset) nb) k
     shift v = v
 
 splitInstArrows :: Ty -> ([Ty], Ty)
@@ -1568,7 +1568,7 @@ alphaIndices = go
     go (TyMult _) = []
     goC (MSub t1 ts) = concatMap go (t1 : ts)
     goC (TyEq t1 t2) = go t1 ++ go t2
-    tv (BoundTv (Alpha i _)) = [i]
+    tv (BoundTv (Alpha i _) _) = [i]
     tv _ = []
 
 -- | Solves the constraints of a definition with a signature under the given ones.
@@ -1761,8 +1761,14 @@ quantify mvs0 ty0 = do
     cs <- eliminateExistentialL invisibles cs0
     return (mvs0 \\ invisibles, TyQual cs t0)
 
-  let usedBinders = bindersQ ty
-      newBinders = take (length mvs) $ allFancyBinders \\ usedBinders
+  let usedNames = [n | BoundTv n _ <- bindersQ ty]
+      newNames = take (length mvs) $ allFancyNames \\ usedNames
+
+  -- each binder gets the zonked kind of its meta; a kind left undetermined
+  -- defaults to Type (D2-d in the notes)
+  newBinders <- forM (zip mvs newNames) $ \(mv, n) -> do
+    k <- zonkType (metaKind mv)
+    pure $ BoundTv n (defaultKind k)
 
   forM_ (zip mvs newBinders) $
     \(mv, tyv) -> writeTyVar mv (TyVar tyv)
@@ -1787,8 +1793,8 @@ quantify mvs0 ty0 = do
     bindersC (MSub t1 ts2) = binders t1 ++ concatMap binders ts2
     bindersC (TyEq t1 t2) = binders t1 ++ binders t2
 
-allFancyBinders :: [TyVar]
-allFancyBinders =
-  map (BoundTv . Local . User) $
+allFancyNames :: [Name]
+allFancyNames =
+  map (Local . User) $
     [[x] | x <- ['a' .. 'z']]
       ++ [x : show i | i <- [1 :: Integer ..], x <- ['a' .. 'z']]

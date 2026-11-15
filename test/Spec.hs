@@ -19,7 +19,9 @@ import Language.Sparcl.Exception (RunTimeException, StaticException)
 import Language.Sparcl.Module
 import Language.Sparcl.Name
 import Language.Sparcl.Typing.Instance (V (..), unifyPure)
-import Language.Sparcl.Typing.TCMonad (TC, TypingContext, execTCWith, initTypingContext, newMetaTy, unify, zonkType)
+import Language.Sparcl.Multiplicity (Multiplicity (..))
+import Language.Sparcl.Pretty (prettyShow)
+import Language.Sparcl.Typing.TCMonad (TC, TypingContext, execTCWith, initTypingContext, newMetaTy, newMetaTyWithKind, unify, zonkType)
 import Language.Sparcl.Typing.Type
 import Language.Sparcl.Value (Value (..), eqCheck, runEval)
 
@@ -150,6 +152,36 @@ unificationSpec tc = describe "binary type applications (unit tests)" $ do
     isMetaOf (TyMetaV m) (VM m') = m == m'
     isMetaOf _ _ = False
 
+-- * Unit tests of kinds (stage V2-1 of the notes; kinds are not checked yet)
+
+kindSpec :: TypingContext -> Spec
+kindSpec tc = describe "kinds (unit tests)" $ do
+  let tbl = mcTypeTable (miModuleContext baseModuleInfo)
+      nameMany = nameInBase (User "Many")
+      tyArr = arrKi typeKi typeKi
+  it "gives the kinds of built-in type constructors" $ do
+    kindOf tbl (TyConst nameMany) `shouldBe` arrKi multKi tyArr
+    kindOf tbl (TyCon nameMany [TyMult Omega]) `shouldBe` tyArr
+    kindOf tbl (TyConst nameTyRev) `shouldBe` tyArr
+    kindOf tbl (TyCon nameTyRev [intT]) `shouldBe` typeKi
+  it "computes the kinds of tuple constructors from their names" $ do
+    kindOf tbl (TyConst (nameTyTuple 3)) `shouldBe` arrKi typeKi (arrKi typeKi tyArr)
+    kindOf tbl (TyCon (nameTyTuple 2) [intT, boolT]) `shouldBe` typeKi
+    kindOf tbl (TyCon (nameTyWTuple 2) [intT]) `shouldBe` tyArr
+  it "takes the kinds of variables and metas from themselves" $ do
+    let f = BoundTv (mkName "f") tyArr
+    kindOf tbl (TyApp (TyVar f) intT) `shouldBe` typeKi
+    m <- runTCFresh tc (newMetaTyWithKind tyArr)
+    kindOf tbl m `shouldBe` tyArr
+    kindOf tbl (TyApp m boolT) `shouldBe` typeKi
+  it "gives Type to function types and Multiplicity to multiplicities" $ do
+    kindOf tbl (intT *-> boolT) `shouldBe` typeKi
+    kindOf tbl (TyInstFun (TyCon nameC []) boolT) `shouldBe` typeKi
+    kindOf tbl (TyMult One) `shouldBe` multKi
+  it "prints kinds with a right-associative arrow" $ do
+    prettyShow (arrKi tyArr typeKi) `shouldBe` "(Type -> Type) -> Type"
+    prettyShow (arrKi multKi tyArr) `shouldBe` "Multiplicity -> Type -> Type"
+
 main :: IO ()
 main = hspec $ do
   files <- runIO $ recursivelyListDirectories "./Examples"
@@ -162,6 +194,7 @@ main = hspec $ do
       load tc fp `shouldThrow` staticError
 
   unificationSpec tc
+  kindSpec tc
 
   describe "evaluator" $ do
     forM_ ["./TestCases/RuntimeError1.sparcl", "./TestCases/RuntimeError2.sparcl"] $ \fp ->

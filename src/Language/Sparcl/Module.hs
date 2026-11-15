@@ -161,10 +161,11 @@ baseModuleInfo =
         [ conTrue |-> ConTy [] [] [] [] boolTy
         , conFalse |-> ConTy [] [] [] [] boolTy
         , base "U"
-            |-> let a = BoundTv (Local $ User "a")
+            |-> let a = BoundTv (Local $ User "a") typeKi
                 in  ConTy [a] [] [] [(TyVar a, omega)] (TyCon (base "Un") [TyVar a])
         , base "MkMany"
-            |-> let [a, p] = map (BoundTv . Local . User) ["a", "p"]
+            |-> let p = BoundTv (Local $ User "p") multKi
+                    a = BoundTv (Local $ User "a") typeKi
                 in  ConTy [p, a] [] [] [(TyVar a, TyVar p)] (TyCon (base "Many") [TyVar p, TyVar a])
         ]
 
@@ -193,7 +194,11 @@ baseModuleInfo =
         , nameTyBool |-> typeKi
         , nameTyChar |-> typeKi
         , nameTyRational |-> typeKi
-        , base "Un" |-> typeKi `arrKi` typeKi
+        , -- kinds of built-in type constructors (D4-b in the notes; tuples
+          -- are computed from their names by kindOfName)
+          base "Un" |-> typeKi `arrKi` typeKi
+        , base "Many" |-> multKi `arrKi` (typeKi `arrKi` typeKi)
+        , nameTyRev |-> typeKi `arrKi` typeKi
         ]
 
     synTable = M.empty
