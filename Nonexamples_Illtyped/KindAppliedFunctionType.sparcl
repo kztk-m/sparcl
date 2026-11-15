@@ -1,0 +1,5 @@
+-- A function type has kind Type, so it cannot be applied to an argument,
+-- even when it is parenthesized as the head of an application.
+
+sig x : (Int -> Bool) Int
+def x = 1

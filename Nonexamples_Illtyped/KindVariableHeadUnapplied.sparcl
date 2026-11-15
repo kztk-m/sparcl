@@ -1,0 +1,5 @@
+-- A type variable used both as a type (f) and as the head of an
+-- application (f Int): a kind error.
+
+sig g : f -> f Int
+def g x = x

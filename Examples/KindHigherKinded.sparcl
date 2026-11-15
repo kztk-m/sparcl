@@ -1,0 +1,126 @@
+-- Higher-kinded type-level expressions (stage V3 of
+-- notes/extend-type-class_2026.txt):
+--   * applications whose head is a type variable (f a) or a parenthesized
+--     expression ((Either Bool) Int), and the kinds inferred for them;
+--   * rev as an argument without its own argument (Box rev);
+--   * kind annotations on data/class parameters, forall binders, GADT-style
+--     constructors and type-level expressions ((t : k)).
+-- The corresponding errors are Nonexamples_Illtyped/Kind*.sparcl.
+
+data List a = Nil | Cons a (List a)
+
+data Maybe a = Nothing | Just a
+
+data Either a b = Left a | Right b
+
+sig len : List a -> Int
+def len Nil = 0
+      | (Cons _ xs) = 1 + len xs
+
+-- f : Type -> Type is inferred from f (Fix f)
+data Fix f = In (f (Fix f))
+
+data ListF a r = NilF | ConsF a r
+
+sig fromList : List Int -> Fix (ListF Int)
+def fromList Nil = In NilF
+           | (Cons x xs) = In (ConsF x (fromList xs))
+
+sig sumFix : Fix (ListF Int) -> Int
+def sumFix (In NilF) = 0
+         | (In (ConsF x r)) = x + sumFix r
+
+-- f, g : Type -> Type
+data Compose f g a = MkCompose (f (g a))
+
+sig unCompose : Compose f g a -> f (g a)
+def unCompose (MkCompose x) = x
+
+sig cmp : Compose Maybe List Int
+def cmp = MkCompose (Just (Cons 1 Nil))
+
+-- a synonym with a variable head
+type App f a = f a
+
+sig app : App Maybe Int
+def app = Just 2
+
+-- a variable head in a signature; at the use below, ?f Int ~ List Int
+sig applyTwice : (f Int -> f Int) -> f Int -> f Int
+def applyTwice h x = h (h x)
+
+sig consOne : List Int -> List Int
+def consOne xs = Cons 1 xs
+
+-- at the use below, ?f ?a ~ Either Bool Int gives ?f := Either Bool, ?a := Int
+sig idF : f a -> f a
+def idF x = x
+
+sig eb : Either Bool Int
+def eb = Right 3
+
+-- a parenthesized head
+sig pe : (Either Bool) Int
+def pe = Left True
+
+-- a variable whose kind is not determined by its uses has kind Type
+sig k0 : forall a. Int -> Int
+def k0 x = x
+
+-- rev as an argument: Box : (Type -> Type) -> Type
+data Box f = MkBox (f Int)
+
+sig unBox : Box rev -o rev Int
+def unBox (MkBox x) = x
+
+sig bm : Box Maybe
+def bm = MkBox (Just 4)
+
+-- kind annotations
+data T (f : Type -> Type) = MkT (f Int)
+
+sig tm : T Maybe
+def tm = MkT Nothing
+
+sig idK : forall (f : Type -> Type) a. f a -> f a
+def idK x = x
+
+sig idM : forall (p : Multiplicity) a. a # p -> a
+def idM x = x
+
+sig mj : (Maybe : Type -> Type) Int
+def mj = Just 5
+
+class Default (a : Type) where
+  sig dflt : a
+end
+
+instance Default Int where
+  def dflt = 6
+end
+
+-- an existential with an annotated forall binder in a GADT-style constructor
+data Ex where
+  sig MkEx : forall (f : Type -> Type) a. f a -> (f a -> Int) -> Ex
+end
+
+sig runEx : Ex -> Int
+def runEx (MkEx x k) = k x
+
+def t1 = sumFix (fromList (Cons 1 (Cons 2 Nil)))
+def t2 = unCompose cmp
+def t3 = applyTwice consOne Nil
+def t4 = idF eb
+def t5 = runEx (MkEx (Cons 1 (Cons 2 Nil)) len)
+def t6 = idM (dflt : Int)
+def t7 = idK mj
+
+-- Expected values (compared with t1 .. t7 by test/Spec.hs)
+
+def t1' = 3
+def t2' = Just (Cons 1 Nil)
+def t3' = Cons 1 (Cons 1 Nil)
+def t4' = Right 3
+def t5' = 2
+def t6' = 6
+def t7' = Just 5

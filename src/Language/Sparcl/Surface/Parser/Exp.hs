@@ -168,14 +168,44 @@ introForAllExcept xs ty =
 
 typeExpr :: (Monad m) => P m (LTy 'Parsing)
 typeExpr = do
-  ef <- P.optional (symForAll *> P.many (varName <* sp) <* symbol ".")
+  ef <- P.optional forallBinders
   mid <- getSrcLoc
   ctxt <- P.optional $ P.try (constraint <* dRightArrow)
   ty <- arrTy
-  return $ maybe id foralls ef $ maybe id (\cs -> Loc (mid <> location ty) . TQual cs) ctxt ty
+  return $ maybe id mkForalls ef $ maybe id (\cs -> Loc (mid <> location ty) . TQual cs) ctxt ty
+
+-- | @forall b1 ... bn .@
+forallBinders :: (Monad m) => P m [TyBinder 'Parsing]
+forallBinders = symForAll *> P.many tyBinder <* symbol "."
+
+mkForalls :: [TyBinder 'Parsing] -> LTy 'Parsing -> LTy 'Parsing
+mkForalls bs r = foldr (\b -> Loc (location r) . TForall b) r bs
+
+-- | A binder of a type variable: @x@, or @(x : k)@ with a kind annotation.
+tyBinder :: (Monad m) => P m (TyBinder 'Parsing)
+tyBinder =
+  (\x -> TyBinder x Nothing) <$> L.lexeme sp varName
+    <|> parens (TyBinder <$> L.lexeme sp varName <* symbol ":" <*> (Just <$> kindExpr))
+
+-- | A kind: @Type@, @Multiplicity@, or @k1 -> k2@ (right associative).
+kindExpr :: (Monad m) => P m (LTy 'Parsing)
+kindExpr = do
+  k1 <- kindAtom
+  m <- P.optional (rightArrow *> kindExpr)
+  return $ maybe k1 (\k2 -> mkTApps (Loc (location k1 <> location k2) (TCon (BuiltIn nameKiArr))) [k1, k2]) m
   where
-    foralls [] r = r
-    foralls (x : xs) r = Loc (location r) $ TForall (TyBinder x Nothing) (foralls xs r)
+    kindAtom =
+      kindName "Type" nameKindType
+        <|> kindName "Multiplicity" nameKindMultiplicity
+        <|> parens kindExpr
+
+    -- the span excludes the trailing spaces
+    kindName s n = do
+      start <- getSrcLoc
+      void $ P.try (P.string s <* P.notFollowedBy P.alphaNumChar)
+      end <- getSrcLoc
+      sp
+      return $ Loc (start <> end) $ TCon (BuiltIn n)
 
 constraint :: (Monad m) => P m [TConstraint 'Parsing]
 constraint =
@@ -253,30 +283,22 @@ arrTy = instArrTy <|> normalArrTy
                 pure $ \e1 e2 -> mkArr m e1 e2
             )
 
+-- | An application of an atomic type-level expression to atomic ones (left
+--   associative); the head can be any atomic one, e.g., @f a@ or @(T a) b@.
 appTy :: (Monad m) => P m (LTy 'Parsing)
-appTy =
-  P.try conTy <|> revTy <|> simpleTy
-  where
-    conTy = do
-      Loc l c <- loc qconName
-      sp
-      ts <- P.some simpleTy
-      return $ mkTApps (Loc l (TCon c)) ts
-
-    revTy = do
-      Loc l _ <- loc (keyword "rev")
-      ty <- simpleTy
-      return $ mkTApps (Loc l (TCon (BuiltIn nameTyRev))) [ty]
+appTy = mkTApps <$> atomTy <*> P.many atomTy
 
 -- | Applies a type-level expression to arguments; each partial application
 --   is located from the head to its last argument.
 mkTApps :: LTy 'Parsing -> [LTy 'Parsing] -> LTy 'Parsing
 mkTApps = foldl (\t1 t2 -> Loc (location t1 <> location t2) (TApp t1 t2))
 
-simpleTy :: (Monad m) => P m (LTy 'Parsing)
-simpleTy =
+-- | An atomic type-level expression: a type constructor, a type variable,
+--   @rev@ (unapplied), a parenthesized one, or a tuple.
+atomTy :: (Monad m) => P m (LTy 'Parsing)
+atomTy =
   getSrcLoc >>= \start ->
-    conTy start <|> varTy start <|> tupleTy <|> wTupleTy
+    conTy start <|> varTy start <|> revTy start <|> parenTy <|> wTupleTy
   where
     conTy start = do
       c <- qconName
@@ -290,15 +312,30 @@ simpleTy =
       sp
       return $ Loc (start <> end) $ TVar x
 
-tupleTy :: (Monad m) => P m (LTy 'Parsing)
-tupleTy = do
+    revTy start = do
+      void $ P.try (P.string "rev" <* P.notFollowedBy P.alphaNumChar)
+      end <- getSrcLoc
+      sp
+      return $ Loc (start <> end) $ TCon (BuiltIn nameTyRev)
+
+-- | @()@, a parenthesized type-level expression (kept as written), one with
+--   a kind annotation @(t : k)@, or a tuple type.
+parenTy :: (Monad m) => P m (LTy 'Parsing)
+parenTy = do
   start <- getSrcLoc
   void $ symbol "("
-  ts <- typeExpr `P.sepBy` comma
+  r <-
+    P.optional typeExpr >>= \case
+      Nothing -> return $ Left []
+      Just t ->
+        (Right . (t,) <$> (symbol ":" *> kindExpr))
+          <|> (Left . (t :) <$> P.many (comma *> typeExpr))
   void $ P.char ')'
   end <- getSrcLoc -- the span of a parenthesized type excludes the trailing spaces
   sp
-  return $ mkTupleTy (Loc (start <> end) ts)
+  return $ case r of
+    Right (t, k) -> Loc (start <> end) (TKind t k)
+    Left ts -> mkTupleTy (Loc (start <> end) ts)
 
 -- | A parenthesized type (kept as written) or a tuple type.
 mkTupleTy :: Loc [LTy 'Parsing] -> LTy 'Parsing
@@ -359,46 +396,45 @@ topDecl = typeDecl <|> dataDecl <|> (fmap DDecl <$> localDecl) <|> classDecl <|>
   where
     tyLHS = do
       c <- L.lexeme sp conName
-      xs <- P.many (L.lexeme sp varName)
-      return (c, xs)
+      bs <- P.many tyBinder
+      return (c, bs)
 
     dataDecl = loc $ do
       void $ keyword "data"
-      (c, xs) <- tyLHS
-      gadtDecl c xs <|> normalDecl c xs
+      (c, bs) <- tyLHS
+      gadtDecl c bs <|> normalDecl c bs
       where
-        normalDecl c xs = do
+        normalDecl c bs = do
           void $ symbol "="
-          DData c (map noKind xs) <$> (P.try cdecl <|> gadtCDecl xs) `P.sepBy1` symbol "|"
+          DData c bs <$> (P.try cdecl <|> gadtCDecl bs) `P.sepBy1` symbol "|"
 
-        gadtDecl c xs = do
+        gadtDecl c bs = do
           void $ keyword "where"
-          cs <- P.many (keyword "sig" *> gadtCDecl xs)
+          cs <- P.many (keyword "sig" *> gadtCDecl bs)
           void $ keyword "end"
-          return $ DData c (map noKind xs) cs
+          return $ DData c bs cs
 
-    -- kind annotations are not parsed yet (stage V3 of the notes)
-    noKind x = TyBinder x Nothing
-
-    -- the existentials are the variables other than the parameters; the
-    -- form of the result is checked by the type checker
-    gadtCDecl xs = do
+    -- the existentials are the variables other than the parameters (they
+    -- may be bound explicitly by a leading forall); the form of the result
+    -- is checked by the type checker
+    gadtCDecl bs = do
       start <- getSrcLoc
       c <- conName <* sp
       void $ symbol ":"
-      ty <- arrTy
-      return $ Loc (start <> location ty) $ GeneralC c (introForAllExcept xs ty)
+      ef <- P.optional forallBinders
+      ty <- maybe id mkForalls ef <$> arrTy
+      return $ Loc (start <> location ty) $ GeneralC c (introForAllExcept (map tyBinderName bs) ty)
 
     typeDecl = loc $ do
       void $ keyword "type"
-      (c, xs) <- tyLHS
+      (c, bs) <- tyLHS
       void $ symbol "="
-      DType c (map noKind xs) <$> typeExpr
+      DType c bs <$> typeExpr
 
     cdecl = do
       start <- getSrcLoc
       c <- conName <* sp
-      ts <- P.many simpleTy
+      ts <- P.many atomTy
       return $ Loc (start <> mconcat (map location ts)) $ NormalC c ts
     
       
@@ -699,10 +735,10 @@ classDecl :: (Monad m) => P m (Loc (TopDecl 'Parsing))
 classDecl = loc $ do
   void $ keyword "class"
   c <- L.lexeme sp conName
-  xs <- P.many (L.lexeme sp varName)
+  bs <- P.many tyBinder
   sups <- fromMaybe [] <$> P.optional (keyword "extends" *> appTy `P.sepBy1` comma)
-  d <- whereClauseWith (introForAllExcept xs)
-  return $ DClass c (map (\x -> TyBinder x Nothing) xs) sups d
+  d <- whereClauseWith (introForAllExcept (map tyBinderName bs))
+  return $ DClass c bs sups d
 
 -- instance [x :] {{S1}} -> ... -> C t1 ... tn [where ... end]
 instanceDecl :: (Monad m) => P m (Loc (TopDecl 'Parsing))

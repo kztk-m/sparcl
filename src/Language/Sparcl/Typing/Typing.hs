@@ -5,7 +5,6 @@ module Language.Sparcl.Typing.Typing (
   inferExp,
   inferTopDecls,
   -- exported for the unit tests of kinds (test/Spec.hs)
-  convertWrittenTy,
   instantiateQ,
   quantify,
 ) where

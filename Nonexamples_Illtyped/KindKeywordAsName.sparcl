@@ -1,0 +1,4 @@
+-- Type and Multiplicity are keywords (the names of kinds), so they cannot be
+-- used as the names of type constructors or constructors: a parse error.
+
+data Type = A

@@ -21,10 +21,8 @@ import Language.Sparcl.Name
 import Language.Sparcl.Typing.Instance (V (..), unifyPure)
 import Language.Sparcl.Multiplicity (Multiplicity (..))
 import Language.Sparcl.Pretty (prettyShow)
-import Language.Sparcl.SrcLoc (noLoc)
-import qualified Language.Sparcl.Surface.Syntax as S
-import Language.Sparcl.Typing.TCMonad (TC, TypingContext, execTCWith, initTypingContext, newMetaKind, newMetaTy, newMetaTyVar, newMetaTyWithKind, unify, zonkType)
-import Language.Sparcl.Typing.Typing (convertWrittenTy, instantiateQ, quantify)
+import Language.Sparcl.Typing.TCMonad (TC, TypingContext, execTCWith, initTypingContext, newMetaKind, newMetaTy, newMetaTyVar, newMetaTyWithKind, unify)
+import Language.Sparcl.Typing.Typing (instantiateQ, quantify)
 import Language.Sparcl.Typing.Type
 import Language.Sparcl.Value (Value (..), eqCheck, runEval)
 
@@ -87,10 +85,10 @@ tNames n = ["t" ++ show i | i <- [1 .. n]]
 
 -- * Unit tests of binary type applications and their unification
 --
--- Stage V1 of the notes (higher-kinded classes): applications headed by
--- variables or metas cannot be written yet, so the internal types are
--- built directly. They are to be replaced by sample-based tests once the
--- forms become writable (stage V3).
+-- Stage V1 of the notes (higher-kinded classes). The cases that can be
+-- written in programs since stage V3 are tested by samples instead
+-- (Examples/KindHigherKinded.sparcl, Nonexamples_Illtyped/Kind*.sparcl);
+-- the remaining ones test internal functions directly.
 
 nameEither :: Name
 nameEither = nameInBase (User "Either")
@@ -130,18 +128,6 @@ unificationSpec tc = describe "binary type applications (unit tests)" $ do
     TyCon nameEither [boolT, intT] `shouldBe` TyApp (TyApp (TyConst nameEither) boolT) intT
     splitTyCon (TyApp (TyApp (TyConst nameEither) boolT) intT) `shouldBe` Just (nameEither, [boolT, intT])
 
-  it "unifies ?f ?a with Either Bool Int, giving ?f := Either Bool and ?a := Int" $ do
-    res <- runTCFresh tc $ do
-      f <- newMetaTyWithKind tyArrKi
-      a <- newMetaTy
-      unify (TyApp f a) (TyCon nameEither [boolT, intT])
-      (,) <$> zonkType f <*> zonkType a
-    res `shouldBe` (TyCon nameEither [boolT], intT)
-
-  it "does not decompose a function type: ?f ?b ~ (Int -> Bool) fails" $
-    runTCFresh tc (do f <- newMetaTyWithKind tyArrKi; b <- newMetaTy; unify (TyApp f b) (intT *-> boolT))
-      `shouldThrow` staticError
-
   it "does not decompose an instance-argument function type: ?f ?b ~ ({{C}} -> Bool) fails" $
     runTCFresh tc (do f <- newMetaTyWithKind tyArrKi; b <- newMetaTy; unify (TyApp f b) (TyInstFun (TyCon nameC []) boolT))
       `shouldThrow` staticError
@@ -152,16 +138,6 @@ unificationSpec tc = describe "binary type applications (unit tests)" $ do
           f <- newMetaTyWithKind tyArrKi
           [a, b, c] <- mapM (const newMetaTy) [1 :: Int .. 3]
           unify (TyApp f a) (TyApp (TyApp f b) c)
-      )
-      `shouldThrow` staticError
-
-  it "binds only to an expression of the same kind: ?f ?a ~ Maybe Int fails for ?f : (Type -> Type) -> Type" $
-    -- e.g. sig g : f a -> f List used at Maybe Int (D3 in the notes)
-    runTCFresh tc
-      ( do
-          f <- newMetaTyWithKind (arrKi tyArrKi typeKi)
-          a <- newMetaTyWithKind tyArrKi
-          unify (TyApp f a) (TyCon nameMaybe [intT])
       )
       `shouldThrow` staticError
 
@@ -219,51 +195,14 @@ kindSpec tc = describe "kinds (unit tests)" $ do
     prettyShow (arrKi tyArr typeKi) `shouldBe` "(Type -> Type) -> Type"
     prettyShow (arrKi multKi tyArr) `shouldBe` "Multiplicity -> Type -> Type"
 
--- * Unit tests of kind inference and checking (stage V2-2 of the notes;
---   they build written types directly, since variable heads and kind
---   annotations cannot be written before stage V3)
+-- * Unit tests of kinds in instantiation and generalization (stage V2-2 of
+--   the notes; kind inference and checking of written types are tested by
+--   samples since stage V3)
 
 kindCheckSpec :: TypingContext -> Spec
-kindCheckSpec tc = describe "kind inference and checking (unit tests)" $ do
-  let l = noLoc
-      f = Alpha 0 (User "f")
-      a = Alpha 0 (User "a")
-      tInt = l (S.TCon nameTyInt)
-      kType = l (S.TCon nameKindType)
-      kMult = l (S.TCon nameKindMultiplicity)
-      kArr k1 k2 = l (S.TApp (l (S.TApp (l (S.TCon nameKiArr)) k1)) k2)
-      arr m t1 t2 = l (S.TArr (l m) t1 t2)
-      forallK x mk t = l (S.TForall (S.TyBinder x mk) t)
-      tyArr = arrKi typeKi typeKi
-      binderKinds (TyForAll vs _) = map tyVarKind vs
+kindCheckSpec tc = describe "kinds in instantiation and generalization (unit tests)" $ do
+  let binderKinds (TyForAll vs _) = map tyVarKind vs
       binderKinds _ = []
-
-  it "infers the kind of a variable applied to an argument: forall f. f Int -> Int gives f : Type -> Type" $ do
-    t <- runTCFresh tc $ convertWrittenTy $
-      forallK f Nothing (arr (S.TMult Omega) (l (S.TApp (l (S.TVar f)) tInt)) tInt)
-    binderKinds t `shouldBe` [tyArr]
-
-  it "defaults an undetermined kind to Type: forall a. Int -> Int" $ do
-    t <- runTCFresh tc $ convertWrittenTy $ forallK a Nothing (arr (S.TMult Omega) tInt tInt)
-    binderKinds t `shouldBe` [typeKi]
-
-  it "uses the kind annotation of a forall binder" $ do
-    -- forall (a : Multiplicity). Int # a -> Int
-    t <- runTCFresh tc $ convertWrittenTy $
-      forallK a (Just kMult) (arr (S.TVar a) tInt tInt)
-    binderKinds t `shouldBe` [multKi]
-    -- forall (a : Type). Int # a -> Int
-    runTCFresh tc (convertWrittenTy (forallK a (Just kType) (arr (S.TVar a) tInt tInt)))
-      `shouldThrow` staticError
-    -- forall (f : Type -> Type). f Int -> Int
-    t' <- runTCFresh tc $ convertWrittenTy $
-      forallK f (Just (kArr kType kType)) (arr (S.TMult Omega) (l (S.TApp (l (S.TVar f)) tInt)) tInt)
-    binderKinds t' `shouldBe` [tyArr]
-
-  it "checks a kind annotation (t : k)" $ do
-    _ <- runTCFresh tc $ convertWrittenTy $ arr (S.TMult Omega) (l (S.TKind tInt kType)) tInt
-    runTCFresh tc (convertWrittenTy (arr (S.TMult Omega) (l (S.TKind tInt kMult)) tInt))
-      `shouldThrow` staticError
 
   it "instantiates a binder with a meta of its kind" $ do
     let p = BoundTv (mkName "p") multKi
@@ -337,6 +276,7 @@ main = hspec $ do
       , ("HigherRankLetCase.sparcl", "Main", ["t6", "t7"])
       , -- a class application written with a synonym
         ("KindSynonym.sparcl", "Main", ["t1"])
+      , ("KindHigherKinded.sparcl", "Main", tNames 7)
       ]
       $ \(f, m, ns) ->
         loadEval tc ("./Examples" </> f) `before` checkExpected f m ns

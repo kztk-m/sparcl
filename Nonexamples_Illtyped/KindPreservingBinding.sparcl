@@ -1,0 +1,15 @@
+-- In g, f : (Type -> Type) -> Type and a : Type -> Type (from f List).
+-- At the use g mi, f a ~ Maybe Int would need f := Maybe and a := Int, but
+-- they do not have the kinds of f and a, so the unification fails.
+
+data List a = Nil | Cons a (List a)
+
+data Maybe a = Nothing | Just a
+
+sig g : f a -> f List -> Int
+def g _ _ = 0
+
+sig mi : Maybe Int
+def mi = Just 1
+
+def bad = g mi

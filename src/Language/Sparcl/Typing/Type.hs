@@ -261,7 +261,9 @@ instance Pretty Ty where
   pprPrec k (TyCon c [k1, k2])
     | c == nameKiArr =
         parensIf (k > 0) $ pprPrec 1 k1 D.<+> D.text "->" D.<+> pprPrec 0 k2
-  pprPrec _ (TyConst c) = ppr c
+  pprPrec _ (TyConst c)
+    | c == nameTyRev = D.text "rev" -- unapplied, e.g. in @T rev@
+    | otherwise = ppr c
   pprPrec k (TyCon c ts) =
     parensIf (k > 1) $
       ppr c D.<+> D.align (D.hsep (map (pprPrec 2) ts))
