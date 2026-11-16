@@ -127,7 +127,7 @@ instance Pretty Name where
 moduleNameToStr :: ModuleName -> String
 moduleNameToStr (ModuleName ms) = ms
 
--- Names generated for type classes (H-4-3 1). Each is an 'Original' name in
+-- Names generated for type classes. Each is an 'Original' name in
 -- the module declaring the class (or the method), so that expressions built
 -- in other modules refer to the same names.
 
@@ -136,15 +136,15 @@ systemNameAt :: String -> (NameBase -> SystemName) -> Name -> Name
 systemNameAt _ f (Original m base _) = let s = System (f base) in Original m s (Bare s)
 systemNameAt what _ n = error $ "Cannot happen: " ++ what ++ " must be a top-level name: " ++ show n
 
--- | The dictionary constructor of a class (H-4-2).
+-- | The dictionary constructor of a class.
 dictName :: Name -> Name
 dictName = systemNameAt "a class" NDict
 
--- | The projection of the i-th superclass dictionary of a class (E-3).
+-- | The projection of the i-th superclass dictionary of a class.
 superProjName :: Name -> Int -> Name
 superProjName c i = systemNameAt "a class" (`NSuperProj` i) c
 
--- | The default implementation of a method (G-5 2).
+-- | The default implementation of a method.
 defaultName :: Name -> Name
 defaultName = systemNameAt "a method" NDefault
 

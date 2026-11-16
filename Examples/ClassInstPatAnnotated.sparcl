@@ -1,5 +1,4 @@
--- Instance patterns need a known type (C-4 in
--- notes/extend-type-class_2026.txt): `def f {{d}} x = ...` without a
+-- Instance patterns need a known type: `def f {{d}} x = ...` without a
 -- signature and `\{{d}} -> ...` whose type is inferred are errors
 -- (Nonexamples_Illtyped/ClassInstPatNoSig.sparcl,
 -- Nonexamples_Illtyped/ClassInstPatInInferredAbs.sparcl). This file shows

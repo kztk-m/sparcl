@@ -1,6 +1,5 @@
 -- It is intentional that this program causes a type error.
--- An instance of `Ord` defines `eq`, which is a method of `Eq`, not of `Ord`
--- (G-5 3 in notes/extend-type-class_2026.txt).
+-- An instance of `Ord` defines `eq`, which is a method of `Eq`, not of `Ord`.
 
 data T = MkT
 

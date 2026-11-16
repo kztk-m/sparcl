@@ -1,6 +1,5 @@
 -- It is intentional that this program causes a type error.
--- An instance does not define `neq`, which has no default
--- (G-5 4 in notes/extend-type-class_2026.txt).
+-- An instance does not define `neq`, which has no default.
 
 data T = MkT
 

@@ -51,7 +51,7 @@ data WhenChecking
   | CheckingMoreGeneral !Ty !Ty
   | CheckingMultiplicities Name MCContext ![Ty] ![Ty]
   | CheckingType Name !Ty
-  | CheckingSuperclasses Name -- the superclass instances of an instance (G-3 3-b)
+  | CheckingSuperclasses Name -- the superclass instances of an instance
   | OtherContext !Doc
   | CheckingNone
 
@@ -70,7 +70,7 @@ data ErrorDetail
   | CannotHavePolyTy !PolyTy ![TyVar]
   | LessPolymorphic !PolyTy !PolyTy ![TyVar]
   | CannotUnifyPolyTy !MetaTyVar !PolyTy
-  | -- Type classes (E-5 in the notes)
+  | -- Type classes
     NoInstance !Ty -- no candidate for a goal without metas
   | AmbiguousInstances !Ty ![Name] -- several global candidates for a goal without metas
   | AmbiguousGoal !Ty -- metas left in a goal that can no longer be fixed
@@ -277,7 +277,7 @@ instance Pretty TypeError where
 type TyEnv = Map Name Ty
 type ConEnv = Map Name ConTy
 
--- | Information on a class (B-1 in the notes). The class parameters stay
+-- | Information on a class. The class parameters stay
 --   'BoundTv's and are instantiated by substitution when used.
 data ClassInfo = ClassInfo
   { ciParams :: ![TyVar] -- class parameters
@@ -300,7 +300,7 @@ instance Pretty ClassInfo where
 -- | Classes by name.
 type ClassTable = Map Name ClassInfo
 
--- | The global type of a method (B-5): for @class C as@ and the method
+-- | The global type of a method: for @class C as@ and the method
 --   signature @forall bs. cs => t@, @forall as bs. cs => {{C as}} -> t@
 --   (all foralls in front). Renaming names the variables of the signature
 --   apart from the class parameters.
@@ -312,7 +312,7 @@ methodType c params sigTy =
   where
     dict = TyCon c (map TyVar params)
 
--- | The type of the projection of the i-th superclass of class @c@ (E-3):
+-- | The type of the projection of the i-th superclass of class @c@:
 --   @forall as. C as -> Si@ (an ordinary unrestricted arrow).
 superProjType :: Name -> ClassInfo -> Int -> Ty
 superProjType c ci i =
@@ -321,7 +321,7 @@ superProjType c ci i =
         TyQual [] $
           FunTy (TyMult Omega) (TyCon c (map TyVar ps)) (ciSupers ci !! i)
 
--- | Instances (B-2, B-4 (5)): class name -> instance name -> instance type.
+-- | Instances: class name -> instance name -> instance type.
 type InstTable = Map Name (Map Name Ty)
 
 -- | Merges instance tables; the same instance reached by several import
@@ -332,23 +332,22 @@ mergeInstTable = M.unionWith M.union
 -- | Typed clauses of a definition.
 type TypedClauses = [([S.LPat 'TypeCheck], S.Clause 'TypeCheck)]
 
--- | What type checking gives desugaring about an instance declaration
---   (G-1 6, for H-4-4).
+-- | What type checking gives desugaring about an instance declaration.
 data TypedInstance = TypedInstance
   { tiName :: !Name -- the instance (named or generated)
   , tiType :: !Ty -- the instance type
   , tiClass :: !Name -- the class of its head
-  , tiLocals :: ![(Name, Ty)] -- its instance arguments d1 ... dk as local instances (G-3 3)
-  , tiSupers :: ![S.LExp 'TypeCheck] -- dictionaries of the superclasses, in terms of d1 ... dk (G-3 3)
-  , tiMethods :: ![(Name, PolyTy, TypedClauses)] -- defined methods, checked against their types (G-5 3)
-  , tiDefaulted :: ![Name] -- omitted methods, filled by their defaults (G-5 4)
+  , tiLocals :: ![(Name, Ty)] -- its instance arguments d1 ... dk as local instances
+  , tiSupers :: ![S.LExp 'TypeCheck] -- dictionaries of the superclasses, in terms of d1 ... dk
+  , tiMethods :: ![(Name, PolyTy, TypedClauses)] -- defined methods, checked against their types
+  , tiDefaulted :: ![Name] -- omitted methods, filled by their defaults
   }
 
--- | A typed default method (G-1 6, G-5 2, for H-4-4).
+-- | A typed default method.
 data TypedDefault = TypedDefault
   { tdMethod :: !Name
   , tdClass :: !Name
-  , tdType :: !PolyTy -- the global type of the method (B-5)
+  , tdType :: !PolyTy -- the global type of the method
   , tdClauses :: !TypedClauses
   }
 
@@ -514,25 +513,25 @@ data TypingContext
   , tcDeferredIC :: !(IORef [(TypeErrorContext, SuspendedCheck)])
   -- Type errors are accumulated for better error messages
   , tcExpandLast :: !ExpandLast
-  -- Whether the spine being checked inserts trailing instance arguments
-  -- (as Agda's envExpandLast); see 'ExpandLast'.
+  -- Whether the spine being checked inserts trailing instance arguments;
+  -- see 'ExpandLast'.
   , tcLocalInsts :: ![(Name, Ty)]
-  -- Local instances in scope (B-3): variables bound by {{x}} and by
-  -- inserted abstractions, with their class types; the innermost first.
+  -- Local instances in scope: variables bound by {{x}} and by inserted
+  -- abstractions, with their class types; the innermost first.
   , tcRefGenCount :: !(IORef Int)
-  -- Counter for names `Generated i TypeChecking` (B-3 (6)).
+  -- Counter for names `Generated i TypeChecking`.
   , tcGoals :: !(IORef [Goal])
-  -- Instance goals not solved yet (E-1).
+  -- Instance goals not solved yet.
   }
 
--- | An instance goal (E-1): made when an instance argument is inserted
---   (D-1, D-2) and solved later (E-2), when its type is better known.
+-- | An instance goal: made when an instance argument is inserted and
+--   solved later, when its type is better known.
 data Goal = Goal
   { goalId :: !Name -- the goal's name (for messages)
-  , goalRef :: !(IORef (Maybe (S.LExp 'TypeCheck))) -- the hole in the AST (F-3)
+  , goalRef :: !(IORef (Maybe (S.LExp 'TypeCheck))) -- the hole in the AST
   , goalTy :: !Ty -- the class type; may contain metas
-  , goalLocals :: ![(Name, Ty)] -- the local instances at creation (B-3 (5))
-  , goalLevel :: !TcLevel -- the level at creation (E-2)
+  , goalLocals :: ![(Name, Ty)] -- the local instances at creation
+  , goalLevel :: !TcLevel -- the level at creation
   , goalLoc :: !(Maybe SrcSpan) -- the location at creation, for errors
   , goalCtx :: !TypeErrorContext -- the error context at creation
   }
@@ -544,7 +543,7 @@ newGenName = do
   cnt <- liftIO $ atomicModifyIORef' cref $ \cnt -> (cnt + 1, cnt)
   pure $ Generated cnt TypeChecking
 
--- | Registers local instances (B-3); the given ones become the innermost.
+-- | Registers local instances; the given ones become the innermost.
 withLocalInsts :: [(Name, Ty)] -> TC r -> TC r
 withLocalInsts xs = local (\tc -> tc{tcLocalInsts = xs ++ tcLocalInsts tc})
 
@@ -571,7 +570,7 @@ atGoal g =
   local (\tc -> tc{tcLoc = goalLoc g}) . restoreTypeErrorContext (goalCtx g)
 
 -- | Whether trailing instance arguments are inserted after the arguments of
---   an application are used up (as Agda's ExpandHidden). The flag is set by
+--   an application are used up (as in Agda). The flag is set by
 --   the caller: checking ('Check') sets 'ExpandLast'; plain inference sets
 --   'DontExpandLast'; inference of a value that is matched against patterns
 --   (the bound expression of @let p <- e1 in e2@, the scrutinee of @case@)

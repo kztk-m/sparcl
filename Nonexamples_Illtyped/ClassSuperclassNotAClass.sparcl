@@ -1,5 +1,5 @@
 -- It is intentional that this program causes a type error.
--- A superclass must be a class (G-2 in notes/extend-type-class_2026.txt).
+-- A superclass must be a class.
 
 data List a = Nil | Cons a (List a)
 

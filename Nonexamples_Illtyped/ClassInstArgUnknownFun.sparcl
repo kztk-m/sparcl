@@ -1,6 +1,6 @@
 -- It is intentional that this program causes a type error.
 -- An explicitly passed instance {{e}} cannot be given to a function whose
--- type is not known (D-1, A-4 in notes/extend-type-class_2026.txt).
+-- type is not known.
 
 data Nat = Z | S Nat
 

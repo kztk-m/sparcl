@@ -1,12 +1,7 @@
--- Cyclic superclasses (G-2 3 in notes/extend-type-class_2026.txt).
---
--- `A a` extends `B a` and `B a` extends `A a`. Cycles are not rejected:
--- instance search still terminates (following superclasses of a local
--- instance, a candidate of a type already seen is dropped, and search has
--- a depth limit in any case), and the global dictionaries
--- `aNat` and `bNat` become mutually recursive (cyclic) values. Loading a
--- module forces dictionaries only to weak head normal form, and the REPL
--- prints a dictionary as `<dict A>`, so neither loops.
+-- Cyclic superclasses: `A a` extends `B a` and `B a` extends `A a`.
+-- Cycles are not rejected; instance search still terminates, and the
+-- global dictionaries `aNat` and `bNat` become cyclic values, which load
+-- and print (as `<dict A>`) without looping.
 
 data Nat = Z | S Nat
 

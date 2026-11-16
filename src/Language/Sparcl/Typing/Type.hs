@@ -70,7 +70,7 @@ pattern FunTy m argTy resTy <- TyCon ((== nameTyArr) -> True) [m, argTy, resTy]
 -- | An instance-argument function type @{{c}} -> t@ (always unrestricted).
 --   NB: as it is an ordinary 'TyCon', generic treatments of type
 --   constructors apply to it silently; places where it must be treated
---   differently from 'FunTy' need explicit cases (A-1 in the notes).
+--   differently from 'FunTy' need explicit cases.
 pattern InstFunTy :: Ty -> Ty -> Ty
 pattern InstFunTy c resTy <- TyCon ((== nameTyInstArr) -> True) [c, resTy]
   where

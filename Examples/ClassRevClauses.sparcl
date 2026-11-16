@@ -2,9 +2,8 @@
 --
 -- `incAll` has no written instance pattern, so the type checker inserts one
 -- in each clause. The inserted patterns bind the same variable in all the
--- clauses (C-2 in notes/extend-type-class_2026.txt), so the clauses, whose
--- other patterns are invertible, are still desugared into one invertible
--- case.
+-- clauses, so the clauses, whose other patterns are invertible, are still
+-- desugared into one invertible case.
 
 data Nat = Z | S Nat
 data List a = Nil | Cons a (List a)

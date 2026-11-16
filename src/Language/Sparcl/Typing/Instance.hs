@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Instance search and the solving of instance goals (E-2, E-3 and the
---   revised E-4 in notes/extend-type-class_2026.txt).
+-- | Instance search and the solving of instance goals (see
+--   notes/TypeClasses.md).
 --
 --   A goal @C ts@ is searched among
 --
@@ -37,7 +37,7 @@ import Language.Sparcl.Surface.Syntax (Arg (..), Exp (..), LExp)
 import Language.Sparcl.Typing.TCMonad
 import Language.Sparcl.Typing.Type
 
--- | The depth limit of instance search (E-3 3), shared by the recursion on
+-- | The depth limit of instance search, shared by the recursion on
 --   subgoals of global instances and the projection steps to superclasses
 --   of local instances.
 maxSearchDepth :: Int
@@ -71,9 +71,8 @@ type Sub = [(V, Ty)]
 -- | Unification in which the given (bound) type variables of a candidate
 --   and, when @metasFlexible@, the meta variables of the goal may be
 --   instantiated; skolems and other variables are rigid. Nothing is
---   written to meta variables. With @metasFlexible = False@ it is the
---   one-way matching of E-4 (the candidate's variables are disjoint from
---   the goal's).
+--   written to meta variables. With @metasFlexible = False@ it is one-way
+--   matching (the candidate's variables are disjoint from the goal's).
 unifyPure :: [TyVar] -> Bool -> Ty -> Ty -> Maybe Sub
 unifyPure vs metasFlexible = go []
   where
@@ -126,8 +125,8 @@ hasMetas = not . null . metaTyVars
 
 -- * Candidates
 
--- | The local instances and their superclasses (E-3 (i), (ii)), in the
---   order used to choose among several (E-4 (3)): direct ones before
+-- | The local instances and their superclasses, in the order used to
+--   choose among several: direct ones before
 --   projections, and within each, the innermost first. Projections are
 --   followed up to the given number of steps; the flag tells whether the
 --   enumeration was cut by it. Candidates of the same type as an earlier
@@ -175,7 +174,7 @@ splitInstTy t = ([], [], t)
 
 -- * Search
 
--- | Searches a goal (E-3, E-4 revised).
+-- | Searches a goal: local instances first, then global ones.
 searchGoal :: Goal -> TC SearchResult
 searchGoal g = normTy (goalTy g) >>= searchTy g 0
 
@@ -183,7 +182,8 @@ searchTy :: Goal -> Int -> Ty -> TC SearchResult
 searchTy _ depth ty
   | depth > maxSearchDepth = pure (STooDeep ty)
 searchTy g depth ty@(TyCon c _) = do
-  -- L: local instances (E-4 (2), (3))
+  -- local instances: the first one matching the goal is taken; if none
+  -- matches but one could after its metas are fixed, the goal is stuck
   (locals, cut) <- localCandidates (maxSearchDepth - depth) (goalLocals g)
   let matching = [e | (lt, e) <- locals, isJust (unifyPure [] False lt ty)]
       unifiable = [() | (lt, _) <- locals, isJust (unifyPure [] True lt ty)]
@@ -193,7 +193,8 @@ searchTy g depth ty@(TyCon c _) = do
       | not (null unifiable) -> pure SStuck
       | otherwise -> globals cut
   where
-    -- G: global instances (E-4 (4) revised)
+    -- global instances: exactly one must unify with the goal, and it must
+    -- match without instantiating the goal's metas
     globals cut = do
       ienv <- asks tcInstEnv
       cands <- forM (maybe [] M.toList (M.lookup c ienv)) $ \(x, ity) -> do
@@ -233,7 +234,7 @@ searchTy _ _ _ = pure SStuck
 -- * Goals
 
 -- | Makes a goal in the current scope, without adding it to the list of
---   goals (used for the superclass check, G-3 3-b).
+--   goals (used for the superclass check of instances).
 makeGoal :: [(Name, Ty)] -> Ty -> TC Goal
 makeGoal locals c = do
   g <- newGenName
@@ -263,7 +264,7 @@ makeGoalLike g c = do
 goalHole :: Goal -> LExp 'TypeCheck
 goalHole g = Loc (fromMaybe NoLoc (goalLoc g)) (InstHole () (goalId g, goalTy g) (goalRef g))
 
--- | What to do with goals that cannot be decided (E-2).
+-- | What to do with goals that cannot be decided.
 data Unsolved
   = -- | in a local group: put back into the outer list (outer uses may fix
     --   the metas)
@@ -318,8 +319,8 @@ solveGoals policy = mapM_ solveOne
       lvs <- mapM readTcLevelMv (nub (metaTyVars ty))
       pure (any (> lv) lvs)
 
--- | Reports the goals left in the list (after the top level, E-2: none
---   should remain) as ambiguous.
+-- | Reports the goals left in the list after the top level (none should
+--   remain) as ambiguous.
 reportLeftoverGoals :: TC ()
 reportLeftoverGoals = do
   ref <- asks tcGoals

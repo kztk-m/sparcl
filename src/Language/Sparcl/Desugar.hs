@@ -58,8 +58,8 @@ runDesugar m = runReaderT m 0
 numberOfArgs :: T.Ty -> Int
 numberOfArgs (T.TyForAll _ (T.TyQual _ t)) = numberOfArgs t
 numberOfArgs (T.TyCon n [_, _, t]) | n == nameTyArr = numberOfArgs t + 1
--- No constructor takes instance arguments now; counted in preparation for
--- constructors with instance arguments (see the notes, H-4-1).
+-- TODO: no constructor takes instance arguments yet; counted for when
+-- constructors may take them.
 numberOfArgs (T.TyCon n [_, t]) | n == nameTyInstArr = numberOfArgs t + 1
 numberOfArgs _ = 0
 
@@ -87,7 +87,7 @@ desugarExp (Loc _ expr) = go expr
         checkAllVars [] = pure []
         checkAllVars (x : xs) = liftA2 (:) (checkVar x) (checkAllVars xs)
         checkVar (unLoc -> S.PVar (n, _)) = pure n
-        -- a dictionary is an ordinary argument at run time (H-4-1 3)
+        -- a dictionary is an ordinary argument at run time
         checkVar (unLoc -> S.PInst p) = checkVar p
         checkVar _ = Nothing
     go (S.Abs ps e) = desugarRHS [(ps, S.Clause e (S.HDecls () []) Nothing)]
@@ -294,8 +294,8 @@ separatePat pat = go False (unLoc pat)
     go _ (S.PWild (x, _ty)) =
       -- (if b then CPVar x else CPBang (CPVar x), [])
       (CPVar x, [])
-    -- An instance pattern binds the dictionary, an ordinary argument at
-    -- run time (H-4-1 3).
+    -- an instance pattern binds the dictionary, an ordinary argument at
+    -- run time
     go b (S.PInst p) = go b (unLoc p)
     -- go _ (S.PBang p) =
     --   let (p', subs) = go True (unLoc p)
@@ -392,10 +392,9 @@ desugarPat = go . unLoc
     go _ = error "desugarPat: Cannot happen."
 
 -- | Desugars the top-level declarations of a module. Besides the @def@s,
---   it makes the values of the methods and superclass projections of the
---   classes declared in the module (H-4-3), and of their default methods
---   and the instances declared in the module (H-4-4); all are evaluated as
---   one recursive group with the @def@s (H-4-5 1).
+--   it makes the methods and superclass projections of the classes
+--   declared in the module, their default methods, and the instances
+--   declared in the module; all form one recursive group.
 desugarTopDecls ::
   ClassTable -- classes declared in this module
   -> ClassTable -- all classes in scope (an instance may be of an imported class)
@@ -416,10 +415,9 @@ desugarTopDecls ownClasses allClasses defaults insts (S.HDecls _ bss) = do
   instBinds <- mapM (desugarInstance allClasses) insts
   return $ defBinds ++ classBinds ++ defaultBinds ++ instBinds
 
--- | The methods and superclass projections of class @c@ (H-4-3 2, 3). A
---   dictionary is @<dict C> [s_1, ..., s_m, f_1, ..., f_n]@ (H-4-2): the
---   superclass dictionaries in @extends@ order, then the methods in
---   signature order.
+-- | The methods and superclass projections of class @c@. A dictionary is
+--   @<dict C> s_1 ... s_m f_1 ... f_n@: the superclass dictionaries in
+--   @extends@ order, then the methods in signature order.
 desugarClass :: Name -> ClassInfo -> Desugar (C.Bind Name)
 desugarClass c ci = do
   let m = length (ciSupers ci)
@@ -438,15 +436,13 @@ dictField c n i = withNewNames (n + 1) $ \case
   d : xs -> return $ C.Abs d (C.Case (C.Var d) [(C.PCon (dictName c) (map C.PVar xs), C.Var (xs !! i))])
   [] -> cannotHappen $ text "dictField: no names"
 
--- | The value of an instance @x : forall as. {{H1}} -> ... -> {{Hk}} -> C ts@
---   (H-4-4 1):
+-- | The value of an instance @x : forall as. {{H1}} -> ... -> {{Hk}} -> C ts@:
 --
---   > x = \d1 ... dk -> let self = <dict C> [sup_1, ..., sup_m, impl_1, ..., impl_n] in self
+--   > x = \d1 ... dk -> let self = <dict C> sup_1 ... sup_m impl_1 ... impl_n in self
 --
---   where @d1 ... dk@ are the names used by its superclass dictionaries
---   @sup_i@ (G-3 3), a defined method is its body applied to @d1 ... dk@
---   (the body takes them first, C-1 / C-2), and an omitted one is its
---   default applied to the dictionary itself.
+--   where the superclass dictionaries @sup_i@ refer to @d1 ... dk@, a
+--   defined method is its body applied to @d1 ... dk@, and an omitted one
+--   is its default applied to the dictionary itself.
 desugarInstance :: ClassTable -> TypedInstance -> Desugar (Name, T.Ty, C.Exp Name)
 desugarInstance cenv ti = do
   let c = tiClass ti
