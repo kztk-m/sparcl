@@ -83,7 +83,7 @@ data ErrorDetail
   | InstVarNotInHead !TyVar !Ty -- a quantified variable of an instance missing from its head
   | NotAMethod !Name !Name -- instance, definition
   | MissingMethod !Name !Name -- instance, method
-  | -- Kinds (D3-d, D6-d in the notes)
+  | -- Kinds
     KindMismatch !Ty !Kind !Kind -- a type-level expression, the expected and its actual kind
   | NotAFunctionKind !Ty !Kind -- a type-level expression applied to arguments, and its kind
   | UnknownTypeName !Name -- a name without a kind where a type-level expression is written
@@ -931,8 +931,8 @@ resolveSyn ty = do
       case M.lookup c synMap of
         Nothing ->
           TyCon c <$> mapM (go synMap) ts
-        -- a synonym may be applied to more arguments than its parameters
-        -- (item 1.5 in the notes), e.g. F Int for type F = Maybe
+        -- a synonym may be applied to more arguments than its parameters,
+        -- e.g. F Int for type F = Maybe
         Just (ns, tyBody)
           | length ns <= length ts ->
               let (as, rest) = splitAt (length ns) ts
@@ -1229,9 +1229,9 @@ unifyUnboundMetaTyVar mv ty2 = do
       when ok $ substituteUnif cIcLevel mv ty2'
 
 -- | Checks that binding a meta or a rigid variable of kind @k@ to @ty@
---   preserves kinds (D3-a in the notes); reports 'KindMismatch' otherwise
---   (the binding is then not made). Kinds are compared structurally: they
---   contain no kind metas outside kind inference (D3-b). Kind metas (whose
+--   preserves kinds; reports 'KindMismatch' otherwise (the binding is then
+--   not made). Kinds are compared structurally: they contain no kind metas
+--   outside kind inference. Kind metas (whose
 --   kind is the marker 'sortKi') are not unified here but by 'unifyKind'.
 checkBindKind :: Kind -> Ty -> TC Bool
 checkBindKind k ty
@@ -1251,7 +1251,7 @@ askKindOf ty = do
   tbl <- asks tcTyEnv
   pure $ kindOf tbl ty
 
--- | Unifies two kinds during kind inference (D5, D6 in the notes): binds
+-- | Unifies two kinds during kind inference: binds
 --   kind metas, with the occurs check. Returns whether it succeeded; the
 --   caller reports 'KindMismatch' (the messages of 'unify' speak of types).
 unifyKind :: Kind -> Kind -> TC Bool

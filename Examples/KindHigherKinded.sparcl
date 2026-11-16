@@ -1,5 +1,4 @@
--- Higher-kinded type-level expressions (stage V3 of
--- notes/extend-type-class_2026.txt):
+-- Higher-kinded type-level expressions:
 --   * applications whose head is a type variable (f a) or a parenthesized
 --     expression ((Either Bool) Int), and the kinds inferred for them;
 --   * rev as an argument without its own argument (Box rev);

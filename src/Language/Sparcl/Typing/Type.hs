@@ -165,10 +165,10 @@ data TyConstraint
   deriving (Eq, Ord, Show)
 
 -- | Kinds are type-level expressions: 'typeKi', 'multKi', @'arrKi' k1 k2@
---   and kind metas (D1 in the notes).
+--   and kind metas.
 type Kind = Ty
 
--- | Type variables carry their kinds (D2-a in the notes); equality and
+-- | Type variables carry their kinds; equality and
 --   order look only at names / numbers.
 data TyVar
   = BoundTv !Name !Kind
@@ -469,7 +469,7 @@ sortKi :: Ty
 sortKi = TyConst nameSort
 
 -- | The kind of a type-level name, from the table (entries of type-level
---   names in the 'TypeTable', D4-a in the notes); the kinds of tuple
+--   names in the 'TypeTable'); the kinds of tuple
 --   constructors of all arities are computed from their names.
 kindOfName :: TypeTable -> Name -> Maybe Kind
 kindOfName tbl c = case c of
@@ -480,8 +480,7 @@ kindOfName tbl c = case c of
     tupleKi n = foldr arrKi typeKi (replicate n typeKi)
 
 -- | The type constructor names occurring in a type-level expression (used
---   to keep the kinds of reachable names across modules, D4-c in the
---   notes).
+--   to keep the kinds of reachable names across modules).
 tyConNames :: Ty -> S.Set Name
 tyConNames = go
   where
@@ -498,13 +497,13 @@ tyConNames = go
     goC (TyEq t1 t2) = go t1 <> go t2
 
 -- | Replaces the kind metas left in a zonked kind by @Type@ (no kind
---   polymorphism, D1-b in the notes).
+--   polymorphism).
 defaultKind :: Kind -> Kind
 defaultKind (TyMetaV _) = typeKi
 defaultKind (TyApp k1 k2) = TyApp (defaultKind k1) (defaultKind k2)
 defaultKind k = k
 
--- | The kind of a well-kinded type-level expression (D3-b in the notes):
+-- | The kind of a well-kinded type-level expression:
 --   constants by the table, variables and metas by their own kinds.
 --   Ill-kinded applications are never built once kinds are checked, so
 --   they are internal errors here.

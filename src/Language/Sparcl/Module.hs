@@ -194,8 +194,8 @@ baseModuleInfo =
         , nameTyBool |-> typeKi
         , nameTyChar |-> typeKi
         , nameTyRational |-> typeKi
-        , -- kinds of built-in type constructors (D4-b in the notes; tuples
-          -- are computed from their names by kindOfName)
+        , -- kinds of built-in type constructors (tuples are computed from
+          -- their names by kindOfName)
           base "Un" |-> typeKi `arrKi` typeKi
         , base "Many" |-> multKi `arrKi` (typeKi `arrKi` typeKi)
         , nameTyRev |-> typeKi `arrKi` typeKi
@@ -282,7 +282,7 @@ restrictNames ns mi =
           { mcNameTable = M.mapMaybe conv (mcNameTable mc)
           , mcOpTable = restrict (mcOpTable mc)
           , -- the kinds of the type-level names reachable from what is kept
-            -- are kept too (D4-c in the notes): types of imported values
+            -- are kept too: types of imported values
             -- may mention types that are not imported
             mcTypeTable = M.restrictKeys (mcTypeTable mc) (S.union ns' reachableTyNames)
           , mcConTable = restrict (mcConTable mc)

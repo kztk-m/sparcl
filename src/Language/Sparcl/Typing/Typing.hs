@@ -53,14 +53,14 @@ import Data.List (foldl', nub, zip4, (\\))
 -- import Control.Exception (evaluate)
 -- import           Debug.Trace
 
--- * Written types: conversion with kind checking (D6 in the notes)
+-- * Written types: conversion with kind checking
 
 -- | Converts a written type-level expression and infers its kind (not
 --   bidirectional: callers unify the kind with the one they expect). The
 --   map gives the type variables bound outside the written type (the
 --   parameters of a data type or a class); renaming guarantees that every
 --   variable is bound. A kind error is reported at the subtree and aborts
---   type checking (D6-d). Kind metas may be left in the kinds of the type
+--   type checking. Kind metas may be left in the kinds of the type
 --   variables; callers default and zonk them ('zonkKinds').
 ty2ty :: M.Map Name TyVar -> S.LTy 'Renaming -> TC (Ty, Kind)
 ty2ty env lty = do
@@ -76,7 +76,7 @@ ty2tyAt env k lty = do
   pure t
 
 -- | Converts a written type (a signature, an annotation, an instance type)
---   of kind @Type@, with its kinds fixed (D6-c in the notes).
+--   of kind @Type@, with its kinds fixed.
 convertWrittenTy :: S.LTy 'Renaming -> TC Ty
 convertWrittenTy lty = ty2tyAt M.empty typeKi lty >>= zonkKinds
 
@@ -220,7 +220,7 @@ splitSurfaceApp = go []
     go acc t = (t, acc)
 
 -- | A written kind (built only from @Type@, @Multiplicity@ and the kind
---   arrow, D7-c4 in the notes).
+--   arrow).
 kindFromSurface :: S.LTy 'Renaming -> Kind
 kindFromSurface (Loc _ k) = case k of
   S.TCon c -> TyConst c
@@ -229,8 +229,7 @@ kindFromSurface (Loc _ k) = case k of
   _ -> cannotHappen $ text "kindFromSurface: not a kind"
 
 -- | Fixes the kinds in a converted type: zonks the kinds of its type
---   variables and binders, defaulting the kind metas left to @Type@
---   (D5-e, D6-c in the notes).
+--   variables and binders, defaulting the kind metas left to @Type@.
 zonkKinds :: Ty -> TC Ty
 zonkKinds = go
   where
@@ -1453,7 +1452,7 @@ conFieldTys :: ConK -> [(SrcSpan, Ty)]
 conFieldTys (ConKNormal _ fields) = fields
 conFieldTys (ConKGADT _ _ _ fields) = map fst fields
 
--- * Kinds of type-level declarations (D5 in the notes)
+-- * Kinds of type-level declarations
 
 -- | A type-level declaration of the module: a data type, a synonym or a
 --   class (location, name, parameters, bodies).
@@ -1516,10 +1515,10 @@ surfaceTyConNames (Loc _ ty) = case ty of
     conNames (S.TyEq t1 t2) = surfaceTyConNames t1 ++ surfaceTyConNames t2
 
 -- | Infers the kinds of the type-level declarations per group of mutually
---   dependent ones, dependencies first (D5-a): kind metas (or annotated
+--   dependent ones, dependencies first: kind metas (or annotated
 --   kinds) for the parameters, bodies checked by 'ty2ty', kinds left
 --   undetermined defaulted to @Type@ at the end of each group, then the
---   converted bodies zonked (D5-e). Returns the kinds of the declared names
+--   converted bodies zonked. Returns the kinds of the declared names
 --   and the converted declarations.
 inferTyDeclKinds :: [TyDecl] -> TC ([(Name, Kind)], [TyDeclK])
 inferTyDeclKinds ds =
@@ -1537,8 +1536,8 @@ inferTyDeclGroup :: [TyDecl] -> TC ([(Name, Kind)], [TyDeclK])
 inferTyDeclGroup grp = do
   heads <- forM grp $ \d -> do
     vs <- mapM binderTyVar (tyDeclBinders d)
-    -- a synonym's body may be of any kind (D5-c); data types and classes
-    -- are of kind k1 -> ... -> kn -> Type (D5-b, D5-d)
+    -- a synonym's body may be of any kind; data types and classes are of
+    -- kind k1 -> ... -> kn -> Type
     res <- case d of
       TDSyn {} -> newMetaKind
       _ -> pure typeKi
@@ -2068,7 +2067,7 @@ quantify mvs0 ty0 = do
       newNames = take (length mvs) $ allFancyNames \\ usedNames
 
   -- each binder gets the zonked kind of its meta; a kind left undetermined
-  -- defaults to Type (D2-d in the notes)
+  -- defaults to Type
   newBinders <- forM (zip mvs newNames) $ \(mv, n) -> do
     k <- zonkType (metaKind mv)
     pure $ BoundTv n (defaultKind k)

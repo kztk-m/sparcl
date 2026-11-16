@@ -1,5 +1,4 @@
--- More cases of higher-kinded classes (K-3 in
--- notes/extend-type-class_2026.txt), besides Examples/ClassFunctor.sparcl:
+-- More cases of higher-kinded classes, besides Examples/ClassFunctor.sparcl:
 --   * a local instance {{Eq (f a)}} for a rigid f: the global eqList
 --     (Eq (List a)) is not a candidate, since f ~ List cannot hold;
 --   * an instance whose head is an applied variable (Size (f Int)), with

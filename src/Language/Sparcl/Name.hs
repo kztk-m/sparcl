@@ -252,9 +252,8 @@ nameKiArr = nameInBase (System KArrow)
 nameSort :: Name
 nameSort = nameInBase (System KSort)
 
--- The kind names print unqualified (`Type`, not `Base.Type`; D4-e in the
--- notes): kinds are built by the type checker, not written by users, and
--- they are reserved words (D7-c3), so they need no qualification.
+-- The kind names print unqualified (`Type`, not `Base.Type`): they are
+-- reserved words, so they need no qualification.
 nameKindType :: Name
 nameKindType = Original baseModule (User "Type") (Bare (User "Type"))
 

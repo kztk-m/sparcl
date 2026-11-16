@@ -85,10 +85,9 @@ tNames n = ["t" ++ show i | i <- [1 .. n]]
 
 -- * Unit tests of binary type applications and their unification
 --
--- Stage V1 of the notes (higher-kinded classes). The cases that can be
--- written in programs since stage V3 are tested by samples instead
+-- The cases that can be written in programs are tested by samples
 -- (Examples/KindHigherKinded.sparcl, Nonexamples_Illtyped/Kind*.sparcl);
--- the remaining ones test internal functions directly.
+-- these test internal functions directly.
 
 nameEither :: Name
 nameEither = nameInBase (User "Either")
@@ -165,7 +164,7 @@ unificationSpec tc = describe "binary type applications (unit tests)" $ do
     isMetaOf (TyMetaV m) (VM m') = m == m'
     isMetaOf _ _ = False
 
--- * Unit tests of kinds (stage V2-1 of the notes; kinds are not checked yet)
+-- * Unit tests of kinds
 
 kindSpec :: TypingContext -> Spec
 kindSpec tc = describe "kinds (unit tests)" $ do
@@ -195,9 +194,8 @@ kindSpec tc = describe "kinds (unit tests)" $ do
     prettyShow (arrKi tyArr typeKi) `shouldBe` "(Type -> Type) -> Type"
     prettyShow (arrKi multKi tyArr) `shouldBe` "Multiplicity -> Type -> Type"
 
--- * Unit tests of kinds in instantiation and generalization (stage V2-2 of
---   the notes; kind inference and checking of written types are tested by
---   samples since stage V3)
+-- * Unit tests of kinds in instantiation and generalization (kind inference
+--   and checking of written types are tested by samples)
 
 kindCheckSpec :: TypingContext -> Spec
 kindCheckSpec tc = describe "kinds in instantiation and generalization (unit tests)" $ do
