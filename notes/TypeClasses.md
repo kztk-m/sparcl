@@ -2,8 +2,9 @@ Type Classes in Sparcl
 =====================
 
 This note describes the type-class extension of Sparcl (branch
-`type-class`): what can be written, how it is checked and executed, and
-its current limitations. The examples are taken from `Examples/Class*.sparcl`,
+`type-class`, with higher-kinded classes on branch `higher-kinded`): what
+can be written, how it is checked and executed, and its current
+limitations. The examples are taken from `Examples/Class*.sparcl`,
 which are type-checked and evaluated by the test suite.
 
 Instances are passed as **implicit instance arguments**, as in Agda and
@@ -94,7 +95,8 @@ Syntax
 * **Types.** `{{C t1 ... tn}} -> t` is a function type whose argument is an
   instance. Instance arrows are always unrestricted (`Omega`), whatever the
   rest of the type is, so a dictionary can be used any number of times. The
-  contents of `{{ }}` must be a class applied to all its parameters.
+  contents of `{{ }}` must be a class applied to all its parameters (of
+  kind `Type`).
   Instance arguments cannot be named in types.
 * **Expressions.** `f {{e}}` passes an instance explicitly. `{{e}}` can be
   written only as an argument of an application (not parenthesized, not as
@@ -195,6 +197,44 @@ instances are in scope, and the values that inserted code refers to
 (instances, projections, defaults) are kept. See
 `Examples/ClassMod{A,B,C}.sparcl`.
 
+### Higher-kinded classes
+
+A class parameter may be of any kind (see `notes/Kinds.md`); its kind is
+inferred from the method signatures or written as an annotation
+(`class C (f : Type -> Type)`). A class `C` with parameters of kinds
+`k1 ... kn` has kind `k1 -> ... -> kn -> Type`, so applying it to
+arguments of the wrong kinds or to the wrong number of arguments is a kind
+error.
+
+```
+class Functor f where
+    sig fmap : (a -> b) -> f a -> f b      -- f : Type -> Type
+end
+
+class Applicative f extends Functor f where
+    sig pure : a -> f a
+    sig ap   : f (a -> b) -> f a -> f b
+end
+
+instance Functor (Either e) where          -- a partial application
+    def fmap _ (Left e)  = Left e
+           | g (Right x) = Right (g x)
+end
+
+sig liftA2 : {{Applicative f}} -> (a -> b -> c) -> f a -> f b -> f c
+def liftA2 g x y = ap (fmap g x) y
+```
+
+No special machinery is involved: the method types of an instance are
+obtained by substituting the head arguments for the class parameters
+(`f a` becomes `Either e a`), and instance search uses the same rules,
+with type applications unified argument by argument. Instance heads may be
+partial applications (`Functor (Either e)`), `rev`
+(`instance RevMap rev`), or have applied variables
+(`instance {{Functor f}} -> Size (f Int)`). Every
+type variable of an instance type must occur in its head. See
+`Examples/ClassFunctor.sparcl` and `Examples/ClassHigherKinded.sparcl`.
+
 
 Errors
 ------
@@ -210,7 +250,8 @@ Errors
 | `{{e}}` passed to a function of unknown type | `... cannot be passed to a function whose type is unknown` |
 | `{{p}}` where the type is unknown | `An instance pattern {{...}} needs a type annotation.` |
 | a non-class inside `{{ }}`, as a superclass or an instance head | `Not a class: ...` |
-| a class with a wrong number of arguments | `Class C expects n argument(s), ...` |
+| a class applied to arguments of wrong kinds or numbers | a kind error (see `notes/Kinds.md`) |
+| a type variable of an instance type not in its head | `Type variable ... does not occur in the instance head ...` |
 | an instance defines something that is not a method | `... is not a method of the class of instance ...` |
 | an instance omits a method without a default | `Instance ... does not define method ...` |
 | `{{e}}` outside an argument position | a parse error with a dedicated message |
@@ -221,9 +262,10 @@ The error cases are in `Nonexamples_Illtyped/Class*.sparcl`.
 Limitations
 -----------
 
-* **No higher-kinded classes.** The type parser does not accept applied
-  type variables (`f a`), so classes such as `Functor` cannot be written on
-  this branch.
+* **No kind polymorphism.** A class parameter has one kind; a kind not
+  determined by the method signatures defaults to `Type`. Function types
+  cannot be instance heads without their arguments (there is no
+  `instance Functor ((->) r)`).
 * **Signatures for instance arguments.** Definitions without a signature
   do not get instance arguments by inference (see above). A goal whose type
   is fixed by nothing, e.g. the result of `bwd serialize (...)`, needs a
@@ -249,12 +291,13 @@ Implementation
 
 | Phase | Files | Changes |
 | --- | --- | --- |
-| Syntax | `Surface/Syntax.hs`, `Surface/Parser/Exp.hs` | `DClass`, `DInst`; `{{C}} -> t` as `TCon nameTyInstArr [C, t]`; application arguments `Arg = ExplicitArg | InstArg`; pattern `PInst`; the hole `InstHole` made by the type checker |
+| Syntax | `Surface/Syntax.hs`, `Surface/Parser/Exp.hs` | `DClass`, `DInst`; `{{C}} -> t` as `TInstArr C t` (internally `TyInstFun`); application arguments `Arg = ExplicitArg | InstArg`; pattern `PInst`; the hole `InstHole` made by the type checker |
 | Renaming | `Renaming.hs` | classes, instances and instance patterns |
 | Type checking | `Typing/Typing.hs`, `Typing/TCMonad.hs`, `Typing/Instance.hs` | class and instance tables; checks of class types; insertion of instance abstractions, patterns and applications (applications are checked as spines); goals and instance search; checking of default methods and instance bodies |
 | Desugaring | `Desugar.hs`, `Name.hs` | dictionaries, methods, projections, defaults and instances as Core values (generated names `<dict C>`, `<super C #i>`, `<default m>`) |
 | Evaluation | `Value.hs` | dictionaries forced only to weak head normal form, printed as `<dict C>` |
 | Modules | `Module.hs` | class and instance tables propagated regardless of import and export lists |
+| Kinds | see `notes/Kinds.md` | kinds of classes, kind checking of class types and instance types |
 
 In the surface AST, operator applications (`Op`) do not exist after type
 checking (the type checker outputs them as applications), and dictionary

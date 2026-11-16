@@ -111,6 +111,7 @@ Notable Differences from the Paper (ICFP 2020)
 * The forward evaluation ignores linearity.
 * The `Eval` monad mentioned above is used for providing fresh names of invertible variables, which essentially implements alpha renaming mentioned in Fig. 3.
 * Type classes with implicit instance arguments (`{{Eq a}} -> ...`) are supported; see [`notes/TypeClasses.md`](notes/TypeClasses.md).
+* Kinds are inferred and checked, and higher-kinded type variables and classes (e.g. `Functor`) are supported; see [`notes/Kinds.md`](notes/Kinds.md).
 
 Rough Explanation of Syntax
 --------------------------
