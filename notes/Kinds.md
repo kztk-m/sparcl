@@ -79,8 +79,10 @@ Kinds are inferred, but may be written:
   `sig idM : forall (p : Multiplicity) a. a # p -> a`;
 * on type-level expressions: `(Maybe : Type -> Type) Int`.
 
-Implicitly quantified type variables (those without a `forall`) cannot be
-annotated.
+A type variable without an explicit binder (one implicitly quantified,
+without a `forall`) is treated as a binder without an annotation: its
+kind is inferred and checked from its uses, including annotations at
+them (`sig k : f (a : Type -> Type) -> Int`).
 
 
 Kind inference and checking
