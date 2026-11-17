@@ -1,5 +1,5 @@
 -- The result type of a GADT-style constructor must be an application of
--- its data type (checked by the type checker, after synonyms are expanded).
+-- its data type.
 
 data T a where
   sig MkT : Int -> Bool

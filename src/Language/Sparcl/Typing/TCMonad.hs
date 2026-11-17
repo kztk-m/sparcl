@@ -80,14 +80,14 @@ data ErrorDetail
   | InstArgUnknownFun -- {{e}} passed to a function of unknown type
   | InstPatNeedsAnnotation
   | NotAClass !Ty
-  | InstVarNotInHead !TyVar !Ty -- a quantified variable of an instance missing from its head
+  | InstVarNotInHead !TyVar !Ty -- variable, instance head
   | NotAMethod !Name !Name -- instance, definition
   | MissingMethod !Name !Name -- instance, method
   | -- Kinds
-    KindMismatch !Ty !Kind !Kind -- a type-level expression, the expected and its actual kind
-  | NotAFunctionKind !Ty !Kind -- a type-level expression applied to arguments, and its kind
-  | UnknownTypeName !Name -- a name without a kind where a type-level expression is written
-  | BadConResult !Name !Name !Ty -- constructor, its data type, the result type written
+    KindMismatch !Ty !Kind !Kind -- type-level expression, expected kind, actual kind
+  | NotAFunctionKind !Ty !Kind
+  | UnknownTypeName !Name
+  | BadConResult !Name !Name !Ty -- constructor, data type, written result type
   | Other !D.Doc
 
 instance Pretty TypeError where
@@ -846,7 +846,6 @@ askType l n = do
           atLoc l (reportError $ Undefined n)
           arbitraryTy
 
--- | A new meta of the given kind.
 newMetaTyVar :: Kind -> TC MetaTyVar
 newMetaTyVar k = do
   cref <- asks tcRefMvCount
@@ -917,7 +916,6 @@ resolveSyn ty = do
     go synMap (TySyn origTy actualTy) =
       TySyn origTy <$> go synMap actualTy
     go synMap orig@(TyConst c) = goSpine synMap orig c []
-    -- the whole spine is handled here, so that its head is inspected once
     go synMap orig@(TyApp _ _) =
       case splitTyApp orig of
         (TyConst c, ts) -> goSpine synMap orig c ts
@@ -926,18 +924,15 @@ resolveSyn ty = do
     go synMap (TyInstFun c t) = TyInstFun <$> go synMap c <*> go synMap t
     go _ (TyMult m) = return $ TyMult m
 
-    -- an application @c ts@ of a type constructor (@orig@ itself)
     goSpine synMap orig c ts =
       case M.lookup c synMap of
         Nothing ->
           TyCon c <$> mapM (go synMap) ts
-        -- a synonym may be applied to more arguments than its parameters,
-        -- e.g. F Int for type F = Maybe
         Just (ns, tyBody)
           | length ns <= length ts ->
               let (as, rest) = splitAt (length ns) ts
               in  TySyn orig <$> go synMap (foldl TyApp (substTy (zip ns as) tyBody) rest)
-        -- partial applications are rejected by ty2ty; kept as a safeguard
+        -- unreachable: ty2ty rejects partial applications
         Just _ -> do
           reportError $ Other $ D.hsep [D.text "Type synonym", D.dquotes (ppr c), D.text "must be fully-applied."]
           abortTyping
@@ -990,14 +985,12 @@ withCon c ty = local (\tc -> tc{tcConEnv = M.insert c ty (tcConEnv tc)})
 newMetaTy :: TC Ty
 newMetaTy = newMetaTyWithKind typeKi
 
--- | A new meta of kind @Multiplicity@.
 newMetaMult :: TC Ty
 newMetaMult = newMetaTyWithKind multKi
 
 newMetaTyWithKind :: Kind -> TC Ty
 newMetaTyWithKind k = TyMetaV <$> newMetaTyVar k
 
--- | A new kind meta (used by kind inference).
 newMetaKind :: TC Kind
 newMetaKind = newMetaTyWithKind sortKi
 
@@ -1134,11 +1127,9 @@ unifyWork (TyMetaV mv1) (TyMetaV mv2) | mv1 == mv2 = return ()
 unifyWork (TyMetaV mv) ty = unifyMetaTyVar mv ty
 unifyWork ty (TyMetaV mv) = unifyMetaTyVar mv ty
 unifyWork (TyConst c) (TyConst c') | c == c' = return ()
--- applications are decomposed from the right, whatever their heads are
 unifyWork (TyApp t1 t2) (TyApp t1' t2') = do
   unifyWork t1 t1'
   unifyWork t2 t2'
--- function types are never decomposed into applications
 unifyWork (TyFun m t1 t2) (TyFun m' t1' t2') = do
   unifyWork m m'
   unifyWork t1 t1'
@@ -1228,11 +1219,7 @@ unifyUnboundMetaTyVar mv ty2 = do
       ok <- checkBindKind (metaKind mv) ty2'
       when ok $ substituteUnif cIcLevel mv ty2'
 
--- | Checks that binding a meta or a rigid variable of kind @k@ to @ty@
---   preserves kinds; reports 'KindMismatch' otherwise (the binding is then
---   not made). Kinds are compared structurally: they contain no kind metas
---   outside kind inference. Kind metas (whose
---   kind is the marker 'sortKi') are not unified here but by 'unifyKind'.
+-- | Checks that a variable of kind @k@ may be bound to @ty@.
 checkBindKind :: Kind -> Ty -> TC Bool
 checkBindKind k ty
   | k == sortKi = pure True
@@ -1244,16 +1231,12 @@ checkBindKind k ty
           reportError $ KindMismatch ty k k'
           pure False
 
--- | The kind of a well-kinded type-level expression, by the kind table of
---   the context.
 askKindOf :: Ty -> TC Kind
 askKindOf ty = do
   tbl <- asks tcTyEnv
   pure $ kindOf tbl ty
 
--- | Unifies two kinds during kind inference: binds
---   kind metas, with the occurs check. Returns whether it succeeded; the
---   caller reports 'KindMismatch' (the messages of 'unify' speak of types).
+-- | Unifies two kinds; the caller reports the failure.
 unifyKind :: Kind -> Kind -> TC Bool
 unifyKind k1 k2 = do
   k1' <- zonkType k1

@@ -4,7 +4,7 @@
 module Language.Sparcl.Typing.Typing (
   inferExp,
   inferTopDecls,
-  -- exported for the unit tests of kinds (test/Spec.hs)
+  -- for the unit tests
   instantiateQ,
   quantify,
 ) where
@@ -53,18 +53,11 @@ import Data.List (foldl', nub, zip4, (\\))
 -- import Control.Exception (evaluate)
 -- import           Debug.Trace
 
--- * Written types: conversion with kind checking
+-- * Written types
 
--- | Converts a written type-level expression and infers its kind (not
---   bidirectional: callers unify the kind with the one they expect). The
---   map gives the type variables bound outside the written type (the
---   parameters of a data type or a class); renaming guarantees that every
---   variable is bound. A kind error is reported at the subtree and aborts
---   type checking. Kind metas may be left in the kinds of the type
---   variables; callers default and zonk them ('zonkKinds').
+-- | Converts a written type-level expression and infers its kind.
 ty2ty :: M.Map Name TyVar -> S.LTy 'Renaming -> TC (Ty, Kind)
 ty2ty env lty = do
-  -- outside a forall nothing floats, so no constraint is returned
   (t, _, k) <- convTy False env lty
   pure (t, k)
 
@@ -75,15 +68,11 @@ ty2tyAt env k lty = do
   expectKind lty t k' k
   pure t
 
--- | Converts a written type (a signature, an annotation, an instance type)
---   of kind @Type@, with its kinds fixed.
+-- | Converts a written type of kind @Type@ and fixes its kinds.
 convertWrittenTy :: S.LTy 'Renaming -> TC Ty
 convertWrittenTy lty = ty2tyAt M.empty typeKi lty >>= zonkKinds
 
--- | The conversion behind 'ty2ty'. In the floating mode (the body of a
---   forall) the constraints of nested qualified types float up to the
---   enclosing forall; otherwise a qualified type stays where it is, as an
---   unquantified 'TyForAll'.
+-- | 'ty2ty', optionally returning the constraints of nested qualified types.
 convTy :: Bool -> M.Map Name TyVar -> S.LTy 'Renaming -> TC (Ty, [TyConstraint], Kind)
 convTy fl env lty@(Loc loc ty) = case ty of
   S.TVar x -> case M.lookup x env of
@@ -131,9 +120,6 @@ convAt fl env k lty = do
   expectKind lty t k' k
   pure (t, cs)
 
--- | An application: the head must have a kind @k1 -> k2@ and the argument
---   kind @k1@. The head is converted without the check of partial
---   applications of synonyms, which is made once for the whole spine.
 convApp :: Bool -> M.Map Name TyVar -> S.LTy 'Renaming -> TC (Ty, [TyConstraint], Kind)
 convApp fl env lty@(Loc loc ty) = case ty of
   S.TApp t1 t2 -> do
@@ -158,8 +144,6 @@ convApp fl env lty@(Loc loc ty) = case ty of
     pure (TyConst c, [], k)
   _ -> convTy fl env lty
 
--- | Consecutive foralls (through parentheses) with the body, whose
---   constraints float up to them.
 convForall :: M.Map Name TyVar -> [TyVar] -> S.LTy 'Renaming -> TC Ty
 convForall env vs lty = case unLoc (S.stripTParens lty) of
   S.TForall b t -> do
@@ -181,8 +165,6 @@ convConstraint env (S.TyEq t1 t2) = do
   t2' <- ty2tyAt env k1 t2
   pure [TyEq t1' t2']
 
--- | Unifies the kind of a converted type-level expression with the
---   expected one; a mismatch is reported at it and aborts type checking.
 expectKind :: S.LTy 'Renaming -> Ty -> Kind -> Kind -> TC ()
 expectKind lty t actual expected = do
   ok <- unifyKind actual expected
@@ -190,7 +172,6 @@ expectKind lty t actual expected = do
     reportError $ KindMismatch t expected actual
     abortTyping
 
--- | The kind of a type constructor, a synonym or a class.
 kindOfTyName :: SrcSpan -> Name -> TC Kind
 kindOfTyName loc c = do
   tbl <- asks tcTyEnv
@@ -200,7 +181,7 @@ kindOfTyName loc c = do
       reportError $ UnknownTypeName c
       abortTyping
 
--- | Synonyms must not be partially applied (n arguments are given).
+-- | Rejects a partially applied synonym.
 checkSynArity :: SrcSpan -> Name -> Int -> TC ()
 checkSynArity loc c n = do
   syns <- asks tcSyn
@@ -210,8 +191,6 @@ checkSynArity loc c n = do
       abortTyping
     _ -> pure ()
 
--- | The head and the arguments of a written application (through
---   parentheses around heads).
 splitSurfaceApp :: S.LTy 'Renaming -> (S.LTy 'Renaming, [S.LTy 'Renaming])
 splitSurfaceApp = go []
   where
@@ -219,8 +198,6 @@ splitSurfaceApp = go []
     go acc (Loc _ (S.TParens t)) = go acc t
     go acc t = (t, acc)
 
--- | A written kind (built only from @Type@, @Multiplicity@ and the kind
---   arrow).
 kindFromSurface :: S.LTy 'Renaming -> Kind
 kindFromSurface (Loc _ k) = case k of
   S.TCon c -> TyConst c
@@ -228,8 +205,7 @@ kindFromSurface (Loc _ k) = case k of
   S.TParens k' -> kindFromSurface k'
   _ -> cannotHappen $ text "kindFromSurface: not a kind"
 
--- | Fixes the kinds in a converted type: zonks the kinds of its type
---   variables and binders, defaulting the kind metas left to @Type@.
+-- | Zonks the kinds in a type, defaulting undetermined ones to @Type@.
 zonkKinds :: Ty -> TC Ty
 zonkKinds = go
   where
@@ -250,8 +226,6 @@ zonkTyVarKind :: TyVar -> TC TyVar
 zonkTyVarKind (BoundTv n k) = BoundTv n <$> zonkDefaultKind k
 zonkTyVarKind v = pure v
 
--- | Zonks a kind, defaulting its remaining kind metas to @Type@ (they are
---   written, so every occurrence agrees).
 zonkDefaultKind :: Kind -> TC Kind
 zonkDefaultKind k = do
   k' <- zonkType k
@@ -1424,10 +1398,7 @@ inferTopDecls decls dataDecls typeDecls classDecls instDecls0 = do
               InstVarNotInHead v hd
       _ -> pure ()
 
--- | The type of a constructor of data type @n@ with parameters @vs@, and
---   its Core form. The result of a GADT constructor must be an application
---   of @n@ (checked after synonyms are expanded); its arguments other than
---   the parameters themselves become equality constraints on them.
+-- | The type and the Core form of a constructor of data type @n@ with parameters @vs@.
 conTyOf :: Name -> [TyVar] -> ConK -> TC (Name, ConTy, (Name, [Name], [TyConstraint], [Ty]))
 conTyOf n vs con = case con of
   ConKNormal cn fields -> do
@@ -1447,15 +1418,13 @@ conTyOf n vs con = case con of
   where
     retTy = TyCon n (map TyVar vs)
 
--- | The located field types of a constructor.
 conFieldTys :: ConK -> [(SrcSpan, Ty)]
 conFieldTys (ConKNormal _ fields) = fields
 conFieldTys (ConKGADT _ _ _ fields) = map fst fields
 
 -- * Kinds of type-level declarations
 
--- | A type-level declaration of the module: a data type, a synonym or a
---   class (location, name, parameters, bodies).
+-- | A written data type, synonym or class declaration.
 data TyDecl
   = TDData !SrcSpan !Name ![S.TyBinder 'Renaming] ![Loc (CDecl 'Renaming)]
   | TDSyn !SrcSpan !Name ![S.TyBinder 'Renaming] !(LTy 'Renaming)
@@ -1470,8 +1439,7 @@ data TyDeclK
   | -- | class, parameters, superclasses, method signatures
     TKClass !Name ![TyVar] ![(SrcSpan, Ty)] ![(Name, SrcSpan, Ty)]
 
--- | A converted constructor: normal (located fields), or GADT-style
---   (located result, existentials, located fields with multiplicities).
+-- | A converted constructor: normal, or GADT-style (result, existentials, fields with multiplicities).
 data ConK
   = ConKNormal !Name ![(SrcSpan, Ty)]
   | ConKGADT !Name !(SrcSpan, Ty) ![TyVar] ![((SrcSpan, Ty), Ty)]
@@ -1486,8 +1454,7 @@ tyDeclBinders (TDData _ _ bs _) = bs
 tyDeclBinders (TDSyn _ _ bs _) = bs
 tyDeclBinders (TDClass _ _ bs _ _) = bs
 
--- | The type-level names a declaration refers to (constructor fields,
---   synonym bodies, superclasses, method signatures).
+-- | The type-level names a declaration refers to.
 tyDeclRefs :: TyDecl -> [Name]
 tyDeclRefs d = nub $ concatMap surfaceTyConNames $ case d of
   TDData _ _ _ cds -> concat [conTys cd | Loc _ cd <- cds]
@@ -1497,7 +1464,6 @@ tyDeclRefs d = nub $ concatMap surfaceTyConNames $ case d of
     conTys (NormalC _ tys) = tys
     conTys (GeneralC _ t) = [t]
 
--- | The type constructor names in a written type-level expression.
 surfaceTyConNames :: LTy 'Renaming -> [Name]
 surfaceTyConNames (Loc _ ty) = case ty of
   S.TVar _ -> []
@@ -1514,12 +1480,6 @@ surfaceTyConNames (Loc _ ty) = case ty of
     conNames (S.MSub ts1 ts2) = concatMap surfaceTyConNames (ts1 ++ ts2)
     conNames (S.TyEq t1 t2) = surfaceTyConNames t1 ++ surfaceTyConNames t2
 
--- | Infers the kinds of the type-level declarations per group of mutually
---   dependent ones, dependencies first: kind metas (or annotated
---   kinds) for the parameters, bodies checked by 'ty2ty', kinds left
---   undetermined defaulted to @Type@ at the end of each group, then the
---   converted bodies zonked. Returns the kinds of the declared names
---   and the converted declarations.
 inferTyDeclKinds :: [TyDecl] -> TC ([(Name, Kind)], [TyDeclK])
 inferTyDeclKinds ds =
   go $ map flattenSCC $ stronglyConnComp [(d, tyDeclName d, tyDeclRefs d) | d <- ds]
@@ -1527,7 +1487,6 @@ inferTyDeclKinds ds =
     go [] = pure ([], [])
     go (grp : grps) = do
       (ks, rs) <- inferTyDeclGroup grp
-      -- later groups see the kinds and the synonyms of this one
       let syns = [(n, (vs, t)) | TKSyn n vs t <- rs]
       (ks', rs') <- withVars ks $ withSyns syns $ go grps
       pure (ks ++ ks', rs ++ rs')
@@ -1536,8 +1495,6 @@ inferTyDeclGroup :: [TyDecl] -> TC ([(Name, Kind)], [TyDeclK])
 inferTyDeclGroup grp = do
   heads <- forM grp $ \d -> do
     vs <- mapM binderTyVar (tyDeclBinders d)
-    -- a synonym's body may be of any kind; data types and classes are of
-    -- kind k1 -> ... -> kn -> Type
     res <- case d of
       TDSyn {} -> newMetaKind
       _ -> pure typeKi
@@ -1581,7 +1538,6 @@ inferTyDeclBody d vs res = case d of
         peelForalls (v : exs) (M.insert (S.tyBinderName b) v e) t
       _ -> pure (exs, e, lty)
 
-    -- the arrows of the result position (through parentheses there)
     splitArrows lty = case unLoc (S.stripTParens lty) of
       S.TArr m t1 t2 -> let (fs, r) = splitArrows t2 in ((t1, m) : fs, r)
       _ -> ([], lty)
@@ -2066,8 +2022,6 @@ quantify mvs0 ty0 = do
   let usedNames = [n | BoundTv n _ <- bindersQ ty]
       newNames = take (length mvs) $ allFancyNames \\ usedNames
 
-  -- each binder gets the zonked kind of its meta; a kind left undetermined
-  -- defaults to Type
   newBinders <- forM (zip mvs newNames) $ \(mv, n) -> do
     k <- zonkType (metaKind mv)
     pure $ BoundTv n (defaultKind k)

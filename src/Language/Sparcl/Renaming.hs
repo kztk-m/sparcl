@@ -522,8 +522,6 @@ renameTopDecls currentModule (Decls _ topdecls) = do
           tys' <- mapM (renameTy (length tyns) nm) tys
           return $ Loc cloc (NormalC (toOrig $ unBare c) tys')
         (Loc cloc (GeneralC c ty)) -> do
-          -- the parameters are in scope; the existentials are bound by the
-          -- signature's foralls
           ty' <- renameTy (length tyns) nm ty
           return $ Loc cloc $ GeneralC (toOrig $ unBare c) ty'
       return $ Loc loc (toOrig n, bs', cdecls')
@@ -573,7 +571,6 @@ renameTopDecls currentModule (Decls _ topdecls) = do
       return $ Loc loc (toOrig c, bs', sups', sigs', dms')
 
     renameInstDecl (loc, n, ty, ids) = do
-      -- the form of the instance type is checked by the type checker
       ty' <- renameTy 0 M.empty ty
 
       forM_ ids $ \case
@@ -596,12 +593,9 @@ renameTopDecls currentModule (Decls _ topdecls) = do
 -- | Renamed class: name, parameters, superclasses, method sigs, default methods.
 type ClassDeclR = (Name, [TyBinder 'Renaming], [LTy 'Renaming], [Loc (Name, LTy 'Renaming)], [LDecl 'Renaming])
 
--- | The base names of binders of type variables.
 binderBases :: [TyBinder 'Parsing] -> [NameBase]
 binderBases = map (unBare . tyBinderName)
 
--- | Renames binders of type variables to the given names; kind annotations
---   mention only built-in names.
 renameTyBinders :: [TyBinder 'Parsing] -> [Name] -> Renaming [TyBinder 'Renaming]
 renameTyBinders = zipWithM $ \(TyBinder _ mk) n' -> TyBinder n' <$> traverse (renameTy 0 M.empty) mk
 
@@ -668,7 +662,6 @@ renameTy level localnames lty = go level localnames lty (\lty' _ _ -> return lty
       let bn = unBare x
       let x'  = Alpha lv bn
       let nm' = M.insert bn x' nm
-      -- kind annotations mention only built-in names
       mk' <- traverse (renameTy 0 M.empty) mk
       go (lv+1) nm' t $ \t' lv'' nm'' -> k (TForall (TyBinder x' mk') t') lv'' nm''
 

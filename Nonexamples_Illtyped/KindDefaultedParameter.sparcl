@@ -1,6 +1,5 @@
--- Kinds are inferred per group of mutually dependent declarations: nothing
--- in P's own declaration fixes the kind of a, so it defaults to Type, and
--- the later use P Maybe is a kind error.
+-- Nothing in P's own declaration fixes the kind of a, so it defaults to
+-- Type, and the later use P Maybe is a kind error.
 
 data Maybe a = Nothing | Just a
 

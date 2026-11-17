@@ -194,9 +194,7 @@ baseModuleInfo =
         , nameTyBool |-> typeKi
         , nameTyChar |-> typeKi
         , nameTyRational |-> typeKi
-        , -- kinds of built-in type constructors (tuples are computed from
-          -- their names by kindOfName)
-          base "Un" |-> typeKi `arrKi` typeKi
+        , base "Un" |-> typeKi `arrKi` typeKi
         , base "Many" |-> multKi `arrKi` (typeKi `arrKi` typeKi)
         , nameTyRev |-> typeKi `arrKi` typeKi
         ]
@@ -281,10 +279,7 @@ restrictNames ns mi =
         ModuleContext
           { mcNameTable = M.mapMaybe conv (mcNameTable mc)
           , mcOpTable = restrict (mcOpTable mc)
-          , -- the kinds of the type-level names reachable from what is kept
-            -- are kept too: types of imported values
-            -- may mention types that are not imported
-            mcTypeTable = M.restrictKeys (mcTypeTable mc) (S.union ns' reachableTyNames)
+          , mcTypeTable = M.restrictKeys (mcTypeTable mc) (S.union ns' reachableTyNames)
           , mcConTable = restrict (mcConTable mc)
           , mcSynTable = restrict (mcSynTable mc)
           , mcValueTable = M.filterWithKey (\n _ -> S.member n ns' || isImplicitValueName (mcInstTable mc) n) (mcValueTable mc)
@@ -299,9 +294,6 @@ restrictNames ns mi =
     restrict :: M.Map Name a -> M.Map Name a
     restrict x = M.restrictKeys x ns'
 
-    -- type constructor names in the kept values, constructors and synonyms
-    -- and in the whole class and instance tables, closed under the bodies
-    -- of the synonyms reached
     reachableTyNames = closeSyns (S.unions (map tyConNames roots)) S.empty
       where
         roots =

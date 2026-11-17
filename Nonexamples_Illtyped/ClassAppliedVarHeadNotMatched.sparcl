@@ -1,7 +1,5 @@
--- The goal Size (Maybe ?a) of size Nothing unifies with the instance head
--- Size (f Int) (f := Maybe, ?a := Int), but does not match it one way
--- (?a is not known to be Int), so the instance is not committed to;
--- nothing else fixes ?a, so the goal stays ambiguous.
+-- The type of Nothing in size Nothing is never fixed to Maybe Int, so the
+-- Size instance is ambiguous (the instance for Size (f Int) is not chosen).
 
 data Maybe a = Nothing | Just a
 

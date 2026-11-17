@@ -1,8 +1,5 @@
--- Type synonyms with kinds:
---   * a synonym of a type constructor (F : Type -> Type), applied to more
---     arguments than its parameters (F Int, G Bool Int);
---   * a synonym standing for a class application, inside {{ }};
---   * a synonym as the result type of a GADT-style constructor.
+-- Type synonyms of type constructors (over-applied: F Int, G Bool Int), of a
+-- class application inside {{ }}, and as the result of a GADT constructor.
 
 data Maybe a = Nothing | Just a
 

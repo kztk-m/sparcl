@@ -23,8 +23,7 @@ data SystemName
     NWTuple !Int
   | -- | name for an arrow kind
     KArrow
-  | -- | the sort of kinds: the marker kept as the 'metaKind' of kind metas
-    --   (never inspected)
+  | -- | the sort of kinds (the 'metaKind' of kind metas)
     KSort
   | -- | name for unrestricted type constructor (to be removed)
     NBang
@@ -252,8 +251,6 @@ nameKiArr = nameInBase (System KArrow)
 nameSort :: Name
 nameSort = nameInBase (System KSort)
 
--- The kind names print unqualified (`Type`, not `Base.Type`): they are
--- reserved words, so they need no qualification.
 nameKindType :: Name
 nameKindType = Original baseModule (User "Type") (Bare (User "Type"))
 

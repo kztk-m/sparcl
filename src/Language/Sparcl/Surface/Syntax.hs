@@ -73,10 +73,6 @@ The following would be a bit generous definition, but
 we want to allow types that are parameterized by multiplicity.
 -}
 
--- Type-level expressions as written: applications are binary and may be
--- headed by any type-level expression (kinds decide what is accepted), and
--- parentheses are kept. The two kinds of function types are constructs of
--- their own, not applications of type constructors.
 data Ty (p :: Pass)
   = TVar !(XTId p)
   | TCon !(XTId p) -- unapplied
@@ -89,9 +85,7 @@ data Ty (p :: Pass)
   | TQual ![TConstraint p] !(LTy p)
   | TMult !Multiplicity
 
--- | A binder of a type variable with an optional kind annotation:
---   @x@ or @(x : k)@ (parameters of data types, synonyms and classes, and
---   @forall@).
+-- | A binder of a type variable: @x@ or @(x : k)@.
 data TyBinder p = TyBinder !(XTId p) !(Maybe (LTy p))
 
 tyBinderName :: TyBinder p -> XTId p
@@ -113,7 +107,7 @@ instance (Ord a, a ~ XTId p) => FreeTyVars (Ty p) a where
   foldMapVars f b (TArr m t1 t2) = foldMapVars f b m <> foldMapVars f b t1 <> foldMapVars f b t2
   foldMapVars f b (TInstArr c t) = foldMapVars f b c <> foldMapVars f b t
   foldMapVars f b (TForall x t) = b (tyBinderName x) $ foldMapVars f b t
-  foldMapVars f b (TKind t _) = foldMapVars f b t -- kinds contain no variables
+  foldMapVars f b (TKind t _) = foldMapVars f b t
   foldMapVars f b (TQual cs t) = foldMapVars f b cs <> foldMapVars f b t
   foldMapVars _ _ (TMult _) = mempty
 
@@ -136,7 +130,6 @@ instance (AllPretty p) => Pretty (TConstraint p) where
       go x [] = ppr x
       go x (y : ys) = ppr x <> text "*" <> go y ys
 
--- | Removes the parentheses around a type-level expression.
 stripTParens :: LTy p -> LTy p
 stripTParens (unLoc -> TParens t) = stripTParens t
 stripTParens t = t
@@ -148,7 +141,6 @@ instance (AllPretty p) => Pretty (TyBinder p) where
 instance (AllPretty p) => Pretty (Ty p) where
   pprPrec _ (TVar n) = ppr n
   pprPrec _ (TCon c) = ppr c
-  -- kinds k1 -> k2 (right associative)
   pprPrec k (TApp (unLoc -> TApp (unLoc -> TCon c) k1) k2)
     | isKindArrow @p c =
         parensIf (k > 0) $ pprPrec 1 k1 <+> text "->" <+> pprPrec 0 k2
@@ -463,9 +455,7 @@ data CDecl p
       ![LTy p] -- constructor argument
   | GeneralC
       !(XId p) -- constructor name
-      !(LTy p) -- its signature as written, quantified over the variables
-      -- other than the data type's parameters (the existentials); the form
-      -- of its result is checked by the type checker
+      !(LTy p) -- signature as written
 
 instance (AllPretty p) => Pretty (Loc (CDecl p)) where
   ppr (Loc l d) =

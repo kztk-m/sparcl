@@ -93,6 +93,10 @@ Kind inference and checking
   `M : Multiplicity -> Type`, while in
   `data P a = MkP` the parameter defaults to `a : Type`, so a later
   `P Maybe` is a kind error.
+* **GADT-style constructors.** The result type of a constructor must be an
+  application of its data type (after synonyms are expanded); arguments
+  of the result other than the parameters themselves become equality
+  constraints on the parameters.
 * **Written types.** Signatures, annotations, instance types, fields,
   superclasses and method signatures are checked to be of kind `Type`
   (multiplicities after `#` of kind `Multiplicity`).
@@ -138,6 +142,8 @@ Errors
 | a kind different from the expected one | `Kinds do not match: ... has kind ...` |
 | something not of a function kind applied to arguments | `Applied to arguments, but its kind is not of the form k1 -> k2: ...` |
 | a synonym applied to fewer arguments than its parameters | `Type synonym "G" must be fully-applied.` |
+| a value-level or unknown name where a type-level one is expected | `Not a type constructor, a synonym or a class: ...` |
+| the result of a GADT-style constructor not an application of its data type | `The result type of constructor ... must be an application of ...` |
 | `Type` / `Multiplicity` used as a name | a parse error |
 
 A kind error in a written type stops type checking. The error cases are
@@ -150,7 +156,7 @@ Implementation
 | Part | Files | Changes |
 | --- | --- | --- |
 | Surface syntax | `Surface/Syntax.hs`, `Surface/Parser/Exp.hs` | binary applications `TApp` of nullary `TCon` / `TVar`; parentheses kept (`TParens`); function types `TArr` / `TInstArr`; kind annotations `(t : k)` (`TKind`) and binders `TyBinder x (Maybe kind)`; a parser for kinds (`kindExpr`) |
-| Internal types | `Typing/Type.hs` | binary `TyConst` / `TyApp`, with `TyCon c ts` as a pattern synonym for a spine headed by a constant; function types `TyFun` / `TyInstFun`; kinds reuse `Ty` (`typeKi`, `multKi`, `arrKi`); type variables and meta variables carry their kinds; `kindOf`, `kindOfName` |
+| Internal types | `Typing/Type.hs` | binary `TyConst` / `TyApp`, with `TyCon c ts` as a pattern synonym for a spine headed by a constant (used only to build or inspect one application; traversals use `TyConst` / `TyApp`, and `splitTyApp` to inspect the head of a whole spine); function types `TyFun` / `TyInstFun`; kinds reuse `Ty` (`typeKi`, `multKi`, `arrKi`); type variables and meta variables carry their kinds (kind metas are meta variables marked with `sortKi`); `kindOf`, `kindOfName` |
 | Kind checking | `Typing/Typing.hs`, `Typing/TCMonad.hs` | kind inference of declarations (`inferTyDeclKinds`); conversion of written types with kind checking (`ty2ty`, `convertWrittenTy`); kind-preserving unification (`checkBindKind`, `unifyKind`); kinds in instantiation and generalization |
 | Instance search | `Typing/Instance.hs` | binary, kind-preserving unification in `unifyPure` |
 | Modules | `Module.hs` | kinds of type-level names in the type table; kinds of reachable names kept by import and export lists |

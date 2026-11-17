@@ -1,6 +1,5 @@
--- The parameter p of M is inferred to be a multiplicity (it is the first
--- argument of Many), so M Int is a kind error. See also
--- Examples/KindMultiplicityParameter.sparcl.
+-- The parameter p of M is a multiplicity (it is the first argument of
+-- Many), so M Int is a kind error.
 
 data M p = MkM (Many p Int)
 

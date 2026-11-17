@@ -1,10 +1,5 @@
--- Higher-kinded type-level expressions:
---   * applications whose head is a type variable (f a) or a parenthesized
---     expression ((Either Bool) Int), and the kinds inferred for them;
---   * rev as an argument without its own argument (Box rev);
---   * kind annotations on data/class parameters, forall binders, GADT-style
---     constructors and type-level expressions ((t : k)).
--- The corresponding errors are Nonexamples_Illtyped/Kind*.sparcl.
+-- Higher-kinded type-level expressions: type variables and parenthesized
+-- expressions as heads of applications, rev unapplied, kind annotations.
 
 data List a = Nil | Cons a (List a)
 
@@ -44,14 +39,14 @@ type App f a = f a
 sig app : App Maybe Int
 def app = Just 2
 
--- a variable head in a signature; at the use below, ?f Int ~ List Int
+-- a variable head in a signature
 sig applyTwice : (f Int -> f Int) -> f Int -> f Int
 def applyTwice h x = h (h x)
 
 sig consOne : List Int -> List Int
 def consOne xs = Cons 1 xs
 
--- at the use below, ?f ?a ~ Either Bool Int gives ?f := Either Bool, ?a := Int
+-- f a used at Either Bool Int
 sig idF : f a -> f a
 def idF x = x
 
@@ -114,7 +109,7 @@ def t5 = runEx (MkEx (Cons 1 (Cons 2 Nil)) len)
 def t6 = idM (dflt : Int)
 def t7 = idK mj
 
--- Expected values (compared with t1 .. t7 by test/Spec.hs)
+-- Expected values
 
 def t1' = 3
 def t2' = Just (Cons 1 Nil)

@@ -1,6 +1,5 @@
--- The parameter of Functor has kind Type -> Type (inferred from f a in
--- the method type), but Int has kind Type: the instance head is a kind
--- error.
+-- The parameter of Functor has kind Type -> Type, but Int has kind Type:
+-- the instance head is a kind error.
 
 class Functor f where
     sig fmap : (a -> b) -> f a -> f b

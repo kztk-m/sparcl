@@ -1,7 +1,5 @@
 -- Kind inference of a parameter: p is the first argument of Many, so it is
--- inferred to be a multiplicity (M : Multiplicity -> Type). Many is a
--- built-in type constructor and can be written as a type.
--- See also Nonexamples_Illtyped/KindMultiplicityParameter.sparcl.
+-- a multiplicity (M : Multiplicity -> Type).
 
 data M p = MkM (Many p Int)
 

@@ -47,11 +47,6 @@ newtype IcLevel = IcLevel Int
   deriving (Eq, Ord, Enum, Num, Bounded)
   deriving newtype (Show, Pretty)
 
--- | Type-level expressions. Applications are binary ('TyApp') with no
---   flattening, so each type has exactly one representation and the
---   derived 'Eq' / 'Ord' are semantic. The two kinds of function types
---   are constructs of their own, not applications of type constructors,
---   and are never decomposed by unification.
 data Ty
   = -- | Type constructor (unapplied)
     TyConst !Name
@@ -59,9 +54,9 @@ data Ty
     TyVar !TyVar
   | -- | Metavariables (to be substituted in type inf.)
     TyMetaV !MetaTyVar
-  | -- | Application of a type-level expression to another
+  | -- | Application
     TyApp !Ty !Ty
-  | -- | Function type @a # m -> b@ (@TyFun m a b@)
+  | -- | Function type @a # m -> b@
     TyFun !MultTy !Ty !Ty
   | -- | Instance-argument function type @{{c}} -> t@ (always unrestricted)
     TyInstFun !Ty !Ty
@@ -73,32 +68,18 @@ data Ty
     TyMult !Multiplicity
   deriving (Eq, Ord, Show)
 
--- | A type constructor applied to arguments (possibly none or partially):
---   @TyCon c [t1, ..., tn]@ is @TyApp (... (TyApp (TyConst c) t1) ...) tn@.
---   As a pattern it matches only applications headed by a constant; it is
---   in no @COMPLETE@ set, so a function that matches it but not 'TyApp'
---   is reported as incomplete.
+-- | A type constructor applied to arguments (possibly none or partially).
 pattern TyCon :: Name -> [Ty] -> Ty
 pattern TyCon c ts <- (splitTyCon -> Just (c, ts))
   where
     TyCon c ts = foldl TyApp (TyConst c) ts
 
--- | Splits an application headed by a type constructor into the
---   constructor and its arguments.
 splitTyCon :: Ty -> Maybe (Name, [Ty])
 splitTyCon t = case splitTyApp t of
   (TyConst c, ts) -> Just (c, ts)
   _ -> Nothing
 
--- | Splits a type-level expression into its head (any type-level
---   expression that is not an application) and its arguments:
---   @splitTyApp (h t1 ... tn) = (h, [t1, ..., tn])@.
---
---   Traversals that inspect the head of an application handle the whole
---   spine at its outermost 'TyApp' (recursing into the partial
---   applications inside would inspect the same head again with fewer
---   arguments); the pattern 'TyCon' is for inspecting or building one
---   application of a type constructor, not for traversals.
+-- | @splitTyApp (h t1 ... tn) = (h, [t1, ..., tn])@.
 splitTyApp :: Ty -> (Ty, [Ty])
 splitTyApp = go []
   where
@@ -164,12 +145,8 @@ data TyConstraint
   | TyEq !Ty !Ty
   deriving (Eq, Ord, Show)
 
--- | Kinds are type-level expressions: 'typeKi', 'multKi', @'arrKi' k1 k2@
---   and kind metas.
 type Kind = Ty
 
--- | Type variables carry their kinds; equality and
---   order look only at names / numbers.
 data TyVar
   = BoundTv !Name !Kind
   | SkolemTv !TyVar !Int !IcLevel
@@ -257,17 +234,15 @@ instance Pretty Ty where
         parensIf (k > 1) $ D.text "!" D.<> pprPrec 1 t
     | c == nameTyRev =
         parensIf (k > 1) $ D.text "rev" D.<+> pprPrec 2 t
-  -- kinds k1 -> k2 (right associative)
   pprPrec k (TyCon c [k1, k2])
     | c == nameKiArr =
         parensIf (k > 0) $ pprPrec 1 k1 D.<+> D.text "->" D.<+> pprPrec 0 k2
   pprPrec _ (TyConst c)
-    | c == nameTyRev = D.text "rev" -- unapplied, e.g. in @T rev@
+    | c == nameTyRev = D.text "rev"
     | otherwise = ppr c
   pprPrec k (TyCon c ts) =
     parensIf (k > 1) $
       ppr c D.<+> D.align (D.hsep (map (pprPrec 2) ts))
-  -- an application whose head is not a type constructor, e.g. @f a b@
   pprPrec k (TyApp t1 t2) =
     parensIf (k > 1) $ pprPrec 1 t1 D.<+> pprPrec 2 t2
   pprPrec k (TyFun m a b) = parensIf (k > 0) $
@@ -317,8 +292,7 @@ data MetaTyVar = MetaTyVar
   , metaTcLevelRef :: !(IORef TcLevel)
   , metaIcLevel :: !IcLevel
   , metaKind :: !Kind
-  -- ^ the kind of the meta; for a kind meta, the marker
-  --   @TyConst nameSort@ (never inspected)
+  -- ^ 'sortKi' for kind metas
   }
 
 type TyRef = IORef (Maybe MonoTy)
@@ -468,9 +442,6 @@ arrKi k1 k2 = TyCon nameKiArr [k1, k2]
 sortKi :: Ty
 sortKi = TyConst nameSort
 
--- | The kind of a type-level name, from the table (entries of type-level
---   names in the 'TypeTable'); the kinds of tuple
---   constructors of all arities are computed from their names.
 kindOfName :: TypeTable -> Name -> Maybe Kind
 kindOfName tbl c = case c of
   Original _ (System (NTuple n)) _ -> Just (tupleKi n)
@@ -479,8 +450,6 @@ kindOfName tbl c = case c of
   where
     tupleKi n = foldr arrKi typeKi (replicate n typeKi)
 
--- | The type constructor names occurring in a type-level expression (used
---   to keep the kinds of reachable names across modules).
 tyConNames :: Ty -> S.Set Name
 tyConNames = go
   where
@@ -496,17 +465,13 @@ tyConNames = go
     goC (MSub t ts) = foldMap go (t : ts)
     goC (TyEq t1 t2) = go t1 <> go t2
 
--- | Replaces the kind metas left in a zonked kind by @Type@ (no kind
---   polymorphism).
+-- | Replaces the kind metas left in a zonked kind by @Type@.
 defaultKind :: Kind -> Kind
 defaultKind (TyMetaV _) = typeKi
 defaultKind (TyApp k1 k2) = TyApp (defaultKind k1) (defaultKind k2)
 defaultKind k = k
 
--- | The kind of a well-kinded type-level expression:
---   constants by the table, variables and metas by their own kinds.
---   Ill-kinded applications are never built once kinds are checked, so
---   they are internal errors here.
+-- | The kind of a well-kinded type-level expression.
 kindOf :: TypeTable -> Ty -> Kind
 kindOf tbl = go
   where

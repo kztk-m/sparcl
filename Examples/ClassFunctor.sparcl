@@ -1,13 +1,5 @@
--- Constructor classes: classes over type constructors of kind Type -> Type.
---
--- Features exercised:
---   * class parameter that is applied to arguments in method types (f a)
---   * instances for partially applied type constructors (Either e)
---   * a subclass of a constructor class (Applicative f extends Functor f)
---   * functions polymorphic in the type constructor, taking {{Functor f}}
---
--- The kind of f (Type -> Type) is inferred from the method types. More
--- cases of higher-kinded classes are in Examples/ClassHigherKinded.sparcl.
+-- Constructor classes (parameter of kind Type -> Type): instances for partial
+-- applications (Either e), a subclass, and functions over any functor.
 
 data Maybe a = Nothing | Just a
 data List a = Nil | Cons a (List a)
@@ -79,7 +71,7 @@ def t5 = liftA2 (\x y -> x + y) (Just 1) (Just 2)
 def t6 = liftA2 (\x y -> (x, y)) (Cons 1 (Cons 2 Nil)) (Cons True (Cons False Nil))
 def t7 = inc {{functorList}} (Cons 0 Nil)
 
--- Expected values (compared with t1 .. t7 by test/Spec.hs)
+-- Expected values
 
 def t1' = Just 42
 def t2' = Cons 2 (Cons 3 (Cons 4 Nil))

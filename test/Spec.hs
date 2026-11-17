@@ -84,10 +84,6 @@ tNames :: Int -> [String]
 tNames n = ["t" ++ show i | i <- [1 .. n]]
 
 -- * Unit tests of binary type applications and their unification
---
--- The cases that can be written in programs are tested by samples
--- (Examples/KindHigherKinded.sparcl, Nonexamples_Illtyped/Kind*.sparcl);
--- these test internal functions directly.
 
 nameEither :: Name
 nameEither = nameInBase (User "Either")
@@ -105,8 +101,6 @@ nameMaybe = nameInBase (User "Maybe")
 tyArrKi :: Kind
 tyArrKi = arrKi typeKi typeKi
 
--- | The kind table of the unit tests: the built-in kinds, and Either, Maybe
---   and a class C without parameters.
 testKinds :: TypeTable
 testKinds =
   M.union (mcTypeTable (miModuleContext baseModuleInfo)) $
@@ -116,8 +110,6 @@ testKinds =
       , (nameC, typeKi)
       ]
 
--- | Runs a type-checking computation in a fresh context (no errors left
---   by earlier tests) with the kinds of 'testKinds'.
 runTCFresh :: TypingContext -> TC a -> IO a
 runTCFresh tc = execTCWith tc M.empty testKinds M.empty M.empty M.empty
 
@@ -194,8 +186,7 @@ kindSpec tc = describe "kinds (unit tests)" $ do
     prettyShow (arrKi tyArr typeKi) `shouldBe` "(Type -> Type) -> Type"
     prettyShow (arrKi multKi tyArr) `shouldBe` "Multiplicity -> Type -> Type"
 
--- * Unit tests of kinds in instantiation and generalization (kind inference
---   and checking of written types are tested by samples)
+-- * Unit tests of kinds in instantiation and generalization
 
 kindCheckSpec :: TypingContext -> Spec
 kindCheckSpec tc = describe "kinds in instantiation and generalization (unit tests)" $ do
@@ -272,8 +263,7 @@ main = hspec $ do
       , ("ClassMethodWithoutParam.sparcl", "Main", tNames 2)
       , ("ClassInstArgInList.sparcl", "Main", tNames 2)
       , ("HigherRankLetCase.sparcl", "Main", ["t6", "t7"])
-      , -- a class application written with a synonym
-        ("KindSynonym.sparcl", "Main", ["t1"])
+      , ("KindSynonym.sparcl", "Main", ["t1"])
       , ("KindHigherKinded.sparcl", "Main", tNames 7)
       , ("ClassFunctor.sparcl", "Main", tNames 7)
       , ("ClassHigherKinded.sparcl", "Main", tNames 5)

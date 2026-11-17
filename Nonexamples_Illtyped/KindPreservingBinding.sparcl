@@ -1,6 +1,5 @@
--- In g, f : (Type -> Type) -> Type and a : Type -> Type (from f List).
--- At the use g mi, f a ~ Maybe Int would need f := Maybe and a := Int, but
--- they do not have the kinds of f and a, so the unification fails.
+-- In g, f has kind (Type -> Type) -> Type (from f List), so f a cannot be
+-- Maybe Int: that would need f to be Maybe, of kind Type -> Type.
 
 data List a = Nil | Cons a (List a)
 

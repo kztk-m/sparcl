@@ -1,13 +1,5 @@
--- More cases of higher-kinded classes, besides Examples/ClassFunctor.sparcl:
---   * a local instance {{Eq (f a)}} for a rigid f: the global eqList
---     (Eq (List a)) is not a candidate, since f ~ List cannot hold;
---   * an instance whose head is an applied variable (Size (f Int)), with
---     the subgoal Functor Maybe;
---   * an instance for rev, unapplied (RevMap rev), run forwards and
---     backwards;
---   * a class parameter with a kind annotation.
--- The corresponding errors are Nonexamples_Illtyped/ClassInstanceHeadKindMismatch.sparcl,
--- ClassHigherKindedRigidNoInstance.sparcl and ClassAppliedVarHeadNotMatched.sparcl.
+-- Higher-kinded classes: a local instance for a rigid f, an applied variable
+-- as an instance head, an instance for rev, a kind-annotated class parameter.
 
 data List a = Nil | Cons a (List a)
 data Maybe a = Nothing | Just a
@@ -69,7 +61,7 @@ def t3 = size (Just 3)
 def t4 = fwd incR 4
 def t5 = bwd incR 4
 
--- Expected values (compared with t1 .. t5 by test/Spec.hs)
+-- Expected values
 
 def t1' = True
 def t2' = False

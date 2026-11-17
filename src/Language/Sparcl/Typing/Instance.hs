@@ -10,7 +10,7 @@ module Language.Sparcl.Typing.Instance (
   makeGoal,
   normTy,
   maxSearchDepth,
-  -- exported for the unit tests of unification (test/Spec.hs)
+  -- for the unit tests
   V (..),
   Sub,
   unifyPure,

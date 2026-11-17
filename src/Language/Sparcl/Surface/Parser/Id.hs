@@ -68,9 +68,7 @@ varName = P.try (do x <- varidRaw
                     return $ Bare (User x))
           <?> "variable name"
 
--- | Fails without consuming input if the name is a keyword (e.g., Type).
---   Used with a name read by 'P.lookAhead', so that the error is reported
---   at the beginning of the name.
+-- | Fails without consuming input if the name is a keyword.
 rejectKeyword :: Monad m => String -> P m ()
 rejectKeyword x =
   when (x `elem` keyWords) $
@@ -102,7 +100,6 @@ conName = do P.lookAhead conidRaw >>= rejectKeyword
              Bare . User <$> conidRaw
 
 -- We have the special treatment for the case.
--- A keyword (e.g., Type) is rejected only as an unqualified name.
 qconName :: Monad m => P m SurfaceName
 qconName =
   (do P.lookAhead elems >>= \case

@@ -181,13 +181,13 @@ forallBinders = symForAll *> P.many tyBinder <* symbol "."
 mkForalls :: [TyBinder 'Parsing] -> LTy 'Parsing -> LTy 'Parsing
 mkForalls bs r = foldr (\b -> Loc (location r) . TForall b) r bs
 
--- | A binder of a type variable: @x@, or @(x : k)@ with a kind annotation.
+-- | @x@ or @(x : k)@.
 tyBinder :: (Monad m) => P m (TyBinder 'Parsing)
 tyBinder =
   (\x -> TyBinder x Nothing) <$> L.lexeme sp varName
     <|> parens (TyBinder <$> L.lexeme sp varName <* symbol ":" <*> (Just <$> kindExpr))
 
--- | A kind: @Type@, @Multiplicity@, or @k1 -> k2@ (right associative).
+-- | @Type@, @Multiplicity@, or @k1 -> k2@.
 kindExpr :: (Monad m) => P m (LTy 'Parsing)
 kindExpr = do
   k1 <- kindAtom
@@ -199,7 +199,6 @@ kindExpr = do
         <|> kindName "Multiplicity" nameKindMultiplicity
         <|> parens kindExpr
 
-    -- the span excludes the trailing spaces
     kindName s n = do
       start <- getSrcLoc
       void $ P.try (P.string s <* P.notFollowedBy P.alphaNumChar)
@@ -283,18 +282,12 @@ arrTy = instArrTy <|> normalArrTy
                 pure $ \e1 e2 -> mkArr m e1 e2
             )
 
--- | An application of an atomic type-level expression to atomic ones (left
---   associative); the head can be any atomic one, e.g., @f a@ or @(T a) b@.
 appTy :: (Monad m) => P m (LTy 'Parsing)
 appTy = mkTApps <$> atomTy <*> P.many atomTy
 
--- | Applies a type-level expression to arguments; each partial application
---   is located from the head to its last argument.
 mkTApps :: LTy 'Parsing -> [LTy 'Parsing] -> LTy 'Parsing
 mkTApps = foldl (\t1 t2 -> Loc (location t1 <> location t2) (TApp t1 t2))
 
--- | An atomic type-level expression: a type constructor, a type variable,
---   @rev@ (unapplied), a parenthesized one, or a tuple.
 atomTy :: (Monad m) => P m (LTy 'Parsing)
 atomTy =
   getSrcLoc >>= \start ->
@@ -318,8 +311,7 @@ atomTy =
       sp
       return $ Loc (start <> end) $ TCon (BuiltIn nameTyRev)
 
--- | @()@, a parenthesized type-level expression (kept as written), one with
---   a kind annotation @(t : k)@, or a tuple type.
+-- | @()@, @(t)@, @(t : k)@ or a tuple type.
 parenTy :: (Monad m) => P m (LTy 'Parsing)
 parenTy = do
   start <- getSrcLoc
@@ -331,13 +323,13 @@ parenTy = do
         (Right . (t,) <$> (symbol ":" *> kindExpr))
           <|> (Left . (t :) <$> P.many (comma *> typeExpr))
   void $ P.char ')'
-  end <- getSrcLoc -- the span of a parenthesized type excludes the trailing spaces
+  end <- getSrcLoc
   sp
   return $ case r of
     Right (t, k) -> Loc (start <> end) (TKind t k)
     Left ts -> mkTupleTy (Loc (start <> end) ts)
 
--- | A parenthesized type (kept as written) or a tuple type.
+-- | A parenthesized type or a tuple type.
 mkTupleTy :: Loc [LTy 'Parsing] -> LTy 'Parsing
 mkTupleTy (Loc l [t]) = Loc l (TParens t)
 mkTupleTy (Loc _ ts) =
@@ -414,9 +406,6 @@ topDecl = typeDecl <|> dataDecl <|> (fmap DDecl <$> localDecl) <|> classDecl <|>
           void $ keyword "end"
           return $ DData c bs cs
 
-    -- the existentials are the variables other than the parameters (they
-    -- may be bound explicitly by a leading forall); the form of the result
-    -- is checked by the type checker
     gadtCDecl bs = do
       start <- getSrcLoc
       c <- conName <* sp

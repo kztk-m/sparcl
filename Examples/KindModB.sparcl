@@ -1,7 +1,5 @@
--- Kinds across modules (2/2): see Examples.KindModA.
---
--- `z` has no signature, so its type is a meta variable bound to T, a type
--- that is not imported; binding it needs the kind of T.
+-- Kinds across modules (2/2, see Examples.KindModA): `z` has no signature,
+-- and its type is T, which is not imported.
 
 module Examples.KindModB where
 
