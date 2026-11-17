@@ -1,14 +1,5 @@
 -- Classes and instances across modules (1/3): the module declaring them.
---
--- Examples.ClassModB imports this module with an import list that names
--- neither the instances nor the method `eq`; Examples.ClassModC imports only
--- Examples.ClassModB. The instances, the default of `neq` and the superclass
--- projection of `Ord` are still available there, since instance arguments
--- inserted by the type checker refer to them without their names being in
--- scope.
---
--- (Methods are named rather than operators, since operators cannot appear
--- in import / export lists.)
+-- They are used from ClassModB and ClassModC without being imported by name.
 
 module Examples.ClassModA where
 

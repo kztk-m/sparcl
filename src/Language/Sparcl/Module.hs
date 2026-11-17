@@ -61,9 +61,7 @@ data ModuleContext v = ModuleContext
   , mcSynTable :: !SynTable
   , mcValueTable :: !(M.Map Name v)
   , mcClassTable :: !ClassTable
-  -- ^ classes; not filtered by import/export lists, propagated transitively
   , mcInstTable :: !InstTable
-  -- ^ instances; not filtered by import/export lists, propagated transitively
   }
 
 instance Semigroup (ModuleContext v) where
@@ -281,12 +279,8 @@ restrictNames ns mi =
           , mcTypeTable = restrict (mcTypeTable mc)
           , mcConTable = restrict (mcConTable mc)
           , mcSynTable = restrict (mcSynTable mc)
-          , -- values referred to by expressions made by instance search and
-            -- desugaring are kept
-            mcValueTable = M.filterWithKey (\n _ -> S.member n ns' || isImplicitValueName (mcInstTable mc) n) (mcValueTable mc)
-          , -- Classes and instances are in effect whenever their module is
-            -- loaded, so they are not filtered.
-            mcClassTable = mcClassTable mc
+          , mcValueTable = M.filterWithKey (\n _ -> S.member n ns' || isImplicitValueName (mcInstTable mc) n) (mcValueTable mc)
+          , mcClassTable = mcClassTable mc
           , mcInstTable = mcInstTable mc
           }
     }
@@ -307,10 +301,7 @@ restrictNames ns mi =
             else
               Just res
 
--- | Values that expressions made by instance search and desugaring refer to
---   without the user writing their names: instances (named or
---   not), superclass projections and default methods. They are kept in
---   value tables regardless of import and export lists.
+-- | Values referred to by generated code: instances, superclass projections and default methods.
 isImplicitValueName :: InstTable -> Name -> Bool
 isImplicitValueName insts n =
   isSuperProjName n || isDefaultName n || any (M.member n) (M.elems insts)
@@ -390,8 +381,7 @@ exportNames ns m = do
               , mcConTable = conTbl
               , mcSynTable = synTbl
               , mcValueTable = valTbl
-              , -- already including the imported ones
-                mcClassTable = mcClassTable (miModuleContext m)
+              , mcClassTable = mcClassTable (miModuleContext m)
               , mcInstTable = mcInstTable (miModuleContext m)
               }
         }
@@ -573,13 +563,8 @@ interpDecls mCurrentModuleName decls interp = do
                 , mcSynTable = newSynTable
                 , mcTypeTable = M.fromList nts
                 , mcConTable = newCTypeTable
-                , -- own values plus the imported values that expressions
-                  -- made by instance search and desugaring may refer to
-                  -- (transitively)
-                  mcValueTable = M.union (M.fromList newValueEnv) (M.filterWithKey (\n _ -> isImplicitValueName instEnv n) valEnv)
-                , -- own classes and instances plus the imported ones, with or
-                  -- without an export list (transitively)
-                  mcClassTable = M.union newClassTable classEnv
+                , mcValueTable = M.union (M.fromList newValueEnv) (M.filterWithKey (\n _ -> isImplicitValueName instEnv n) valEnv)
+                , mcClassTable = M.union newClassTable classEnv
                 , mcInstTable = mergeInstTable newInstTable instEnv
                 }
           }

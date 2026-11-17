@@ -1,10 +1,5 @@
--- Instance arguments that come after the written argument patterns.
---
--- For `sig f : a -> {{Eq a}} -> Bool`, `def f x = ...` binds only `x`, so a
--- `where` declaration of the clause does not see the instance argument
--- (Nonexamples_Illtyped/ClassTrailingInstInWhere.sparcl); with an
--- invertible pattern, as in `g` below, the clause would not return a `rev`
--- type. Writing the instance pattern, even as `{{_}}`, solves both.
+-- Trailing instance arguments bound by `{{_}}`, so that `where` and `with`
+-- of the clause can use them.
 
 data Nat = Z | S Nat
 
@@ -25,8 +20,7 @@ def f x {{_}} = go
         def go = x == x
     end
 
--- used from `with` (the exit assertion of a clause with an invertible
--- pattern)
+-- used from `with`
 sig g : rev a -o {{Eq a}} -> rev a
 def g (rev x) {{_}} = x with (\y -> y == y)
 
@@ -35,7 +29,7 @@ def fwd h = case unlift h of (y, _) -> y end
 def t1 = f (S Z)
 def t2 = fwd (\x -> g x) Z
 
--- Expected values (compared with t1 .. t2 by test/Spec.hs)
+-- Expected values
 
 def t1' = True
 def t2' = Z

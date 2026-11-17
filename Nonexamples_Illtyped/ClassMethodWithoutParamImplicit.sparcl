@@ -1,9 +1,6 @@
 -- It is intentional that this program causes a type error.
--- The type of `size` does not mention the class parameter `a`, so nothing
--- determines the instance argument `Sized ?a` of an implicit use: the goal
--- is ambiguous. Passing
--- the instance explicitly, `size {{sizedNat}}`, works
--- (Examples/ClassMethodWithoutParam.sparcl).
+-- The type of `size` does not mention the class parameter, so its instance
+-- is ambiguous unless passed explicitly (`size {{sizedNat}}`).
 
 data Nat = Z | S Nat
 
@@ -15,8 +12,5 @@ instance sizedNat : Sized Nat where
     def size = 1
 end
 
--- (With the signature, the goal is reported as ambiguous; without it, as an
--- instance argument that cannot be inferred for a definition without a
--- signature.)
 sig n : Int
 def n = size

@@ -143,8 +143,7 @@ appPat =
 introForAll :: LTy 'Parsing -> LTy 'Parsing
 introForAll = introForAllExcept []
 
--- | Same as 'introForAll', but leaves the given type variables free
---   (e.g., the class parameters in method signatures).
+-- | Same as 'introForAll', but leaves the given type variables free.
 introForAllExcept :: [SurfaceName] -> LTy 'Parsing -> LTy 'Parsing
 introForAllExcept xs ty =
   let freeVars = filter (`notElem` xs) $ freeTyVars ty
@@ -522,9 +521,6 @@ funExpr =
           )
       <|> appExpr
 
--- | A head followed by arguments. An explicitly passed instance @{{e}}@ is
---   accepted only at argument positions, so it is an argument (@InstArg@)
---   of an application by construction.
 appExpr :: (Monad m) => P m (LExp 'Parsing)
 appExpr =
   foldl (\f (l, a) -> Loc (location f <> l) (App f a))
@@ -555,13 +551,6 @@ simpleExpr startLoc =
     <|> P.try wProjExpr
     <|> misplacedInstArg
   where
-    -- An explicitly passed instance @{{e}}@ is parsed only by 'appExpr' at
-    -- argument positions; anywhere else it reaches here. Report it with a
-    -- dedicated message instead of the generic one. @{{@ is consumed, so
-    -- that the message is not discarded by callers that would try other
-    -- alternatives (e.g. the empty tuple for @({{e}})@); no expression
-    -- starts with @{{@, so no alternative is lost. The error is reported
-    -- at the position of @{{@.
     misplacedInstArg = do
 #if MIN_VERSION_megaparsec(7,0,0)
       o <- P.getOffset
@@ -710,7 +699,6 @@ classDecl = loc $ do
   c <- L.lexeme sp conName
   xs <- P.many (L.lexeme sp varName)
   sups <- fromMaybe [] <$> P.optional (keyword "extends" *> appTy `P.sepBy1` comma)
-  -- class parameters are not quantified in method signatures
   d <- whereClauseWith (introForAllExcept xs)
   return $ DClass c xs sups d
 

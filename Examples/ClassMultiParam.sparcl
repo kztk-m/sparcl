@@ -1,10 +1,5 @@
--- Multi-parameter type classes and class-polymorphic constants.
---
--- Features exercised:
---   * a class with two parameters (Convert a b)
---   * class methods with no function arguments (mempty)
---   * several instance arguments in one signature
---   * explicit forall together with instance arguments
+-- Multi-parameter classes, constant methods, and several instance arguments
+-- in one signature.
 
 data Nat = Z | S Nat
 data List a = Nil | Cons a (List a)
@@ -67,7 +62,7 @@ def t5 = (sumAs (Cons (S Z) (Cons (S (S Z)) Nil)) : Int)
 -- explicitly passing named instances; the type annotation is no longer needed
 def t6 = sumAs {{convNatInt}} {{monoidInt}} (Cons (S Z) Nil)
 
--- Expected values (compared with t1 .. t6 by test/Spec.hs)
+-- Expected values
 
 def t1' = 2
 def t2' = Cons (S Z) (Cons Z Nil)

@@ -1,15 +1,5 @@
--- Basic single-parameter type class: Eq.
---
--- Instances are passed as implicit instance arguments written {{C a}}
--- (Agda style), not as Haskell-style constraints.
---
--- Features exercised:
---   * class declaration with method signatures
---   * a default method implementation inside a class body
---   * unnamed and named instances (instance eqNat : Eq Nat)
---   * instances that take instance arguments ({{Eq a}} -> Eq (List a))
---   * functions taking implicit instance arguments
---   * binding an instance argument by name and passing an instance explicitly
+-- Basic single-parameter class Eq: default methods, named and unnamed
+-- instances, instances with instance arguments, explicit instance passing.
 
 class Eq a where
     sig (==) : a -> a -> Bool
@@ -55,8 +45,7 @@ instance eqNat : Eq Nat where
            | _     _     = False
 end
 
--- Instances taking instance arguments.
--- Inside the body, {{Eq a}} is a candidate for instance resolution.
+-- Instances taking instance arguments
 
 data List a = Nil | Cons a (List a)
 
@@ -72,8 +61,7 @@ instance {{Eq a}} -> {{Eq b}} -> Eq (Pair a b) where
     def (==) (Pair a1 b1) (Pair a2 b2) = and (a1 == a2) (b1 == b2)
 end
 
--- Functions taking implicit instance arguments.
--- The instance argument need not be bound in the definition.
+-- Functions taking implicit instance arguments (not bound in the definition)
 
 sig elem : {{Eq a}} -> a -> List a -> Bool
 def elem _ Nil         = False
@@ -96,8 +84,7 @@ def nub Nil         = Nil
                       | False -> Cons x (nub xs)
                       end
 
--- An instance argument bound by name in the definition and passed explicitly.
--- (Instance arguments cannot be named in types.)
+-- An instance argument bound by name in the definition and passed explicitly
 sig notElem : {{Eq a}} -> a -> List a -> Bool
 def notElem {{eq}} x xs = not (elem {{eq}} x xs)
 
@@ -114,7 +101,7 @@ def t7 = Pair True Z == Pair True (S Z)
 def t8 = elem {{eqNat}} Z (Cons (S Z) (Cons Z Nil))
 def t9 = notElem {{eqList {{eqNat}}}} Nil (Cons (Cons Z Nil) Nil)
 
--- Expected values (compared with t1 .. t9 by test/Spec.hs)
+-- Expected values
 
 def t1' = True
 def t2' = True

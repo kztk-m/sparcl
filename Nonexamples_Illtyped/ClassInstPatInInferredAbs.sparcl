@@ -1,7 +1,6 @@
 -- It is intentional that this program causes a type error.
 -- An instance pattern {{p}} needs a known type: an abstraction binding one
--- cannot be inferred; annotate it, e.g.
--- ((\{{d}} x -> eq {{d}} x x) : {{Eq Nat}} -> Nat -> Bool).
+-- needs an annotation.
 
 data Nat = Z | S Nat
 

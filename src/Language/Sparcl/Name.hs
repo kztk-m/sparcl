@@ -33,14 +33,11 @@ data SystemName
     NRev
   | -- | generated name for an unnamed instance (numbered within a module)
     NInstance !Int
-  | -- | dictionary constructor of a class (the class's base name); used
-    --   with the module declaring the class
+  | -- | dictionary constructor of a class
     NDict !NameBase
-  | -- | projection of the i-th superclass dictionary of a class (the
-    --   class's base name); used with the module declaring the class
+  | -- | projection of the i-th superclass dictionary of a class
     NSuperProj !NameBase !Int
-  | -- | default implementation of a method (the method's base name); used
-    --   with the module declaring the class
+  | -- | default implementation of a method
     NDefault !NameBase
   deriving (Eq, Ord, Show)
 
@@ -127,9 +124,7 @@ instance Pretty Name where
 moduleNameToStr :: ModuleName -> String
 moduleNameToStr (ModuleName ms) = ms
 
--- Names generated for type classes. Each is an 'Original' name in
--- the module declaring the class (or the method), so that expressions built
--- in other modules refer to the same names.
+-- Names generated for type classes
 
 -- | A 'System' name made from the base of a top-level name, in its module.
 systemNameAt :: String -> (NameBase -> SystemName) -> Name -> Name

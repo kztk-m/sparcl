@@ -1,15 +1,5 @@
--- Type classes combined with Sparcl's partially-invertible features.
---
--- Features exercised:
---   * class methods whose types involve `rev` and linear arrows (-o)
---   * methods with explicit multiplicity annotations (# Omega)
---   * instances defined with invertible pattern matching (rev patterns
---     and `with` clauses)
---   * code taking implicit instance arguments that runs forwards and backwards
---
--- An instance argument {{C a}} -> T is always unrestricted (Omega), so
--- the dictionary may be used any number of times, even when the rest of
--- the type is linear (e.g. {{RevSucc a}} -> rev a -o rev a).
+-- Type classes with invertible methods (`rev`, linear arrows, rev patterns),
+-- run forwards and backwards.
 
 data Nat = Z | S Nat
 data List a = Nil | Cons a (List a)
@@ -17,8 +7,7 @@ data List a = Nil | Cons a (List a)
 def fwd f = case unlift f of (x, _) -> x end
 def bwd f = case unlift f of (_, x) -> x end
 
--- An invertible "successor" on a type: forwards it increments a value,
--- backwards it decrements it.
+-- An invertible "successor" on a type
 class RevSucc a where
     sig rsucc : rev a -o rev a
 end
@@ -63,8 +52,7 @@ end
 sig serialize : {{Serialize a}} -> rev a -o rev (List Bit)
 def serialize x = encode x (rev Nil)
 
--- A class whose method takes an unrestricted (non-linear) static argument,
--- which is the usual pattern for partially-invertible functions.
+-- A method with an unrestricted static argument
 class RevAdd a where
     sig radd : a # Omega -> rev a -o rev a
 end
@@ -74,8 +62,7 @@ instance RevAdd Nat where
            | (S x) y = rev S (radd x y)
 end
 
--- The instance argument is used twice here, which is fine since it is
--- unrestricted.
+-- The instance argument (always unrestricted) is used twice
 sig twice : {{RevSucc a}} -> rev a -o rev a
 def twice x = rsucc (rsucc x)
 
@@ -86,16 +73,14 @@ def t2 = bwd twice (S (S (S Z)))
 def t3 = fwd rsucc (Cons Z (Cons (S Z) Nil))
 def t4 = bwd rsucc (Cons (S Z) (Cons (S (S Z)) Nil))
 def t5 = fwd serialize (Cons (S Z) (Cons Z Nil))
--- Without the signature, nothing would fix the `a` of the instance argument
--- `Serialize a` of `serialize` (the argument of `bwd` is the output), so the
--- instance could not be determined.
+-- The signature is needed to determine the instance
 sig t6 : List Nat
 def t6 = bwd serialize (Cons I (Cons I (Cons O (Cons I (Cons O (Cons O Nil))))))
 def t7 = fwd (radd (S (S Z))) (S Z)
 def t8 = bwd (radd (S (S Z))) (S (S (S Z)))
 def t9 = fwd (twice {{revSuccNat}}) Z
 
--- Expected values (compared with t1 .. t9 by test/Spec.hs)
+-- Expected values
 
 def t1' = S (S (S Z))
 def t2' = S Z

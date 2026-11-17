@@ -68,15 +68,13 @@ mkName = mkNameIn "Main"
 mkNameIn :: String -> String -> Name
 mkNameIn m n = Original (ModuleName m) (User n) (Bare (User n))
 
--- | For each @tK@ given, checks that @tK@ and @tK'@ (the expected value
---   written in the sample) are the same.
+-- | Checks @tK = tK'@ for each @tK@ given.
 checkExpected :: FilePath -> String -> [String] -> SpecWith (M.Map Name Value)
 checkExpected fp m ns =
   forM_ ns $ \n ->
     it ("satisfies " ++ n ++ " = " ++ n ++ "' in " ++ fp) $ \vt ->
       checkSame vt (mkNameIn m n) (mkNameIn m (n ++ "'"))
 
--- | Names @t1@ .. @tn@.
 tNames :: Int -> [String]
 tNames n = ["t" ++ show i | i <- [1 .. n]]
 
@@ -114,7 +112,7 @@ main = hspec $ do
       it "satisfies n4 = sub73 in AddLSB.sparcl" $ \vt -> do
         checkSame vt (mkName "n4") (mkName "sub73")
 
-    -- type classes: each sample defines the expected values tK' of tK
+    -- type classes
     forM_
       [ ("ClassEq.sparcl", "Main", tNames 9)
       , ("ClassOrd.sparcl", "Main", tNames 6)

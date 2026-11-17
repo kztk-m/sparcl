@@ -1,9 +1,6 @@
 -- It is intentional that this program causes a type error.
--- The head abstraction is checked before its argument `fs`, so the type of
--- `g` is a meta variable when `g Z Z` is checked; no instance argument is
--- inserted, and `g Z Z` makes the type of `g` an ordinary function type,
--- which does not match `{{Eq Nat}} -> Nat -> Nat -> Bool`. See
--- Examples/ClassInstArgInList.sparcl for the accepted variants.
+-- The type of `g` is not known when `g Z Z` is checked, so no instance is
+-- passed to it (annotating the abstraction fixes this; ClassInstArgInList).
 
 data Nat = Z | S Nat
 data List a = Nil | Cons a (List a)

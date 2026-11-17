@@ -1,9 +1,5 @@
--- Classes and instances across modules (3/3): see Examples.ClassModA.
---
--- Only Examples.ClassModB is imported. The instance arguments of its
--- functions are found among the instances of Examples.ClassModA (the
--- unnamed `Ord Nat` and, through its superclass, `eqNat` with the default
--- `neq`), which are available although no name of them is in scope here.
+-- Classes and instances across modules (3/3): only ClassModB is imported,
+-- and the instances of ClassModA are still found.
 
 module Examples.ClassModC where
 
@@ -14,7 +10,7 @@ def t2 = neqViaOrd Z (S Z)
 def t3 = leqAndNeq Z (S Z)
 def t4 = leqAndNeq (S Z) Z
 
--- Expected values (compared with t1 .. t4 by test/Spec.hs)
+-- Expected values
 
 def t1' = False
 def t2' = True

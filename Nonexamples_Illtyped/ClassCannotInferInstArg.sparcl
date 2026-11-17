@@ -1,7 +1,6 @@
 -- It is intentional that this program causes a type error.
--- Instance arguments of a top-level definition without a signature are not
--- inferred; `g` needs a signature such as
--- `sig g : {{Eq a}} -> a -> a -> Bool`.
+-- Instance arguments of a definition without a signature are not inferred;
+-- `g` needs a signature.
 
 class Eq a where
     sig eq : a -> a -> Bool

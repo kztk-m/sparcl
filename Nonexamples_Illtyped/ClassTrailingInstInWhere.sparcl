@@ -1,10 +1,6 @@
 -- It is intentional that this program causes a type error.
 -- The instance argument `{{Eq a}}` comes after the written patterns of `f`,
--- so it is abstracted in the body of the clause, not bound by the clause.
--- The `where` declaration `go` does not see it, and no instance of `Eq a`
--- is found for `x == x`.
--- Writing `def f x {{_}} = go where ... end` makes it work
--- (Examples/ClassTrailingWhere.sparcl).
+-- so `go` in `where` cannot use it (writing `def f x {{_}}` fixes this).
 
 data Nat = Z | S Nat
 

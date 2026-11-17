@@ -1,7 +1,6 @@
 -- It is intentional that this program causes a type error.
--- The type of the instance argument of `dflt` is never determined, so the
--- goal `Default ?a` is ambiguous; search does not choose `dNat` by
--- instantiating the goal.
+-- The type of `dflt` is never determined, so its instance is ambiguous
+-- (`dNat` is not chosen just because it is the only instance).
 
 data Nat = Z | S Nat
 

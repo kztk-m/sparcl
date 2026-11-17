@@ -1,6 +1,5 @@
 -- It is intentional that this program causes a type error.
--- Synonyms are expanded before checking class types: `S Int` is
--- `{{Int}} -> Int`.
+-- `S Int` expands to `{{Int}} -> Int`, and `Int` is not a class.
 
 type S a = {{a}} -> Int
 

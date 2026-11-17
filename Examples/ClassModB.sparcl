@@ -1,8 +1,5 @@
--- Classes and instances across modules (2/3): see Examples.ClassModA.
---
--- The import list names neither the instances nor `eq`. The export list
--- re-exports `Nat` and its constructors from Examples.ClassModA, but not the
--- classes, the methods or the instances.
+-- Classes and instances across modules (2/3): the import and export lists
+-- name neither the instances nor `eq`.
 
 module Examples.ClassModB (Nat, Z, S, leqAndNeq, neqViaOrd) where
 

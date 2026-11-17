@@ -70,8 +70,6 @@ desugarExp (Loc _ expr) = go expr
 
     go (S.Var (x, _)) = return $ C.Var x
     go (S.Lit l) = return $ C.Lit l
-    -- Dictionaries are ordinary arguments at run time, so both kinds of
-    -- arguments become ordinary applications.
     go (S.App e1 a2) =
       mkApp <$> desugarExp e1 <*> desugarExp (S.argExp a2)
     go (S.InstHole () _ ref) = do
@@ -87,7 +85,6 @@ desugarExp (Loc _ expr) = go expr
         checkAllVars [] = pure []
         checkAllVars (x : xs) = liftA2 (:) (checkVar x) (checkAllVars xs)
         checkVar (unLoc -> S.PVar (n, _)) = pure n
-        -- a dictionary is an ordinary argument at run time
         checkVar (unLoc -> S.PInst p) = checkVar p
         checkVar _ = Nothing
     go (S.Abs ps e) = desugarRHS [(ps, S.Clause e (S.HDecls () []) Nothing)]
@@ -130,7 +127,6 @@ desugarExp (Loc _ expr) = go expr
           return $ C.Let bs' e'
     go (S.Let1 p1 e1 e2) = go (S.App (noLoc (S.Abs [p1] e2)) (S.ExplicitArg e1))
     go (S.Parens e) = desugarExp e
-    -- The type checker outputs operator applications as `App`s.
     go (S.Op v _ _ _) = absurd v
     go S.Unlift =
       withNewName $ \x ->
@@ -294,8 +290,6 @@ separatePat pat = go False (unLoc pat)
     go _ (S.PWild (x, _ty)) =
       -- (if b then CPVar x else CPBang (CPVar x), [])
       (CPVar x, [])
-    -- an instance pattern binds the dictionary, an ordinary argument at
-    -- run time
     go b (S.PInst p) = go b (unLoc p)
     -- go _ (S.PBang p) =
     --   let (p', subs) = go True (unLoc p)
@@ -391,13 +385,9 @@ desugarPat = go . unLoc
     go (S.PCon (c, _ty) ps) = C.PCon c <$> mapM desugarPat ps
     go _ = error "desugarPat: Cannot happen."
 
--- | Desugars the top-level declarations of a module. Besides the @def@s,
---   it makes the methods and superclass projections of the classes
---   declared in the module, their default methods, and the instances
---   declared in the module; all form one recursive group.
 desugarTopDecls ::
   ClassTable -- classes declared in this module
-  -> ClassTable -- all classes in scope (an instance may be of an imported class)
+  -> ClassTable -- all classes in scope
   -> [TypedDefault]
   -> [TypedInstance]
   -> S.Decls 'TypeCheck (S.LDecl 'TypeCheck)
@@ -415,9 +405,7 @@ desugarTopDecls ownClasses allClasses defaults insts (S.HDecls _ bss) = do
   instBinds <- mapM (desugarInstance allClasses) insts
   return $ defBinds ++ classBinds ++ defaultBinds ++ instBinds
 
--- | The methods and superclass projections of class @c@. A dictionary is
---   @<dict C> s_1 ... s_m f_1 ... f_n@: the superclass dictionaries in
---   @extends@ order, then the methods in signature order.
+-- | The methods and superclass projections of class @c@.
 desugarClass :: Name -> ClassInfo -> Desugar (C.Bind Name)
 desugarClass c ci = do
   let m = length (ciSupers ci)
@@ -436,13 +424,7 @@ dictField c n i = withNewNames (n + 1) $ \case
   d : xs -> return $ C.Abs d (C.Case (C.Var d) [(C.PCon (dictName c) (map C.PVar xs), C.Var (xs !! i))])
   [] -> cannotHappen $ text "dictField: no names"
 
--- | The value of an instance @x : forall as. {{H1}} -> ... -> {{Hk}} -> C ts@:
---
---   > x = \d1 ... dk -> let self = <dict C> sup_1 ... sup_m impl_1 ... impl_n in self
---
---   where the superclass dictionaries @sup_i@ refer to @d1 ... dk@, a
---   defined method is its body applied to @d1 ... dk@, and an omitted one
---   is its default applied to the dictionary itself.
+-- | The value of an instance declaration.
 desugarInstance :: ClassTable -> TypedInstance -> Desugar (Name, T.Ty, C.Exp Name)
 desugarInstance cenv ti = do
   let c = tiClass ti

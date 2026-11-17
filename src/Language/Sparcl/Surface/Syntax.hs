@@ -79,7 +79,6 @@ data Ty (p :: Pass)
   | TForall !(XTId p) !(LTy p)
   | TQual ![TConstraint p] !(LTy p)
   | TMult !Multiplicity
-  -- | TKind !(LTy p) !(LTy p)  -- Kind Annotation
 
 -- TODO: Maybe, we should add Eq or Ord later.
 data TConstraint p
@@ -124,8 +123,7 @@ isTyArr _ n =
         Just Refl -> n == nameTyArr
         _ -> False
 
--- | Checks if the name is the type constructor of instance-argument function types: {{C}} -> t is represented as
--- TCon nameTyInstArr [C, t].
+-- | Checks if the name is the type constructor of {{C}} -> t (TCon nameTyInstArr [C, t]).
 isTyInstArr :: forall p. (Typeable p) => Proxy p -> XTId p -> Bool
 isTyInstArr _ n =
   case eqT @p @'Parsing of
@@ -190,7 +188,7 @@ type family XId (p :: Pass) = q | q -> p where
 class QueryName p where
   checkTuple :: XId p -> Maybe Int
   isRev :: XId p -> Bool
-  isOpName :: XId p -> Bool -- whether the name is an operator such as (==)
+  isOpName :: XId p -> Bool
 
 instance QueryName 'Parsing where
   checkTuple (BuiltIn n) = checkTuple n
@@ -236,25 +234,19 @@ pprVarName n
 type ForallX (f :: Type -> Constraint) p = (f (XId p), f (XTId p))
 type AllPretty p = (ForallX Pretty p, QueryName p, Typeable p)
 
--- | Operator applications @e1 op e2@ are made by the parser and renaming;
---   the type checker turns them into applications (@App@), so they never
---   appear after type checking.
+-- | Tag of @Op@.
 type family XOp (p :: Pass) where
   XOp 'Parsing = ()
   XOp 'Renaming = ()
   XOp 'TypeCheck = Void
 
--- | Holes for the dictionaries of instance goals (@InstHole@) are made only
---   by the type checker (as the arguments of inserted applications), so
---   they never appear before type checking.
+-- | Tag of @InstHole@.
 type family XHole (p :: Pass) where
   XHole 'Parsing = Void
   XHole 'Renaming = Void
   XHole 'TypeCheck = ()
 
--- | An argument of an application: an ordinary one or an explicitly
---   passed instance @{{e}}@. Having it as the argument type of @App@
---   ensures that @{{e}}@ appears only as an argument of an application.
+-- | An argument of an application: an ordinary one or an explicitly passed instance @{{e}}@.
 data Arg p
   = ExplicitArg !(LExp p)
   | InstArg !(LExp p)
@@ -276,11 +268,7 @@ data Exp p
   = Lit !Literal
   | Var !(XId p)
   | App !(LExp p) !(Arg p)
-  | -- | A hole for the dictionary of an instance goal, filled when the goal
-    --   is solved; the goal's name and class type (as an @XId@, which is a
-    --   name with its type after type checking) are kept for printing. The
-    --   tag (see XHole) is lazy, so that `absurd` handles the passes where
-    --   it is Void (as XDecls).
+  | -- | A hole for the dictionary of an instance goal, filled when the goal is solved.
     InstHole (XHole p) !(XId p) !(IORef (Maybe (LExp p)))
   | Abs ![LPat p] !(LExp p)
   | Con !(XId p)
@@ -292,7 +280,7 @@ data Exp p
   | Let !(Decls p (LDecl p)) !(LExp p)
   | Let1 !(LPat p) !(LExp p) !(LExp p) -- let p = e1 in e2 is equivalent to (\p . e2) e1
   | Parens !(LExp p) -- for operators
-  | Op (XOp p) !(XId p) !(LExp p) !(LExp p) -- see XOp; the first field is lazy, as in InstHole
+  | Op (XOp p) !(XId p) !(LExp p) !(LExp p)
   | RDO ![(LPat p, LExp p)] !(LExp p)
   | Unlift
   | RCon !(XId p)
@@ -307,8 +295,6 @@ instance (AllPretty p) => Pretty (Exp p) where
   pprPrec k (App e1 a) =
     parensIf (k > 9) $
       pprPrec 9 e1 D.<+> pprPrec 10 a
-  -- As meta type variables are printed (Typing/Type.hs), the contents are
-  -- read unsafely.
   pprPrec _ (InstHole _ g ref) =
     case unsafePerformIO (readIORef ref) of
       Just e -> pprPrec 10 e
@@ -549,7 +535,6 @@ instance (AllPretty p) => Pretty (TopDecl p) where
     D.hsep ([D.text "instance"] ++ maybe [] (\n -> [ppr n, D.colon]) x ++ [D.align (ppr ty)])
       D.<> pprClassBody ws
 
--- | Pretty-prints the `where ... end` body of a class or an instance declaration.
 pprClassBody :: (AllPretty p) => Decls p (LDecl p) -> Doc
 pprClassBody (Decls _ ds) = pprClassBodyList ds
 pprClassBody (HDecls _ dss) = pprClassBodyList (concat dss)

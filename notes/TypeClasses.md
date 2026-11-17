@@ -68,6 +68,9 @@ Syntax
 * A default method may use the other methods of the class (and defaults may
   be defined in terms of each other, as `leq` and `compare` in
   `Examples/ClassOrd.sparcl`).
+* Method signatures may mention the class parameters, which are not
+  quantified in them. A method `sig m : t` of `class C a` has the type
+  `forall a .... {{C a}} -> t`, with all quantifiers in front.
 
 ### Instance declarations
 
@@ -76,12 +79,15 @@ Syntax
     end]
 
 * The name `x` is optional; it is needed only to pass the instance
-  explicitly.
+  explicitly. An unnamed instance gets a generated name.
 * `{{H1}} -> ... ->` are the instance's own instance arguments, e.g.
   `instance {{Eq a}} -> {{Eq b}} -> Eq (Pair a b)`. They are available as
   local instances in the method bodies.
 * A method without a definition takes its default; a method with neither
   is an error.
+* A method body is checked against the method signature with the class
+  parameters replaced by the arguments of the instance head. Method bodies
+  may use the top-level definitions, also those without signatures.
 
 ### Instance arguments
 
@@ -118,7 +124,8 @@ The type checker inserts the instance arguments that are not written:
 * **Patterns.** The argument patterns of a `def` clause or of `\` are
   aligned with the arrows of its type; an instance arrow without a written
   `{{p}}` gets an inserted instance pattern. All clauses of a definition
-  share the inserted variable.
+  share the inserted variable, so that desugaring can still group clauses
+  with invertible patterns into one invertible `case`.
 * **Applications.** In an application, an instance arrow of the function's
   type without a written `{{e}}` gets an inserted instance argument, to be
   found by instance search. Instance arrows after the last argument are
@@ -161,13 +168,15 @@ its own instance arguments as local instances.
 Desugaring turns classes and instances into ordinary values:
 
 * A **dictionary** of class `C` is a value `<dict C> s1 ... sm f1 ... fn`
-  of the superclass dictionaries and the methods.
+  of the superclass dictionaries (in `extends` order) and the methods (in
+  signature order).
 * A **method** and a **superclass projection** are functions that take a
   dictionary and return one of its fields.
 * An **instance** `x : {{H1}} -> ... -> {{Hk}} -> C ts` is a function of its
   instance arguments returning a dictionary, which refers to itself, so
   that omitted methods can be filled by their defaults applied to it.
 * An inserted or explicit instance argument is an ordinary argument.
+* These values and the definitions of the module form one recursive group.
 
 With cyclic superclasses, dictionaries are cyclic values; they are
 evaluated only to weak head normal form when a module is loaded, and the
@@ -246,6 +255,13 @@ Implementation
 | Desugaring | `Desugar.hs`, `Name.hs` | dictionaries, methods, projections, defaults and instances as Core values (generated names `<dict C>`, `<super C #i>`, `<default m>`) |
 | Evaluation | `Value.hs` | dictionaries forced only to weak head normal form, printed as `<dict C>` |
 | Modules | `Module.hs` | class and instance tables propagated regardless of import and export lists |
+
+In the surface AST, operator applications (`Op`) do not exist after type
+checking (the type checker outputs them as applications), and dictionary
+holes (`InstHole`) exist only after it; the pass-indexed tags of these
+constructors are `Void` in the other passes. The names generated for
+classes are names of the module declaring the class, so that code built in
+other modules refers to the same values.
 
 Tests: every file in `Examples/` must type-check and every file in
 `Nonexamples_Illtyped/` must be rejected; for the class examples,

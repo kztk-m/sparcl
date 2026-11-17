@@ -140,9 +140,6 @@ subsumptionCheckBody isRightGiven ty1_ ty2_ = do
     (TyForAll _ _, _) -> do
       bodyTy1 <- instantiate ty1 -- discharge constraint
       subsumptionCheckBody isRightGiven bodyTy1 ty2
-    -- The classes are compared by equality (they are monotypes), the
-    -- results covariantly. An instance arrow against an ordinary arrow is
-    -- an error (via ensureFunTy below).
     (InstFunTy c1 r1, InstFunTy c2 r2) -> do
       if isRightGiven then tryUnify c1 c2 else tryUnify c2 c1
       subsumptionCheckBody isRightGiven r1 r2
@@ -212,15 +209,11 @@ ensureFunTy ty = do
   tryUnify (FunTy m argTy resTy) ty
   return (argTy, m, resTy)
 
--- | The shape of a type for deciding insertions: zonked, with type synonyms
---   at the top expanded (a signature may hide @{{C}} -> t@ in a synonym).
+-- | Zonks a type and expands the synonyms at its top.
 shapeOf :: Ty -> TC Ty
 shapeOf ty = stripSyn <$> (resolveSyn =<< zonkType ty)
 
--- | A position of the argument patterns aligned with the arrows of a type:
---   an ordinary argument, an instance argument bound by a written
---   instance pattern, or an instance argument for which a pattern binding
---   the given variable is inserted.
+-- | An argument position: explicit, written instance pattern, or inserted instance pattern.
 data Slot
   = Explicit PolyTy MultTy
   | Inst Ty
@@ -230,16 +223,7 @@ isInstPat :: LPat p -> Bool
 isInstPat (Loc _ (PInst _)) = True
 isInstPat _ = False
 
--- | Aligns the argument patterns of a definition or an abstraction with the
---   arrows of its type, one pattern at a time. Each step consumes at most
---   one pattern; an instance arrow without a written instance pattern gets
---   an inserted one. A trailing instance arrow after the patterns is left
---   to the abstraction insertion of the body (see 'checkTy').
---
---   The variable of an inserted pattern is generated once per definition
---   and shared by all its clauses, as variables written at the same
---   position are; otherwise desugaring could not group clauses with
---   invertible patterns into one invertible case.
+-- | Aligns the argument patterns with the arrows of a type.
 alignPatsTy :: [LPat 'Renaming] -> BodyTy -> TC ([Slot], BodyTy)
 alignPatsTy [] ty = pure ([], ty)
 alignPatsTy ps@(p : rest) ty = do
@@ -261,10 +245,7 @@ alignPatsTy ps@(p : rest) ty = do
       (argTy, m, resTy) <- ensureFunTy ty'
       first (Explicit argTy m :) <$> alignPatsTy rest resTy
 
--- | The patterns of a clause (or an abstraction) according to the slots:
---   instance arguments without written patterns get instance patterns
---   binding the variables of the slots. Returns the patterns, their
---   multiplicities and types, and the local instances they bind.
+-- | The patterns of a clause with the inserted instance patterns added.
 expandSlots :: [Slot] -> [LPat 'Renaming] -> TC ([LPat 'Renaming], [Multiplication], [PolyTy], [(Name, Ty)])
 expandSlots [] [] = pure ([], [], [], [])
 expandSlots (Explicit t m : ss) (p : ps) = do
@@ -275,7 +256,6 @@ expandSlots (Inst c : ss) (p : ps) = do
   (ps', qs, ts, ls) <- expandSlots ss ps
   pure (p : ps', omega : qs, c : ts, (instPatVar p, c) : ls)
   where
-    -- By renaming, the contents is a variable or `_` (which has a name).
     instPatVar (Loc _ (PInst (Loc _ (PVar x)))) = x
     instPatVar (Loc _ (PInst (Loc _ (PWild x)))) = x
     instPatVar _ = cannotHappen $ text "expandSlots: an instance pattern must bind a variable"
@@ -435,10 +415,6 @@ checkPatTyWork isUnderRev (Loc loc pat) pmult expected = do
       -- cs must be []
       addConstraint $ msubMult omega pmult
       return (req, cs, PWild x', [])
-    -- An instance pattern is checked only at an instance slot of the
-    -- alignment, against its class type; by renaming its contents is
-    -- a variable or `_` (which has a name). It binds the variable (with the
-    -- multiplicity given by the caller, Omega).
     go (PInst (Loc l p))
       | Check c <- expected =
           let x = case p of
@@ -480,21 +456,17 @@ constrainVars ((x, q) : xqs) m = do
 
 -- TODO: sig-expression is buggy.
 
--- | Infers the type of an expression; trailing instance arguments of its
---   value are not inserted (as in Agda).
+-- | Infers the type of an expression without inserting trailing instance arguments.
 inferTy :: LExp 'Renaming -> TC (LExp 'TypeCheck, BodyTy, UseMap)
 inferTy = withExpandLast DontExpandLast . inferTyWork
 
--- | Infers the type of an expression whose value is matched against
---   patterns (the bound expression of @let p <- e1 in e2@ and the scrutinee
---   of @case@), inserting trailing instance arguments (as Agda does for
---   pattern lets).
+-- | Infers the type of an expression, inserting trailing instance arguments.
 inferTyExpandM :: LExp 'Renaming -> Multiplication -> TC (LExp 'TypeCheck, BodyTy, UseMap)
 inferTyExpandM lexp m = do
   (lexp', ty, umap) <- withExpandLast ExpandLast $ inferTyWork lexp
   pure (lexp', ty, raiseUse m umap)
 
--- | Inference under the current expand-last flag (set by the callers).
+-- | Inference under the current expand-last flag.
 inferTyWork :: LExp 'Renaming -> TC (LExp 'TypeCheck, BodyTy, UseMap)
 inferTyWork (Loc loc expr) = go expr
   where
@@ -511,8 +483,6 @@ inferTyWork (Loc loc expr) = go expr
       ty <- readTCRef ref
       return (e', ty, umap)
 
--- | Splits an application into its head and its arguments. Parentheses
---   around the head are crossed.
 flattenSpine :: LExp 'Renaming -> (LExp 'Renaming, [Arg 'Renaming])
 flattenSpine = go []
   where
@@ -520,19 +490,7 @@ flattenSpine = go []
     go as@(_ : _) (Loc _ (Parens e)) = go as e
     go as e = (e, as)
 
--- | Checks an application as a spine: the head's type is used as is for a
---   variable and inferred otherwise; the arguments are processed from the
---   left, instantiating @forall@s on the way; finally the rest of the type
---   is compared with the expected type.
---
---   The applications are rebuilt with locations recomputed from their parts
---   (the head's parentheses are dropped), and the partial applications give
---   the error contexts of the arguments.
---
---   An instance arrow takes a written instance argument @{{e}}@, or else an
---   application to a hole for a new goal is inserted; after the arguments,
---   trailing instance arrows get insertions when the expand-last flag is
---   set.
+-- | Checks an application, inserting omitted instance arguments.
 checkSpine :: LExp 'Renaming -> [Arg 'Renaming] -> Expected BodyTy -> TC (Exp 'TypeCheck, UseMap)
 checkSpine hd args expectedTy = do
   (hd', hdTy, hdUmap) <- case hd of
@@ -563,14 +521,12 @@ checkSpine hd args expectedTy = do
           ty' <- instantiate shape
           goArgs f f' ty' (a : as)
         (InstFunTy c t, InstArg e) -> do
-          -- an explicitly passed instance (instance arrows are Omega)
           (e', umapE) <- checkTyM e (Check c) omega
           let l = location f <> location e
           (res, rTy, umapR) <-
             goArgs (Loc l (App f a)) (Loc l (App f' (InstArg e'))) t as
           pure (res, rTy, mergeUseMap umapE umapR)
         (InstFunTy c t, ExplicitArg _) -> do
-          -- insertion; the argument is not consumed
           hole <- atExp f $ atLoc (location f) $ newGoal c
           goArgs f (Loc (location f) (App f' (InstArg hole))) t (a : as)
         (TyMetaV _, InstArg e) -> atExp f $ atLoc (location e) $ do
@@ -589,9 +545,6 @@ checkSpine hd args expectedTy = do
             goArgs (Loc l (App f a)) (Loc l (App f' (ExplicitArg e'))) resTy as
           pure (res, rTy, mergeUseMap umapE umapR)
 
-    -- Leading foralls and instance arrows of the rest are instantiated /
-    -- get insertions until neither remains. The type is returned as is if
-    -- nothing is done (keeping synonyms for messages).
     insertTrailing :: LExp 'TypeCheck -> PolyTy -> TC (LExp 'TypeCheck, PolyTy)
     insertTrailing f' ty = do
       shape <- shapeOf ty
@@ -604,9 +557,7 @@ checkSpine hd args expectedTy = do
           insertTrailing (Loc (location f') (App f' (InstArg hole))) t
         _ -> pure (f', ty)
 
--- | Makes a goal for an instance argument of class type @c@ in the current
---   scope (local instances, level, location, error context) and returns the
---   hole for its dictionary.
+-- | Makes a goal for an instance argument and returns its hole.
 newGoal :: Ty -> TC (LExp 'TypeCheck)
 newGoal c = do
   g <- newGenName
@@ -633,16 +584,9 @@ checkTyM lexp ty m = do
   (lexp', umap) <- checkTy lexp ty
   return (lexp', raiseUse m umap)
 
--- | In Check mode, the expand-last flag is set (as in Agda); in Infer mode,
---   the flag set by the caller is used.
 checkTy :: LExp 'Renaming -> Expected BodyTy -> TC (LExp 'TypeCheck, UseMap)
 checkTy lexp@(Loc loc expr) expectedTy = do
-  -- When an instance argument is expected, an abstraction binding it (a
-  -- local instance) is inserted and the same expression is checked
-  -- against the rest of the type (recursively, for several instance
-  -- arguments). Not for an abstraction binding it explicitly, parentheses
-  -- (the expected type is passed inside) and annotations (the annotation
-  -- gives the type).
+  -- insertion of an abstraction for an expected instance argument
   inserted <- case expectedTy of
     Check t | not (bindsItself expr) -> do
       shape <- shapeOf t
@@ -685,7 +629,6 @@ checkTy lexp@(Loc loc expr) expectedTy = do
 
       instantiatePoly (FunTy (TyMult One) wTupleTy ti) expectedTy
       pure (WProj i n, emptyUseMap)
-    -- A variable is a spine without arguments.
     go (Var x) = checkSpine (Loc loc (Var x)) [] expectedTy
     go (Lit l) = do
       ty <- litTy l
@@ -704,7 +647,6 @@ checkTy lexp@(Loc loc expr) expectedTy = do
 
       pure (Abs pats' e', foldr (M.delete . fst) umap xqs)
     go (Abs pats e) | Infer ref <- expectedTy = do
-      -- An instance pattern needs a known type.
       forM_ (filter isInstPat pats) $ \p -> atLoc (location p) $ do
         reportError InstPatNeedsAnnotation
         abortTyping
@@ -782,9 +724,6 @@ checkTy lexp@(Loc loc expr) expectedTy = do
     go (Parens e) = do
       (e', umap) <- checkTy e expectedTy
       return (Parens e', umap)
-    -- An operator application is checked as a spine and output as
-    -- applications; `Op` cannot appear after type checking
-    -- (XOp 'TypeCheck = Void).
     go (Op () op e1 e2) =
       checkSpine (Loc loc (Var op)) [ExplicitArg e1, ExplicitArg e2] expectedTy
     go (RCon c) = do
@@ -992,8 +931,6 @@ inferPolyTy :: Bool -> LExp 'Renaming -> TC (LExp 'TypeCheck, PolyTy, UseMap)
 inferPolyTy isMultipleUse expr = do
   ((expr', ty, umap), goals) <- gatherGoals $ pushLevel $ inferTy expr
 
-  -- Goals are solved before generalization, as for a top-level definition
-  -- without a signature.
   solveGoals (ReportAtTopLevel False) goals
 
   -- (umapM, csM) <- if isMultipleUse then raiseUse (TyMult Omega) umap
@@ -1075,13 +1012,7 @@ inferDecls isTopLevel (HDecls _ dss) = do
       (rest', bs', umap') <- withVars bind $ go (bind ++ bs) rest
       return (ds' : rest', bs', mergeUseMap umap umap')
 
--- | Checks the class types in a user-written type: the contents of @{{ }}@
---   must be a class applied to arguments, and every class must be applied
---   to as many arguments as it has parameters, inside or outside @{{ }}@
---   (classes are ordinary types, but there is no kind for unapplied
---   classes). Synonyms are expanded first, so this is done
---   where a type is used, not at synonym definitions. Errors are reported
---   and checking continues.
+-- | Checks the contents of @{{ }}@ and the numbers of class arguments in a type.
 checkClassTypes :: Ty -> TC ()
 checkClassTypes ty = resolveSyn ty >>= go
   where
@@ -1101,13 +1032,11 @@ checkClassTypes ty = resolveSyn ty >>= go
       mapM_ go ts
     go _ = pure ()
 
--- | 'checkClassTypes' for a written type, located at it.
+-- | 'checkClassTypes' for a written type.
 checkClassTypesL :: LTy 'Renaming -> TC ()
 checkClassTypesL lty = atLoc (location lty) $ checkClassTypes (ty2ty lty)
 
--- | Checks that a type is an application of a class (where a class is
---   required: inside @{{ }}@, superclasses, instance heads). The number of
---   arguments is checked by 'checkClassTypes'.
+-- | Checks that a type is an application of a class.
 checkClassApp :: Ty -> TC ()
 checkClassApp ty = do
   ty' <- stripSyn <$> resolveSyn ty
@@ -1159,22 +1088,17 @@ inferTopDecls decls dataDecls typeDecls classDecls instDecls = do
   --   let tvs = map BoundTv ns,
   --   Loc _ (CDecl cn tys) <- cdecls ]
 
-  -- Type information is registered first (data types and synonyms,
-  -- classes, instances), then expressions are checked.
-
   -- data types and type synonyms
   withCons (M.toList ctypeTable) $
     withSyns (M.toList synTable) $ do
       -- classes
       let classTable = M.fromList [(c, mkClassInfo ps sups sigs defs) | Loc _ (c, ps, sups, sigs, defs) <- classDecls]
       withClassesAndInstances classTable M.empty $ do
-        -- fields of data constructors (they may contain class types, so
-        -- this is done once the class table exists)
+        -- fields of data constructors
         forM_ dataDecls $ \(Loc _ (_, _, cdecls)) ->
           forM_ cdecls $ \(Loc _ cd) -> mapM_ checkClassTypesL (fieldTys cd)
 
-        -- superclasses and method signatures; cycles in the superclass
-        -- hierarchy are allowed
+        -- superclasses and method signatures
         forM_ classDecls $ \(Loc _ (_, _, sups, sigs, _)) -> do
           forM_ sups $ \s -> atLoc (location s) $ do
             checkClassTypes (ty2ty s)
@@ -1187,8 +1111,7 @@ inferTopDecls decls dataDecls typeDecls classDecls instDecls = do
               , Loc _ (m, t) <- sigs
               ]
 
-        -- instances; registered even when a check fails, to avoid cascades
-        -- of errors at their uses
+        -- instances
         instTys <- forM instDecls $ \(Loc _ (x, lty, _)) -> do
           let ty = ty2ty lty
           atLoc (location lty) $ do
@@ -1206,22 +1129,18 @@ inferTopDecls decls dataDecls typeDecls classDecls instDecls = do
 
         withClassesAndInstances M.empty instTable $
           withVars (methodTys ++ instTys) $ do
-            -- the superclass instances of each instance must be solvable,
-            -- once all instances are registered
+            -- superclass instances
             superDicts <- forM (zip instDecls instTys) $ \(Loc l (x, _, _), (_, ty)) ->
               atLoc l $ whenChecking (CheckingSuperclasses x) $ checkSuperInstances ty
 
             -- definitions
             (decls', nts, _) <- inferDecls True decls
 
-            -- default methods and instance bodies, with the types of the
-            -- definitions visible (a body may use a definition without a
-            -- signature)
+            -- default methods and instance bodies
             (typedDefaults, typedInsts) <- withVars nts $ do
               typedDefaults <- fmap concat $
                 forM classDecls $ \(Loc _ (c, _, _, _, defs)) ->
                   forM [(l, m, pcs) | Loc l (DDef m pcs) <- defs] $ \(l, m, pcs) -> do
-                    -- renaming ensures that m is a method of c
                     let polyTy = fromMaybe (cannotHappen $ text "No method type for" <+> ppr m) (lookup m methodTys)
                     pcs' <- checkSigDef l m polyTy pcs
                     pure $ TypedDefault{tdMethod = m, tdClass = c, tdType = polyTy, tdClauses = pcs'}
@@ -1245,9 +1164,7 @@ inferTopDecls decls dataDecls typeDecls classDecls instDecls = do
             reportLeftoverGoals
             return
               ( decls'
-              , -- also the values made by desugaring (projections,
-                -- defaults); dictionary constructors are not values
-                nts
+              , nts
                   ++ methodTys
                   ++ instTys
                   ++ [ (superProjName c i, superProjType c ci i)
@@ -1265,8 +1182,6 @@ inferTopDecls decls dataDecls typeDecls classDecls instDecls = do
               , typedInsts
               )
   where
-    -- The bodies of instance x of type ty. Skipped when the head
-    -- is not a class (reported at registration).
     checkInstBodies l x ty ids = do
       cenv <- asks tcClassEnv
       hd <- instHead ty
@@ -1277,8 +1192,6 @@ inferTopDecls decls dataDecls typeDecls classDecls instDecls = do
             forM defined $ \(l', m, pcs) ->
               case lookup m (ciMethods ci) of
                 Nothing -> do
-                  -- renaming resolves m but does not check that it is a
-                  -- method of c
                   atLoc l' $ reportError $ NotAMethod x m
                   pure Nothing
                 Just sigTy -> do
@@ -1297,10 +1210,7 @@ inferTopDecls decls dataDecls typeDecls classDecls instDecls = do
           pure (ms, filter (`elem` ciDefaults ci) omitted)
         _ -> pure ([], [])
 
-    -- For @forall as. {{H1}} -> ... -> {{Hk}} -> C ts@, with the @as@
-    -- skolemized and @H1 ... Hk@ as local instances @d1 ... dk@, each
-    -- superclass of @C ts@ must be solvable. Returns the local instances
-    -- and the dictionaries of the superclasses (used by desugaring).
+    -- Returns the local instances and the superclass dictionaries of an instance.
     checkSuperInstances ty = do
       (_, TyQual _ instBody) <- skolemize ty
       instBody' <- normTy instBody
@@ -1314,7 +1224,7 @@ inferTopDecls decls dataDecls typeDecls classDecls instDecls = do
             g <- makeGoal locals (substTy (zip (ciParams ci) ts) s)
             solveGoals (ReportAtTopLevel True) [g]
             liftIO $ readIORef (goalRef g)
-        _ -> pure [] -- not a class: reported at registration
+        _ -> pure []
       pure (locals, catMaybes dicts)
 
     mkClassInfo ps sups sigs defs =
@@ -1328,7 +1238,6 @@ inferTopDecls decls dataDecls typeDecls classDecls instDecls = do
     fieldTys (NormalC _ tys) = tys
     fieldTys (GeneralC _ _ _ tyms) = map fst tyms
 
-    -- The head of an instance type, forall as. {{H1}} -> ... -> C ts
     instHead ty = stripSyn . go <$> resolveSyn ty
       where
         go (TySyn _ t) = go t
@@ -1336,9 +1245,6 @@ inferTopDecls decls dataDecls typeDecls classDecls instDecls = do
         go (InstFunTy _ t) = go t
         go t = t
 
-    -- Renaming ensures that an instance head is a type constructor applied
-    -- to types; the name is used as a key even if it is not a class (the
-    -- error has been reported).
     headName (TyCon n _) = n
     headName _ = error "Cannot happen: the head of an instance must be C t1 ... tn."
 
@@ -1373,7 +1279,6 @@ inferMutual isTopLevel decls = do
       Nothing -> newMetaTy
 
     fmap gatherU $ withVars (zip names tys) $ forM defs $ \(loc, n, pcs) -> atLoc loc $ do
-      -- the goals of each definition are collected
       ((entry, umap), goals) <- gatherGoals $
         case M.lookup n sigMap of
           Nothing -> do
@@ -1389,9 +1294,6 @@ inferMutual isTopLevel decls = do
 
   let (nts0, goalss) = unzip nts0g
 
-  -- The goals of the group are solved after all of its bodies, before
-  -- generalization and the multiplicity constraints. Undecidable ones are
-  -- postponed outward from a local group, and errors at the top level.
   forM_ (zip nts0 goalss) $ \((_, _, tt, _), goals) ->
     solveGoals
       ( if isTopLevel
@@ -1519,15 +1421,11 @@ inferMutual isTopLevel decls = do
     --   in  (x:xs, mergeUseMap u u', c ++ c')
 
 
--- | The argument patterns of the first clause; by renaming, all clauses
---   have the same number of patterns (and instance patterns at the same
---   positions).
 firstPats :: [([LPat p], Clause p)] -> [LPat p]
 firstPats ((ps, _) : _) = ps
 firstPats _ = error "Cannot happen."
 
--- | Checks a clause of a definition against the aligned argument types and
---   the result type.
+-- | Checks a clause of a definition against the slots and the result type.
 checkTyPC ::
   SrcSpan
   -> [Slot]
@@ -1535,8 +1433,6 @@ checkTyPC ::
   -> ([LPat 'Renaming], Clause 'Renaming)
   -> TC (([LPat 'TypeCheck], Clause 'TypeCheck), UseMap)
 checkTyPC loc slots resTy (ps0, c) = atLoc loc $ do
-  -- inserted instance patterns bind the variables of the slots, shared by
-  -- all clauses of the definition
   (ps, muls, tys, locals) <- expandSlots slots ps0
 
   ((c', umap), ps', bind) <- checkPatsTyK ps muls (map Check tys) $ withLocalInsts locals $ do
@@ -1550,10 +1446,7 @@ checkTyPC loc slots resTy (ps0, c) = atLoc loc $ do
   atLocMaybe (locPS ps) $ constrainVars xqs umap
   return ((ps', c'), foldr (M.delete . fst) umap' xqs)
 
--- | The part of checking a definition with a signature that is done inside
---   its group: skolemization, alignment of the patterns and checking
---   of the clauses. Returns the skolems, the given constraints and the
---   wanted constraints, for 'finishSigDef' and the escape check.
+-- | Checks the clauses of a definition with a signature, leaving its constraints unsolved.
 checkSigDefBody ::
   SrcSpan
   -> PolyTy
@@ -1567,11 +1460,7 @@ checkSigDefBody loc polyTy pcs = do
 
   pure (pcs', umap, (skVars, given, cs))
 
--- | Checks a top-level definition with a signature on its own, without
---   binding its name: default methods and instance bodies, in which a
---   method name refers to the global method. As for a top-level definition
---   with a signature in 'inferMutual', the goals are solved right after the
---   body and the constraints must be solved here.
+-- | Checks a default method or an instance body against its type.
 checkSigDef ::
   SrcSpan
   -> Name
@@ -1584,15 +1473,7 @@ checkSigDef loc n polyTy pcs = atLoc loc $ do
   finishSigDef True n polyTy given cs
   pure pcs'
 
--- | The type against which the body of method @m@ in an instance is
---   checked. For the instance type
---   @forall as. cs0 => {{H1}} -> ... -> {{Hk}} -> C ts@ and the signature
---   @forall bs. cs => t@ of @m@ in @class C params@, it is
---   @forall as bs. cs0, cs[ts/params] => {{H1}} -> ... -> {{Hk}} -> t[ts/params]@.
---   Both types name their variables by 'Alpha' indices, so every variable
---   of the signature other than the parameters (the @bs@ and those bound
---   inside @t@) is first shifted above the indices of the instance type;
---   otherwise a variable of @ts@ could be captured by them.
+-- | The type of a method body in an instance.
 instMethodType :: Ty -> [TyVar] -> Ty -> Maybe PolyTy
 instMethodType instTy params sigTy =
   case splitInstArrows instBody of
@@ -1602,7 +1483,7 @@ instMethodType instTy params sigTy =
             TyForAll
               (as ++ bs)
               (TyQual (cs0 ++ map (substTyC tbl) cs) (foldr InstFunTy (substTy tbl t) hs))
-    _ -> Nothing -- not of the form C ts: rejected by renaming
+    _ -> Nothing
   where
     (as, cs0, instBody) = splitPoly instTy
     (bs, cs, t) = splitPoly (mapBoundTv shift sigTy)
@@ -1614,7 +1495,6 @@ instMethodType instTy params sigTy =
     shift v@(BoundTv (Alpha i nb)) | v `notElem` params = BoundTv (Alpha (i + offset) nb)
     shift v = v
 
--- | Splits @{{H1}} -> ... -> {{Hk}} -> t@ into @[H1, ..., Hk]@ and @t@.
 splitInstArrows :: Ty -> ([Ty], Ty)
 splitInstArrows (InstFunTy h t) = first (h :) (splitInstArrows t)
 splitInstArrows t = ([], t)
@@ -1647,9 +1527,7 @@ alphaIndices = go
     tv (BoundTv (Alpha i _)) = [i]
     tv _ = []
 
--- | The part of checking a definition with a signature that is done after
---   its group: the wanted constraints are solved under the given
---   ones (at the top level they must be solved here).
+-- | Solves the constraints of a definition with a signature under the given ones.
 finishSigDef :: Bool -> Name -> PolyTy -> [TyConstraint] -> [InferredConstraint] -> TC ()
 finishSigDef isTopLevel n polyTy given cs = do
   do

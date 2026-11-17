@@ -1,8 +1,6 @@
 -- It is intentional that this program causes an error.
--- Type variables in an expression annotation `(e : T)` are not quantified
--- implicitly (unlike those in a signature), so `a` is an unbound type
--- variable. Writing `forall a. {{Eq a}} -> a -> Bool` makes it work
--- (Examples/ClassInstPatAnnotated.sparcl).
+-- Type variables in an expression annotation are not quantified implicitly,
+-- so `a` is unbound (`forall a.` is needed).
 
 data Nat = Z | S Nat
 

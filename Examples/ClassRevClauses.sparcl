@@ -1,9 +1,5 @@
--- Clauses with invertible patterns and an inserted instance argument.
---
--- `incAll` has no written instance pattern, so the type checker inserts one
--- in each clause. The inserted patterns bind the same variable in all the
--- clauses, so the clauses, whose other patterns are invertible, are still
--- desugared into one invertible case.
+-- Several clauses with invertible patterns in a function with an implicit
+-- (unwritten) instance argument.
 
 data Nat = Z | S Nat
 data List a = Nil | Cons a (List a)
@@ -31,7 +27,7 @@ def t1 = fwd incAll (Cons Z (Cons (S Z) Nil))
 def t2 = bwd incAll (Cons (S Z) (Cons (S (S Z)) Nil))
 def t3 = fwd incAll (Nil : List Nat)
 
--- Expected values (compared with t1 .. t3 by test/Spec.hs)
+-- Expected values
 
 def t1' = Cons (S Z) (Cons (S (S Z)) Nil)
 def t2' = Cons Z (Cons (S Z) Nil)

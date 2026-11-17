@@ -1,7 +1,6 @@
 -- It is intentional that this program causes an error.
--- An explicitly passed instance `{{e}}` can be written only as an argument
--- of an application (`f {{e}}`); here it is the whole body of a definition,
--- which is a parse error with a dedicated message.
+-- `{{e}}` can be written only as an argument of an application (`f {{e}}`),
+-- not as the body of a definition: a parse error.
 
 data Nat = Z | S Nat
 

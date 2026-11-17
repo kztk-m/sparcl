@@ -1,16 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Instance search and the solving of instance goals (see
---   notes/TypeClasses.md).
---
---   A goal @C ts@ is searched among
---
---   * local instances (variables bound by @{{x}}@ or by inserted
---     abstractions) and their superclasses, by projections;
---   * global instances (instance declarations).
---
---   The metas of a goal are never instantiated by search: a goal that
---   cannot be decided because of its metas is "stuck" and is postponed.
+-- | Instance search and the solving of instance goals (see notes/TypeClasses.md).
 module Language.Sparcl.Typing.Instance (
   SearchResult (..),
   searchGoal,
@@ -37,16 +27,13 @@ import Language.Sparcl.Surface.Syntax (Arg (..), Exp (..), LExp)
 import Language.Sparcl.Typing.TCMonad
 import Language.Sparcl.Typing.Type
 
--- | The depth limit of instance search, shared by the recursion on
---   subgoals of global instances and the projection steps to superclasses
---   of local instances.
 maxSearchDepth :: Int
 maxSearchDepth = 32
 
 data SearchResult
-  = -- | the dictionary, and goals postponed for its subgoals
+  = -- | the dictionary and the postponed subgoals
     SFound !(LExp 'TypeCheck) ![Goal]
-  | -- | cannot be decided because of metas; to be postponed
+  | -- | undecided because of metas
     SStuck
   | SNoInstance !Ty
   | SAmbiguous !Ty ![Name]
@@ -68,11 +55,7 @@ data V = VB TyVar | VM MetaTyVar
 
 type Sub = [(V, Ty)]
 
--- | Unification in which the given (bound) type variables of a candidate
---   and, when @metasFlexible@, the meta variables of the goal may be
---   instantiated; skolems and other variables are rigid. Nothing is
---   written to meta variables. With @metasFlexible = False@ it is one-way
---   matching (the candidate's variables are disjoint from the goal's).
+-- | Unification over the given variables (and metas if @metasFlexible@) that writes no metas.
 unifyPure :: [TyVar] -> Bool -> Ty -> Ty -> Maybe Sub
 unifyPure vs metasFlexible = go []
   where
@@ -112,7 +95,6 @@ unifyPure vs metasFlexible = go []
               TyCon _ ts -> any (occurs s v) ts
               _ -> False
 
--- | Applies a substitution for the candidate's variables.
 applySub :: Sub -> Ty -> Ty
 applySub s = substTy [(v, resolve t) | (VB v, t) <- s]
   where
@@ -125,12 +107,7 @@ hasMetas = not . null . metaTyVars
 
 -- * Candidates
 
--- | The local instances and their superclasses, in the order used to
---   choose among several: direct ones before
---   projections, and within each, the innermost first. Projections are
---   followed up to the given number of steps; the flag tells whether the
---   enumeration was cut by it. Candidates of the same type as an earlier
---   one are dropped (so cyclic superclasses end).
+-- | The local instances and their superclasses, in order of preference.
 localCandidates :: Int -> [(Name, Ty)] -> TC ([(Ty, LExp 'TypeCheck)], Bool)
 localCandidates budget locals = do
   direct <- forM locals $ \(d, c) -> do
@@ -174,7 +151,6 @@ splitInstTy t = ([], [], t)
 
 -- * Search
 
--- | Searches a goal: local instances first, then global ones.
 searchGoal :: Goal -> TC SearchResult
 searchGoal g = normTy (goalTy g) >>= searchTy g 0
 
@@ -182,8 +158,6 @@ searchTy :: Goal -> Int -> Ty -> TC SearchResult
 searchTy _ depth ty
   | depth > maxSearchDepth = pure (STooDeep ty)
 searchTy g depth ty@(TyCon c _) = do
-  -- local instances: the first one matching the goal is taken; if none
-  -- matches but one could after its metas are fixed, the goal is stuck
   (locals, cut) <- localCandidates (maxSearchDepth - depth) (goalLocals g)
   let matching = [e | (lt, e) <- locals, isJust (unifyPure [] False lt ty)]
       unifiable = [() | (lt, _) <- locals, isJust (unifyPure [] True lt ty)]
@@ -193,8 +167,6 @@ searchTy g depth ty@(TyCon c _) = do
       | not (null unifiable) -> pure SStuck
       | otherwise -> globals cut
   where
-    -- global instances: exactly one must unify with the goal, and it must
-    -- match without instantiating the goal's metas
     globals cut = do
       ienv <- asks tcInstEnv
       cands <- forM (maybe [] M.toList (M.lookup c ienv)) $ \(x, ity) -> do
@@ -204,14 +176,12 @@ searchTy g depth ty@(TyCon c _) = do
       case us of
         [] -> pure (if cut then STooDeep ty else SNoInstance ty)
         [(x, ity, (vs, hs, hd))] -> case unifyPure vs False hd ty of
-          Nothing -> pure SStuck -- would instantiate metas of the goal
+          Nothing -> pure SStuck
           Just s -> commit x ity (map (applySub s) hs)
         _
           | hasMetas ty -> pure SStuck
           | otherwise -> pure (SAmbiguous ty [x | (x, _, _) <- us])
 
-    -- Subgoals are solved on the spot; stuck ones are postponed as new
-    -- goals in the same scope.
     commit x ity hs = do
       rs <- forM hs $ \h -> do
         h' <- normTy h
@@ -233,8 +203,7 @@ searchTy _ _ _ = pure SStuck
 
 -- * Goals
 
--- | Makes a goal in the current scope, without adding it to the list of
---   goals (used for the superclass check of instances).
+-- | Makes a goal without adding it to the list of goals.
 makeGoal :: [(Name, Ty)] -> Ty -> TC Goal
 makeGoal locals c = do
   g <- newGenName
@@ -260,23 +229,16 @@ makeGoalLike g c = do
   ref <- liftIO $ newIORef Nothing
   pure g{goalId = n, goalRef = ref, goalTy = c}
 
--- | The hole standing for a goal's dictionary.
 goalHole :: Goal -> LExp 'TypeCheck
 goalHole g = Loc (fromMaybe NoLoc (goalLoc g)) (InstHole () (goalId g, goalTy g) (goalRef g))
 
 -- | What to do with goals that cannot be decided.
 data Unsolved
-  = -- | in a local group: put back into the outer list (outer uses may fix
-    --   the metas)
+  = -- | put back into the outer list of goals
     PostponeOutward
-  | -- | at the top level (the flag: the definition has a signature): an
-    --   error, "write a signature" if the metas would be generalized in a
-    --   definition without a signature, "ambiguous" otherwise
+  | -- | report as errors (the flag: the definition has a signature)
     ReportAtTopLevel Bool
 
--- | Solves goals: a found dictionary is written to the goal's hole; stuck
---   goals (and stuck subgoals) are handled by the policy; errors are
---   reported where the goals were made.
 solveGoals :: Unsolved -> [Goal] -> TC ()
 solveGoals policy = mapM_ solveOne
   where
@@ -288,10 +250,6 @@ solveGoals policy = mapM_ solveOne
           mapM_ unsolved gs
         SStuck -> unsolved g
         SNoInstance ty -> do
-          -- In a top-level definition without a signature, a goal whose
-          -- metas would be generalized is reported as "write a signature"
-          -- even if no instance matches (with a signature, a local instance
-          -- would solve it).
           gen <- wouldBeGeneralized ty
           atGoal g $
             reportError $
@@ -312,15 +270,11 @@ solveGoals policy = mapM_ solveOne
               then CannotInferInstArg ty
               else AmbiguousGoal ty
 
-    -- whether the type has metas of an inner level (generalized at the top
-    -- level)
     wouldBeGeneralized ty = do
       lv <- askCurrentTcLevel
       lvs <- mapM readTcLevelMv (nub (metaTyVars ty))
       pure (any (> lv) lvs)
 
--- | Reports the goals left in the list after the top level (none should
---   remain) as ambiguous.
 reportLeftoverGoals :: TC ()
 reportLeftoverGoals = do
   ref <- asks tcGoals

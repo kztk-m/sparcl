@@ -128,8 +128,6 @@ renameExp level localnames (Loc loc expr) = first (Loc loc) <$> go expr
 
     go (Lit l) = return (Lit l, S.empty)
 
-    -- An argument is an ordinary one or an explicitly passed instance {{e}};
-    -- the latter can appear only here by the definition of the AST.
     go (App e1 a2) = do
       (e1', fv1) <- renameExp level localnames e1
       (e2', fv2) <- renameExp level localnames (argExp a2)
@@ -364,8 +362,6 @@ renameLocalDeclsWork level' localnames currnames (Decls _ decls) cont = do
 
         graph = [ (decl, n, S.toList fv) | (decl@(Loc _ (DDef n _)), fv) <- deffvs ]
 
--- | Renames the clauses of a function definition (used for local, top-level,
---   default method and instance method definitions).
 renameDefClauses :: DBLevel -> LocalNames -> SrcSpan -> NameBase -> [([LPat 'Parsing], Clause 'Parsing)]
                     -> Renaming ([([LPat 'Renaming], Clause 'Renaming)], FreeVars)
 renameDefClauses level localnames loc n pcs = do
@@ -398,8 +394,7 @@ renameDefClauses level localnames loc n pcs = do
     isInstPat _                 = False
 
 
--- | Checks an argument pattern of a function (in @def@ or @\\@), which may
---   be an instance pattern @{{x}}@ or @{{_}}@ at the top.
+-- | Checks an argument pattern, which may be an instance pattern @{{x}}@ or @{{_}}@.
 checkInstPatArg :: LPat 'Parsing -> Renaming ()
 checkInstPatArg (Loc loc (PInst p)) =
   case unLoc p of
@@ -408,7 +403,6 @@ checkInstPatArg (Loc loc (PInst p)) =
     _       -> throwError (loc, text "An instance pattern {{...}} can only bind a variable or _.")
 checkInstPatArg p = checkNoInstPat p
 
--- | Checks that a pattern contains no instance pattern @{{p}}@.
 checkNoInstPat :: LPat 'Parsing -> Renaming ()
 checkNoInstPat (Loc loc pat) =
   case pat of
@@ -466,7 +460,6 @@ renameTopDecls currentModule (Decls _ topdecls) = do
 
   let classDecls = [ (loc, unBare c, map unBare xs, sups, declList cds) |
                      Loc loc (DClass c xs sups cds) <- topdecls ]
-  -- unnamed instances get generated names, numbered by their positions
   let instDecls = [ (loc, maybe (System (NInstance k)) unBare mx, ty, declList ids) |
                     (k, Loc loc (DInst mx ty ids)) <- zip [0..] [ d | d@(Loc _ DInst {}) <- topdecls ] ]
 
@@ -485,14 +478,13 @@ renameTopDecls currentModule (Decls _ topdecls) = do
               ++ map snd methods
               ++ [ n | (_, n, _, _) <- instDecls ]
   -- FIXME: check there is no overlaps in names.
-  -- For now, only methods and named instances are checked against the other
-  -- value-level names (top-level defs, methods and named instances).
+  -- For now, only methods and named instances are checked.
   let valueNames = [ (loc, n) | (loc, n, _) <- defs ] ++ methods ++ namedInsts
   forM_ (methods ++ namedInsts) $ \(loc, n) ->
     when (length (filter ((== n) . snd) valueNames) > 1) $
       throwError (loc, text "Duplicate definition of" <+> ppr n)
 
-  -- fixity declarations in class bodies (only for the methods of the class)
+  -- fixity declarations in class bodies
   classOpTable <- fmap (M.fromList . concat) $ forM classDecls $ \(_, c, _, _, cds) -> do
     let ms = [ unBare n | Loc _ (DSig n _) <- cds ]
     forM [ (l, unBare n, p, a) | Loc l (DFixity n p a) <- cds ] $ \(l, n, p, a) -> do
@@ -538,7 +530,6 @@ renameTopDecls currentModule (Decls _ topdecls) = do
       return $ Loc loc (toOrig n, tyns', cdecls')
 
     renameLocalDeclsWork level' M.empty currnames (Decls () decls) $ \ds' _ _ _boundVars _ opTable ->
-      -- class and instance bodies are renamed under the top-level fixities
       local (\rnEnv -> rnEnv { rnOpTable = M.union opTable (rnOpTable rnEnv) }) $ do
         classDecls' <- mapM renameClassDecl classDecls
         instDecls'  <- mapM renameInstDecl instDecls
@@ -560,7 +551,6 @@ renameTopDecls currentModule (Decls _ topdecls) = do
       let lv  = length xs
       let nm  = M.fromList $ zip xs xs'
 
-      -- superclasses and method signatures may refer to the class parameters
       sups' <- forM sups $ \s -> do
         s' <- renameTy lv nm s
         unless (isClassAppTy s') $
@@ -596,7 +586,6 @@ renameTopDecls currentModule (Decls _ topdecls) = do
           throwError (l, text "A fixity declaration is not allowed in an instance declaration.")
         _ -> return ()
 
-      -- whether each name is a method of the class is checked by the type checker
       let ims = [ (l, unBare m, pcs) | Loc l (DDef m pcs) <- ids ]
       ims' <- forM ims $ \(l, m, pcs) -> do
         when (length (filter (\(_, m', _) -> m' == m) ims) > 1) $
@@ -607,23 +596,18 @@ renameTopDecls currentModule (Decls _ topdecls) = do
 
       return $ Loc loc (toOrig n, ty', ims')
 
--- | Renamed class declaration: class name, parameters, superclasses,
---   method signatures and default method definitions.
+-- | Renamed class: name, parameters, superclasses, method sigs, default methods.
 type ClassDeclR = (Name, [Name], [LTy 'Renaming], [Loc (Name, LTy 'Renaming)], [LDecl 'Renaming])
 
--- | Renamed instance declaration: instance name (generated if omitted),
---   instance type and method definitions.
+-- | Renamed instance: name (generated if omitted), type, method definitions.
 type InstDeclR = (Name, LTy 'Renaming, [LDecl 'Renaming])
 
--- | Checks if a type has the form @C t1 ... tn@ (whether @C@ is a class is
---   checked by the type checker).
+-- | Checks if a type has the form @C t1 ... tn@.
 isClassAppTy :: LTy 'Renaming -> Bool
 isClassAppTy (Loc _ (TCon c _)) = c `notElem` [nameTyArr, nameTyInstArr]
 isClassAppTy _                  = False
 
--- | Checks that an instance type has the form
---   @forall a1 ... ak. {{T1}} -> ... -> {{Tm}} -> C t1 ... tn@
---   where every @ai@ occurs in the head @C t1 ... tn@.
+-- | Checks that an instance type has the form @forall as. {{T1}} -> ... -> {{Tm}} -> C ts@.
 checkInstTy :: LTy 'Renaming -> Renaming ()
 checkInstTy lty = do
   let (xs, ty)   = peelForall lty
