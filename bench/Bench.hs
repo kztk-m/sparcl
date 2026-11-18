@@ -65,16 +65,18 @@ checkType fp trials = runM $ do
 
   let nameError (l, d) = staticError (nest 2 (ppr l </> d))
 
-  (renamedDecls, tyDecls, synDecls, _newNames, _newOpTable) <-
+  (renamedDecls, tyDecls, synDecls, classDecls, instDecls, _newNames, _newOpTable) <-
     liftIO $ either nameError return $ runRenaming nameTable opTable $ renameTopDecls currentModule decls
 
   let tyEnv = mcTypeTable (miModuleContext baseModuleInfo)
   let conEnv = mcConTable (miModuleContext baseModuleInfo)
   let synEnv = mcSynTable (miModuleContext baseModuleInfo)
+  let classEnv = mcClassTable (miModuleContext baseModuleInfo)
+  let instEnv = mcInstTable (miModuleContext baseModuleInfo)
 
   let comp = do
-        (_typedDecls, nts, _dataDecls', _typeDecls', _newCTypeTable, _newSynTable) <-
-          runTCWith conEnv tyEnv synEnv $ inferTopDecls renamedDecls tyDecls synDecls
+        (_typedDecls, nts, _dataDecls', _typeDecls', _newCTypeTable, _newSynTable, _newClassTable, _newInstTable, _typedDefaults, _typedInsts) <-
+          runTCWith conEnv tyEnv synEnv classEnv instEnv $ inferTopDecls renamedDecls tyDecls synDecls classDecls instDecls
         liftIO $ evaluate nts
 
   _ <- comp
