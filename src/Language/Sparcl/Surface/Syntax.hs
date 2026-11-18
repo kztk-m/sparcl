@@ -1,4 +1,3 @@
-{-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeApplications #-}
@@ -142,7 +141,7 @@ instance (AllPretty p) => Pretty (Ty p) where
   pprPrec _ (TVar n) = ppr n
   pprPrec _ (TCon c) = ppr c
   pprPrec k (TApp (unLoc -> TApp (unLoc -> TCon c) k1) k2)
-    | isKindArrow @p c =
+    | isKindArrow (Proxy @p) c =
         parensIf (k > 0) $ pprPrec 1 k1 <+> text "->" <+> pprPrec 0 k2
   pprPrec k (TApp t1 t2) = parensIf (k > 1) $ pprPrec 1 t1 D.<+> pprPrec 2 t2
   pprPrec _ (TParens t) = parens (pprPrec 0 t)
@@ -187,11 +186,11 @@ class QueryName p where
   checkTuple :: XId p -> Maybe Int
   isRev :: XId p -> Bool
   isOpName :: XId p -> Bool
-  isKindArrow :: XTId p -> Bool
+  isKindArrow :: Proxy p -> XTId p -> Bool
 
 instance QueryName 'Parsing where
-  isKindArrow (BuiltIn n) = n == nameKiArr
-  isKindArrow _ = False
+  isKindArrow _ (BuiltIn n) = n == nameKiArr
+  isKindArrow _ _ = False
 
   checkTuple (BuiltIn n) = checkTuple n
   checkTuple _ = Nothing
@@ -204,7 +203,7 @@ instance QueryName 'Parsing where
   isOpName (BuiltIn n) = isOpName n
 
 instance QueryName 'Renaming where
-  isKindArrow n = n == nameKiArr
+  isKindArrow _ n = n == nameKiArr
 
   checkTuple (Original _ (System (NTuple n)) _) = Just n
   checkTuple _ = Nothing
@@ -218,7 +217,7 @@ instance QueryName 'Renaming where
   isOpName (Generated _ _) = False
 
 instance QueryName 'TypeCheck where
-  isKindArrow n = n == nameKiArr
+  isKindArrow _ n = n == nameKiArr
 
   checkTuple (n, _) = checkTuple n
 
