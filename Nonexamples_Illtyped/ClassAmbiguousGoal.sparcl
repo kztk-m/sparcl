@@ -1,0 +1,16 @@
+-- It is intentional that this program causes a type error.
+-- The type of `dflt` is never determined, so its instance is ambiguous
+-- (`dNat` is not chosen just because it is the only instance).
+
+data Nat = Z | S Nat
+
+class Default a where
+    sig dflt : a
+end
+
+instance dNat : Default Nat where
+    def dflt = Z
+end
+
+sig k : Bool -> Bool
+def k b = (\x -> b) dflt

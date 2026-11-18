@@ -1,0 +1,12 @@
+-- Kinds across modules (1/2, see Examples.KindModB): the export list omits
+-- the type T, which the types of the exported values mention.
+
+module Examples.KindModA (mk, isMk) where
+
+data T = MkT
+
+sig mk : T
+def mk = MkT
+
+sig isMk : T -> Bool
+def isMk MkT = True

@@ -1,0 +1,7 @@
+-- The parameter p of M is a multiplicity (it is the first argument of
+-- Many), so M Int is a kind error.
+
+data M p = MkM (Many p Int)
+
+sig x : M Int -> Int
+def x _ = 1

@@ -1,0 +1,24 @@
+-- The type of Nothing in size Nothing is never fixed to Maybe Int, so the
+-- Size instance is ambiguous (the instance for Size (f Int) is not chosen).
+
+data Maybe a = Nothing | Just a
+
+class Functor f where
+    sig fmap : (a -> b) -> f a -> f b
+end
+
+instance Functor Maybe where
+    def fmap _ Nothing  = Nothing
+           | g (Just x) = Just (g x)
+end
+
+class Size a where
+    sig size : a -> Int
+end
+
+instance {{Functor f}} -> Size (f Int) where
+    def size _ = 7
+end
+
+sig bad : Int
+def bad = size Nothing

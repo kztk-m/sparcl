@@ -1,0 +1,4 @@
+-- The parameter f is annotated with kind Type, but it is applied to an
+-- argument in the constructor field: the annotation and the use disagree.
+
+data T (f : Type) = MkT (f Int)

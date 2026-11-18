@@ -1,0 +1,4 @@
+-- Int has kind Type, so it cannot be applied to an argument.
+
+sig x : Int Bool
+def x = 1

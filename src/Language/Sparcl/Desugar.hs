@@ -1,4 +1,5 @@
 {-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE ViewPatterns #-}
 
 module Language.Sparcl.Desugar (
@@ -8,13 +9,16 @@ module Language.Sparcl.Desugar (
 ) where
 
 import Data.Function (on)
+import Data.IORef (readIORef)
 import Data.List (groupBy)
+import qualified Data.Map as M
 import Data.Void
 
 import Control.Monad
 import Control.Monad.Reader
 import Control.Monad.State
 
+import Language.Sparcl.Exception (cannotHappen)
 import Language.Sparcl.SrcLoc
 import qualified Language.Sparcl.Surface.Syntax as S
 
@@ -53,7 +57,10 @@ runDesugar m = runReaderT m 0
 
 numberOfArgs :: T.Ty -> Int
 numberOfArgs (T.TyForAll _ (T.TyQual _ t)) = numberOfArgs t
-numberOfArgs (T.TyCon n [_, _, t]) | n == nameTyArr = numberOfArgs t + 1
+numberOfArgs (T.TyFun _ _ t) = numberOfArgs t + 1
+-- TODO: no constructor takes instance arguments yet; counted for when
+-- constructors may take them.
+numberOfArgs (T.TyInstFun _ t) = numberOfArgs t + 1
 numberOfArgs _ = 0
 
 desugarExp :: S.LExp 'TypeCheck -> Desugar (C.Exp Name)
@@ -63,8 +70,13 @@ desugarExp (Loc _ expr) = go expr
 
     go (S.Var (x, _)) = return $ C.Var x
     go (S.Lit l) = return $ C.Lit l
-    go (S.App e1 e2) =
-      mkApp <$> desugarExp e1 <*> desugarExp e2
+    go (S.App e1 a2) =
+      mkApp <$> desugarExp e1 <*> desugarExp (S.argExp a2)
+    go (S.InstHole () _ ref) = do
+      sol <- liftIO $ readIORef ref
+      case sol of
+        Just e -> desugarExp e
+        Nothing -> cannotHappen $ text "desugarExp: an unfilled instance hole"
     go (S.Abs ps e) | Just xs <- checkAllVars ps = do
       e' <- desugarExp e
       pure $ foldr C.Abs e' xs
@@ -73,6 +85,7 @@ desugarExp (Loc _ expr) = go expr
         checkAllVars [] = pure []
         checkAllVars (x : xs) = liftA2 (:) (checkVar x) (checkAllVars xs)
         checkVar (unLoc -> S.PVar (n, _)) = pure n
+        checkVar (unLoc -> S.PInst p) = checkVar p
         checkVar _ = Nothing
     go (S.Abs ps e) = desugarRHS [(ps, S.Clause e (S.HDecls () []) Nothing)]
     go (S.Con (c, ty)) = do
@@ -112,12 +125,9 @@ desugarExp (Loc _ expr) = go expr
               )
               bs
           return $ C.Let bs' e'
-    go (S.Let1 p1 e1 e2) = go (S.App (noLoc (S.Abs [p1] e2)) e1)
+    go (S.Let1 p1 e1 e2) = go (S.App (noLoc (S.Abs [p1] e2)) (S.ExplicitArg e1))
     go (S.Parens e) = desugarExp e
-    go (S.Op (op, _ty) e1 e2) = do
-      e1' <- desugarExp e1
-      e2' <- desugarExp e2
-      return $ C.App (C.App (C.Var op) e1') e2'
+    go (S.Op v _ _ _) = absurd v
     go S.Unlift =
       withNewName $ \x ->
         return $ C.Abs x (C.Unlift (C.Var x))
@@ -135,7 +145,7 @@ desugarExp (Loc _ expr) = go expr
 desugarRDO :: [(S.LPat 'TypeCheck, Loc (S.Exp 'TypeCheck))] -> Loc (S.Exp 'TypeCheck) -> Loc (S.Exp 'TypeCheck)
 desugarRDO = go [] id
   where
-    app e1 e2 = noLoc (S.App e1 e2)
+    app e1 e2 = noLoc (S.App e1 (S.ExplicitArg e2))
     go _ _ [] er = er -- this branch is used only for the expressions of the form "revdo in e0"
     go ps kpin [(p, e)] er =
       let pinExp = kpin e
@@ -280,6 +290,7 @@ separatePat pat = go False (unLoc pat)
     go _ (S.PWild (x, _ty)) =
       -- (if b then CPVar x else CPBang (CPVar x), [])
       (CPVar x, [])
+    go b (S.PInst p) = go b (unLoc p)
     -- go _ (S.PBang p) =
     --   let (p', subs) = go True (unLoc p)
     --   in (CPBang p', subs)
@@ -374,10 +385,68 @@ desugarPat = go . unLoc
     go (S.PCon (c, _ty) ps) = C.PCon c <$> mapM desugarPat ps
     go _ = error "desugarPat: Cannot happen."
 
-desugarTopDecls :: S.Decls 'TypeCheck (S.LDecl 'TypeCheck) -> Desugar (C.Bind Name)
-desugarTopDecls (S.Decls v _) = absurd v
-desugarTopDecls (S.HDecls _ bss) = do
+desugarTopDecls ::
+  ClassTable -- classes declared in this module
+  -> ClassTable -- all classes in scope
+  -> [TypedDefault]
+  -> [TypedInstance]
+  -> S.Decls 'TypeCheck (S.LDecl 'TypeCheck)
+  -> Desugar (C.Bind Name)
+desugarTopDecls _ _ _ _ (S.Decls v _) = absurd v
+desugarTopDecls ownClasses allClasses defaults insts (S.HDecls _ bss) = do
   let defs = [(n, ty, pcs) | bs <- bss, Loc _ (S.DDef (n, ty) pcs) <- bs]
-  forM defs $ \(n, ty, pcs) -> do
+  defBinds <- forM defs $ \(n, ty, pcs) -> do
     e <- desugarRHS pcs
     return (n, ty, e)
+  classBinds <- concat <$> mapM (uncurry desugarClass) (M.toList ownClasses)
+  defaultBinds <- forM defaults $ \td -> do
+    e <- desugarRHS (tdClauses td)
+    return (defaultName (tdMethod td), tdType td, e)
+  instBinds <- mapM (desugarInstance allClasses) insts
+  return $ defBinds ++ classBinds ++ defaultBinds ++ instBinds
+
+-- | The methods and superclass projections of class @c@.
+desugarClass :: Name -> ClassInfo -> Desugar (C.Bind Name)
+desugarClass c ci = do
+  let m = length (ciSupers ci)
+      n = m + length (ciMethods ci)
+  methods <- forM (zip [m ..] (ciMethods ci)) $ \(j, (meth, sigTy)) -> do
+    e <- dictField c n j
+    return (meth, methodType c (ciParams ci) sigTy, e)
+  supers <- forM [0 .. m - 1] $ \i -> do
+    e <- dictField c n i
+    return (superProjName c i, superProjType c ci i, e)
+  return $ methods ++ supers
+
+-- | @\d -> case d of <dict C> x_0 ... x_(n-1) -> x_i@
+dictField :: Name -> Int -> Int -> Desugar (C.Exp Name)
+dictField c n i = withNewNames (n + 1) $ \case
+  d : xs -> return $ C.Abs d (C.Case (C.Var d) [(C.PCon (dictName c) (map C.PVar xs), C.Var (xs !! i))])
+  [] -> cannotHappen $ text "dictField: no names"
+
+-- | The value of an instance declaration.
+desugarInstance :: ClassTable -> TypedInstance -> Desugar (Name, T.Ty, C.Exp Name)
+desugarInstance cenv ti = do
+  let c = tiClass ti
+  ci <- maybe (cannotHappen $ text "desugarInstance: unknown class" <+> ppr c) return (M.lookup c cenv)
+  let ds = map fst (tiLocals ti)
+  unless (length (tiSupers ti) == length (ciSupers ci)) $
+    cannotHappen $
+      text "desugarInstance: superclass dictionaries of" <+> ppr (tiName ti)
+  e <- withNewName $ \self -> do
+    sups <- mapM desugarExp (tiSupers ti)
+    impls <- forM (ciMethods ci) $ \(meth, _) ->
+      case [pcs | (meth', _, pcs) <- tiMethods ti, meth' == meth] of
+        pcs : _ -> do
+          body <- desugarRHS pcs
+          return $ foldl C.App body (map C.Var ds)
+        []
+          | meth `elem` tiDefaulted ti -> return $ C.App (C.Var (defaultName meth)) (C.Var self)
+          | otherwise -> cannotHappen $ text "desugarInstance: no implementation of" <+> ppr meth
+    let dict = C.Con (dictName c) (sups ++ impls)
+    return $ C.Let [(self, headTy (tiType ti), dict)] (C.Var self)
+  return (tiName ti, tiType ti, foldr C.Abs e ds)
+  where
+    headTy (T.TyForAll _ (T.TyQual _ t)) = headTy t
+    headTy (T.TyInstFun _ t) = headTy t
+    headTy t = t

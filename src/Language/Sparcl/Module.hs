@@ -60,6 +60,8 @@ data ModuleContext v = ModuleContext
   , mcConTable :: !CTypeTable
   , mcSynTable :: !SynTable
   , mcValueTable :: !(M.Map Name v)
+  , mcClassTable :: !ClassTable
+  , mcInstTable :: !InstTable
   }
 
 instance Semigroup (ModuleContext v) where
@@ -71,10 +73,12 @@ instance Semigroup (ModuleContext v) where
       , mcConTable = M.union (mcConTable m1) (mcConTable m2)
       , mcSynTable = M.union (mcSynTable m1) (mcSynTable m2)
       , mcValueTable = M.union (mcValueTable m1) (mcValueTable m2)
+      , mcClassTable = M.union (mcClassTable m1) (mcClassTable m2)
+      , mcInstTable = mergeInstTable (mcInstTable m1) (mcInstTable m2)
       }
 
 emptyModuleContext :: ModuleContext v
-emptyModuleContext = ModuleContext{mcNameTable = M.empty, mcOpTable = M.empty, mcTypeTable = M.empty, mcConTable = M.empty, mcSynTable = M.empty, mcValueTable = M.empty}
+emptyModuleContext = ModuleContext{mcNameTable = M.empty, mcOpTable = M.empty, mcTypeTable = M.empty, mcConTable = M.empty, mcSynTable = M.empty, mcValueTable = M.empty, mcClassTable = M.empty, mcInstTable = M.empty}
 
 instance Monoid (ModuleContext v) where
   mempty = emptyModuleContext
@@ -129,6 +133,8 @@ baseModuleInfo =
           , mcTypeTable = typeTable
           , mcSynTable = synTable
           , mcValueTable = valueTable
+          , mcClassTable = M.empty
+          , mcInstTable = M.empty
           }
     }
   where
@@ -155,10 +161,11 @@ baseModuleInfo =
         [ conTrue |-> ConTy [] [] [] [] boolTy
         , conFalse |-> ConTy [] [] [] [] boolTy
         , base "U"
-            |-> let a = BoundTv (Local $ User "a")
+            |-> let a = BoundTv (Local $ User "a") typeKi
                 in  ConTy [a] [] [] [(TyVar a, omega)] (TyCon (base "Un") [TyVar a])
         , base "MkMany"
-            |-> let [a, p] = map (BoundTv . Local . User) ["a", "p"]
+            |-> let p = BoundTv (Local $ User "p") multKi
+                    a = BoundTv (Local $ User "a") typeKi
                 in  ConTy [p, a] [] [] [(TyVar a, TyVar p)] (TyCon (base "Many") [TyVar p, TyVar a])
         ]
 
@@ -188,6 +195,8 @@ baseModuleInfo =
         , nameTyChar |-> typeKi
         , nameTyRational |-> typeKi
         , base "Un" |-> typeKi `arrKi` typeKi
+        , base "Many" |-> multKi `arrKi` (typeKi `arrKi` typeKi)
+        , nameTyRev |-> typeKi `arrKi` typeKi
         ]
 
     synTable = M.empty
@@ -270,10 +279,12 @@ restrictNames ns mi =
         ModuleContext
           { mcNameTable = M.mapMaybe conv (mcNameTable mc)
           , mcOpTable = restrict (mcOpTable mc)
-          , mcTypeTable = restrict (mcTypeTable mc)
+          , mcTypeTable = M.restrictKeys (mcTypeTable mc) (S.union ns' reachableTyNames)
           , mcConTable = restrict (mcConTable mc)
           , mcSynTable = restrict (mcSynTable mc)
-          , mcValueTable = restrict (mcValueTable mc)
+          , mcValueTable = M.filterWithKey (\n _ -> S.member n ns' || isImplicitValueName (mcInstTable mc) n) (mcValueTable mc)
+          , mcClassTable = mcClassTable mc
+          , mcInstTable = mcInstTable mc
           }
     }
   where
@@ -282,6 +293,21 @@ restrictNames ns mi =
 
     restrict :: M.Map Name a -> M.Map Name a
     restrict x = M.restrictKeys x ns'
+
+    reachableTyNames = closeSyns (S.unions (map tyConNames roots)) S.empty
+      where
+        roots =
+          M.elems (restrict (mcTypeTable mc))
+            ++ map conTy2Ty (M.elems (restrict (mcConTable mc)))
+            ++ map snd (M.elems (restrict (mcSynTable mc)))
+            ++ concat [ciSupers ci ++ map snd (ciMethods ci) | ci <- M.elems (mcClassTable mc)]
+            ++ concatMap M.elems (M.elems (mcInstTable mc))
+    closeSyns todo done
+      | S.null todo = done
+      | otherwise =
+          let done' = S.union done todo
+              new = S.unions [tyConNames body | n <- S.toList todo, Just (_, body) <- [M.lookup n (mcSynTable mc)]]
+          in  closeSyns (new `S.difference` done') done'
 
     mnsI = S.fromList [(mn, n) | Original mn n _ <- ns]
 
@@ -292,6 +318,11 @@ restrictNames ns mi =
               Nothing
             else
               Just res
+
+-- | Values referred to by generated code: instances, superclass projections and default methods.
+isImplicitValueName :: InstTable -> Name -> Bool
+isImplicitValueName insts n =
+  isSuperProjName n || isDefaultName n || any (M.member n) (M.elems insts)
 
 searchModule :: ModuleName -> Loader v FilePath
 searchModule mo = do
@@ -368,6 +399,8 @@ exportNames ns m = do
               , mcConTable = conTbl
               , mcSynTable = synTbl
               , mcValueTable = valTbl
+              , mcClassTable = mcClassTable (miModuleContext m)
+              , mcInstTable = mcInstTable (miModuleContext m)
               }
         }
 
@@ -404,6 +437,8 @@ readExp str = do
   typeTable <- asks (mcTypeTable . lcModuleContext)
   conTable <- asks (mcConTable . lcModuleContext)
   synTable <- asks (mcSynTable . lcModuleContext)
+  classTable <- asks (mcClassTable . lcModuleContext)
+  instTable <- asks (mcInstTable . lcModuleContext)
 
   debugPrint 1 $ text "Type checking expression..."
   debugPrint 3 $
@@ -418,7 +453,7 @@ readExp str = do
   -- liftIO $ setEnvs tinfo typeTable synTable
   (typedExp, ty) <- do
     tc <- askTC
-    liftIO $ execTCWith tc conTable typeTable synTable $ inferExp renamedExp
+    liftIO $ execTCWith tc conTable typeTable synTable classTable instTable $ inferExp renamedExp
   debugPrint 1 $ text "Type checking Ok."
   ty' <- liftIO $ evaluate ty
 
@@ -477,7 +512,7 @@ interpDecls mCurrentModuleName decls interp = do
   -- (decls', newDefinedNames, newOpTable, newDataTable, newSynTable) <-
   --        liftIO $ runDesugar mod definedNames opTable (desugarTopDecls decls)
 
-  (renamedDecls, tyDecls, synDecls, newNames, newOpTable) <-
+  (renamedDecls, tyDecls, synDecls, classDecls, instDecls, newNames, newOpTable) <-
     liftIO $ either nameError return $ runRenaming nameTable opTable $ renameTopDecls currentModule decls
 
   -- debugPrint $ "Desugaring Ok."
@@ -492,19 +527,26 @@ interpDecls mCurrentModuleName decls interp = do
   tyEnv <- asks (mcTypeTable . lcModuleContext)
   conEnv <- asks (mcConTable . lcModuleContext)
   synEnv <- asks (mcSynTable . lcModuleContext)
+  classEnv <- asks (mcClassTable . lcModuleContext)
+  instEnv <- asks (mcInstTable . lcModuleContext)
 
   debugPrint 1 $ text "Type checking ..."
   debugPrint 2 $ text "under ty env" </> pprMap tyEnv
 
-  (typedDecls, nts, _dataDecls', _typeDecls', newCTypeTable, newSynTable) <- do
+  (typedDecls, nts, _dataDecls', _typeDecls', newCTypeTable, newSynTable, newClassTable, newInstTable, typedDefaults, typedInsts) <- do
     tc <- askTC
-    liftIO $ execTCWith tc conEnv tyEnv synEnv $ inferTopDecls renamedDecls tyDecls synDecls
+    liftIO $
+      execTCWith tc conEnv tyEnv synEnv classEnv instEnv $
+        inferTopDecls renamedDecls tyDecls synDecls classDecls instDecls
 
   debugPrint 1 $ text "Type checking Ok."
   debugPrint 1 $ text "Desugaring ..."
   bind <- do
     tc <- askTC
-    liftIO $ execTC tc $ runDesugar $ desugarTopDecls typedDecls
+    liftIO $
+      execTC tc $
+        runDesugar $
+          desugarTopDecls newClassTable (M.union newClassTable classEnv) typedDefaults typedInsts typedDecls
 
   debugPrint 1 $ text "Desugaring Ok."
   debugPrint 2 $ text "Desugared:" <> line <> align (vcat (map (\(x, _, e) -> ppr (x, e)) bind))
@@ -539,7 +581,9 @@ interpDecls mCurrentModuleName decls interp = do
                 , mcSynTable = newSynTable
                 , mcTypeTable = M.fromList nts
                 , mcConTable = newCTypeTable
-                , mcValueTable = M.fromList newValueEnv
+                , mcValueTable = M.union (M.fromList newValueEnv) (M.filterWithKey (\n _ -> isImplicitValueName instEnv n) valEnv)
+                , mcClassTable = M.union newClassTable classEnv
+                , mcInstTable = mergeInstTable newInstTable instEnv
                 }
           }
   pure newMod

@@ -1,0 +1,14 @@
+-- It is intentional that this program causes a type error.
+-- A default method must work for every `a`, but this one uses `Nat`.
+
+data Nat = Z | S Nat
+
+sig not : Bool -> Bool
+def not True  = False
+    | False = True
+
+class Eq a where
+    sig eq : a -> a -> Bool
+    sig neq : a -> a -> Bool
+    def neq x y = not (eq x Z)
+end

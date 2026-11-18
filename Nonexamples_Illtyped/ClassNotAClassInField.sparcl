@@ -1,0 +1,5 @@
+-- It is intentional that this program causes a type error.
+-- Only an application of a class may appear inside {{ }}, also in the
+-- field types of data constructors.
+
+data U = MkU ({{Int}} -> Int)

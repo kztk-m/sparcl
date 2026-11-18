@@ -1,0 +1,45 @@
+-- Cyclic superclasses (A extends B, B extends A): accepted, and the
+-- cyclic dictionaries load and print.
+
+data Nat = Z | S Nat
+
+class A a extends B a where
+    sig fa : a -> Nat
+end
+
+class B a extends A a where
+    sig fb : a -> Nat
+end
+
+instance aNat : A Nat where
+    def fa x = S x
+end
+
+-- `fa` here uses the global instance `aNat`
+instance bNat : B Nat where
+    def fb x = fa (S x)
+end
+
+-- `fa` from the local instance `B a`, through its superclass `A a`
+sig viaB : {{B a}} -> a -> Nat
+def viaB x = fa x
+
+-- `fb` from the local instance `A a`, through its superclass `B a`
+sig viaA : {{A a}} -> a -> Nat
+def viaA x = fb x
+
+def t1 = viaB Z
+def t2 = viaA Z
+def t3 = fb Z
+def t4 = viaB {{bNat}} (S Z)
+
+-- the cyclic dictionaries themselves
+def dA = aNat
+def dB = bNat
+
+-- Expected values
+
+def t1' = S Z
+def t2' = S (S Z)
+def t3' = S (S Z)
+def t4' = S (S Z)

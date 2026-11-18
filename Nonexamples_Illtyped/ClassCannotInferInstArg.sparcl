@@ -1,0 +1,9 @@
+-- It is intentional that this program causes a type error.
+-- Instance arguments of a definition without a signature are not inferred;
+-- `g` needs a signature.
+
+class Eq a where
+    sig eq : a -> a -> Bool
+end
+
+def g x y = eq x y

@@ -1,0 +1,5 @@
+-- A kind annotation (t : k) on a type-level expression is checked: Int has
+-- kind Type, not Multiplicity.
+
+sig f : (Int : Multiplicity) -> Int
+def f x = x

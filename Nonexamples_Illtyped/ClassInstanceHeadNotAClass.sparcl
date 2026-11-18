@@ -1,0 +1,7 @@
+-- It is intentional that this program causes a type error.
+-- The head of an instance must be an application of a class.
+
+data List a = Nil | Cons a (List a)
+
+instance listInt : List Int where
+end

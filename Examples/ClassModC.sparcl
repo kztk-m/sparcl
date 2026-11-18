@@ -1,0 +1,18 @@
+-- Classes and instances across modules (3/3): only ClassModB is imported,
+-- and the instances of ClassModA are still found.
+
+module Examples.ClassModC where
+
+import Examples.ClassModB
+
+def t1 = neqViaOrd (S Z) (S Z)
+def t2 = neqViaOrd Z (S Z)
+def t3 = leqAndNeq Z (S Z)
+def t4 = leqAndNeq (S Z) Z
+
+-- Expected values
+
+def t1' = False
+def t2' = True
+def t3' = True
+def t4' = False

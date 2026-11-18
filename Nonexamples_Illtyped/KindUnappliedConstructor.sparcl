@@ -1,0 +1,6 @@
+-- Maybe has kind Type -> Type; a signature needs a type, of kind Type.
+
+data Maybe a = Nothing | Just a
+
+sig x : Maybe
+def x = Nothing

@@ -1,0 +1,7 @@
+-- Kind inference of a parameter: p is the first argument of Many, so it is
+-- a multiplicity (M : Multiplicity -> Type).
+
+data M p = MkM (Many p Int)
+
+sig unM : M p -> Many p Int
+def unM (MkM m) = m

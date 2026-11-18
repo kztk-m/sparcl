@@ -94,7 +94,11 @@ simplePat =
       <|> (unLoc <$> tuplePat)
       -- No wTuplePat, as it doesn't work well with the current inference.
       <|> wildPat
+      <|> instPat
   where
+    instPat =
+      PInst <$> instBraces pat
+
     conPat = do
       c <- L.lexeme sp qconName
       return $ PCon c []
@@ -137,9 +141,13 @@ appPat =
     <|> simplePat
 
 introForAll :: LTy 'Parsing -> LTy 'Parsing
-introForAll ty =
-  let freeVars = freeTyVars ty
-  in  foldr (\x -> Loc (location ty) . TForall x) ty freeVars
+introForAll = introForAllExcept []
+
+-- | Same as 'introForAll', but leaves the given type variables free.
+introForAllExcept :: [SurfaceName] -> LTy 'Parsing -> LTy 'Parsing
+introForAllExcept xs ty =
+  let freeVars = filter (`notElem` xs) $ freeTyVars ty
+  in  foldr (\x -> Loc (location ty) . TForall (TyBinder x Nothing)) ty freeVars
 
 -- where
 --   list _ []     = id
@@ -160,14 +168,43 @@ introForAll ty =
 
 typeExpr :: (Monad m) => P m (LTy 'Parsing)
 typeExpr = do
-  ef <- P.optional (symForAll *> P.many (varName <* sp) <* symbol ".")
+  ef <- P.optional forallBinders
   mid <- getSrcLoc
   ctxt <- P.optional $ P.try (constraint <* dRightArrow)
   ty <- arrTy
-  return $ maybe id foralls ef $ maybe id (\cs -> Loc (mid <> location ty) . TQual cs) ctxt ty
+  return $ maybe id mkForalls ef $ maybe id (\cs -> Loc (mid <> location ty) . TQual cs) ctxt ty
+
+-- | @forall b1 ... bn .@
+forallBinders :: (Monad m) => P m [TyBinder 'Parsing]
+forallBinders = symForAll *> P.many tyBinder <* symbol "."
+
+mkForalls :: [TyBinder 'Parsing] -> LTy 'Parsing -> LTy 'Parsing
+mkForalls bs r = foldr (\b -> Loc (location r) . TForall b) r bs
+
+-- | @x@ or @(x : k)@.
+tyBinder :: (Monad m) => P m (TyBinder 'Parsing)
+tyBinder =
+  (\x -> TyBinder x Nothing) <$> L.lexeme sp varName
+    <|> parens (TyBinder <$> L.lexeme sp varName <* symbol ":" <*> (Just <$> kindExpr))
+
+-- | @Type@, @Multiplicity@, or @k1 -> k2@.
+kindExpr :: (Monad m) => P m (LTy 'Parsing)
+kindExpr = do
+  k1 <- kindAtom
+  m <- P.optional (rightArrow *> kindExpr)
+  return $ maybe k1 (\k2 -> mkTApps (Loc (location k1 <> location k2) (TCon (BuiltIn nameKiArr))) [k1, k2]) m
   where
-    foralls [] r = r
-    foralls (x : xs) r = Loc (location r) $ TForall x (foralls xs r)
+    kindAtom =
+      kindName "Type" nameKindType
+        <|> kindName "Multiplicity" nameKindMultiplicity
+        <|> parens kindExpr
+
+    kindName s n = do
+      start <- getSrcLoc
+      void $ P.try (P.string s <* P.notFollowedBy P.alphaNumChar)
+      end <- getSrcLoc
+      sp
+      return $ Loc (start <> end) $ TCon (BuiltIn n)
 
 constraint :: (Monad m) => P m [TConstraint 'Parsing]
 constraint =
@@ -212,13 +249,23 @@ singleConstraint = do
     symbolMult = symbol "*" <|> symbol "↑"
 
 arrTy :: (Monad m) => P m (LTy 'Parsing)
-arrTy =
-  -- Essentially, this implements foldr by foldl.
-  (\t fs -> foldl (.) (\c -> c t) fs id)
-    <$> appTy
-    <*> P.many ((\f x c z -> f z (c x)) <$> arr <*> appTy)
+arrTy = instArrTy <|> normalArrTy
   where
-    mkArr m e1 e2 = Loc (location e1 <> location e2) $ TCon (BuiltIn nameTyArr) [m, e1, e2]
+    -- {{C}} -> t
+    instArrTy = do
+      c <- instBraces typeExpr
+      void rightArrow
+      t <- arrTy
+      return $ Loc (location c <> location t) $ TInstArr c t
+
+    normalArrTy = do
+      t1 <- appTy
+      m <- P.optional arr
+      case m of
+        Nothing -> return t1
+        Just mk -> mk t1 <$> arrTy
+
+    mkArr m e1 e2 = Loc (location e1 <> location e2) $ TArr m e1 e2
     arr =
       ( do
           void rightArrow
@@ -236,30 +283,21 @@ arrTy =
             )
 
 appTy :: (Monad m) => P m (LTy 'Parsing)
-appTy =
-  P.try conTy <|> revTy <|> simpleTy
-  where
-    conTy = do
-      Loc l c <- loc qconName
-      sp
-      ts <- P.some simpleTy
-      return $ Loc (l <> mconcat (map location ts)) $ TCon c ts
+appTy = mkTApps <$> atomTy <*> P.many atomTy
 
-    revTy = loc $ do
-      void $ keyword "rev"
-      ty <- simpleTy
-      return $ TCon (BuiltIn nameTyRev) [ty]
+mkTApps :: LTy 'Parsing -> [LTy 'Parsing] -> LTy 'Parsing
+mkTApps = foldl (\t1 t2 -> Loc (location t1 <> location t2) (TApp t1 t2))
 
-simpleTy :: (Monad m) => P m (LTy 'Parsing)
-simpleTy =
+atomTy :: (Monad m) => P m (LTy 'Parsing)
+atomTy =
   getSrcLoc >>= \start ->
-    conTy start <|> varTy start <|> tupleTy <|> wTupleTy
+    conTy start <|> varTy start <|> revTy start <|> parenTy <|> wTupleTy
   where
     conTy start = do
       c <- qconName
       end <- getSrcLoc
       sp
-      return $ Loc (start <> end) $ TCon c []
+      return $ Loc (start <> end) $ TCon c
 
     varTy start = do
       x <- varName
@@ -267,16 +305,35 @@ simpleTy =
       sp
       return $ Loc (start <> end) $ TVar x
 
-tupleTy :: (Monad m) => P m (LTy 'Parsing)
-tupleTy =
-  mkTupleTy
-    <$> parens (typeExpr `P.sepBy` comma)
+    revTy start = do
+      void $ P.try (P.string "rev" <* P.notFollowedBy P.alphaNumChar)
+      end <- getSrcLoc
+      sp
+      return $ Loc (start <> end) $ TCon (BuiltIn nameTyRev)
 
-mkTupleTy :: [LTy 'Parsing] -> LTy 'Parsing
-mkTupleTy [t] = t
-mkTupleTy ts =
-  Loc (mconcat $ map location ts) $
-    TCon (BuiltIn $ nameTyTuple $ length ts) ts
+-- | @()@, @(t)@, @(t : k)@ or a tuple type.
+parenTy :: (Monad m) => P m (LTy 'Parsing)
+parenTy = do
+  start <- getSrcLoc
+  void $ symbol "("
+  r <-
+    P.optional typeExpr >>= \case
+      Nothing -> return $ Left []
+      Just t ->
+        (Right . (t,) <$> (symbol ":" *> kindExpr))
+          <|> (Left . (t :) <$> P.many (comma *> typeExpr))
+  void $ P.char ')'
+  end <- getSrcLoc
+  sp
+  return $ case r of
+    Right (t, k) -> Loc (start <> end) (TKind t k)
+    Left ts -> mkTupleTy (Loc (start <> end) ts)
+
+-- | A parenthesized type or a tuple type.
+mkTupleTy :: Loc [LTy 'Parsing] -> LTy 'Parsing
+mkTupleTy (Loc l [t]) = Loc l (TParens t)
+mkTupleTy (Loc _ ts) =
+  mkTApps (Loc (mconcat $ map location ts) (TCon (BuiltIn $ nameTyTuple $ length ts))) ts
 
 wTupleTy :: (Monad m) => P m (LTy 'Parsing)
 wTupleTy =
@@ -284,8 +341,7 @@ wTupleTy =
 
 mkWTupleTy :: [LTy 'Parsing] -> LTy 'Parsing
 mkWTupleTy ts =
-  Loc (mconcat $ map location ts) $
-    TCon (BuiltIn $ nameTyWTuple $ length ts) ts
+  mkTApps (Loc (mconcat $ map location ts) (TCon (BuiltIn $ nameTyWTuple $ length ts))) ts
 
 multiplicity :: (Monad m) => P m (LTy 'Parsing)
 multiplicity = loc (symOne <|> symOmega <|> var) <* sp
@@ -328,64 +384,59 @@ topDecls :: (Monad m) => P m (Decls 'Parsing (Loc (TopDecl 'Parsing)))
 topDecls = Decls () <$> P.many topDecl
 
 topDecl :: (Monad m) => P m (Loc (TopDecl 'Parsing))
-topDecl = typeDecl <|> dataDecl <|> (fmap DDecl <$> localDecl)
+topDecl = typeDecl <|> dataDecl <|> (fmap DDecl <$> localDecl) <|> classDecl <|> instanceDecl
   where
     tyLHS = do
       c <- L.lexeme sp conName
-      xs <- P.many (L.lexeme sp varName)
-      return (c, xs)
+      bs <- P.many tyBinder
+      return (c, bs)
 
     dataDecl = loc $ do
       void $ keyword "data"
-      (c, xs) <- tyLHS
-      gadtDecl c xs <|> normalDecl c xs
+      (c, bs) <- tyLHS
+      gadtDecl c bs <|> normalDecl c bs
       where
-        normalDecl c xs = do
+        normalDecl c bs = do
           void $ symbol "="
-          DData c xs <$> (P.try cdecl <|> gadtCDecl c xs) `P.sepBy1` symbol "|"
+          DData c bs <$> (P.try cdecl <|> gadtCDecl bs) `P.sepBy1` symbol "|"
 
-        gadtDecl c xs = do
+        gadtDecl c bs = do
           void $ keyword "where"
-          cs <- P.many (keyword "sig" *> gadtCDecl c xs)
+          cs <- P.many (keyword "sig" *> gadtCDecl bs)
           void $ keyword "end"
-          return $ DData c xs cs
+          return $ DData c bs cs
 
-    gadtCDecl tc xs = do
+    gadtCDecl bs = do
       start <- getSrcLoc
       c <- conName <* sp
       void $ symbol ":"
-      ty <- arrTy
-      let (args, ret) = decomposeArrTy ty
-      targs <- maybe (fail $ "A return type of GADT-style definition must be headed by the type constructor.") return $ decomposeTyCon tc ret
-      let ftv = (nub $ freeTyVars args ++ freeTyVars targs) \\ xs
-      let l = start <> mconcat (map location targs)
-      let q =
-            map (\(x, y) -> TyEq (noLoc $ TVar x) y)
-              $ filter
-                ( \(x, y) -> case unLoc y of
-                    TVar y' -> x /= y'
-                    _ -> True
-                )
-              $ zip xs targs
-      return $ Loc l $ GeneralC c ftv q args
+      ef <- P.optional forallBinders
+      ty <- maybe id mkForalls ef <$> arrTy
+      return $ Loc (start <> location ty) $ GeneralC c (introForAllExcept (map tyBinderName bs) ty)
 
     typeDecl = loc $ do
       void $ keyword "type"
-      (c, xs) <- tyLHS
+      (c, bs) <- tyLHS
       void $ symbol "="
-      DType c xs <$> typeExpr
+      DType c bs <$> typeExpr
 
     cdecl = do
       start <- getSrcLoc
       c <- conName <* sp
-      ts <- P.many simpleTy
+      ts <- P.many atomTy
       return $ Loc (start <> mconcat (map location ts)) $ NormalC c ts
+    
+      
 
 localDecls :: (Monad m) => P m (Decls 'Parsing (LDecl 'Parsing))
 localDecls = Decls () <$> P.many localDecl
 
 localDecl :: (Monad m) => P m (LDecl 'Parsing)
-localDecl = defDecl <|> sigDecl <|> fixityDecl
+localDecl = localDeclWith introForAll
+
+-- | 'localDecl' whose signatures are quantified by the given function.
+localDeclWith :: (Monad m) => (LTy 'Parsing -> LTy 'Parsing) -> P m (LDecl 'Parsing)
+localDeclWith quant = defDecl <|> sigDeclWith quant <|> fixityDecl
 
 defDecl :: (Monad m) => P m (LDecl 'Parsing)
 defDecl = do
@@ -418,13 +469,16 @@ defBody = do
   return (ps, c)
 
 sigDecl :: (Monad m) => P m (LDecl 'Parsing)
-sigDecl = do
+sigDecl = sigDeclWith introForAll
+
+sigDeclWith :: (Monad m) => (LTy 'Parsing -> LTy 'Parsing) -> P m (LDecl 'Parsing)
+sigDeclWith quant = do
   start <- getSrcLoc
   void $ keyword "sig"
   x <- varOpName
   sp
   void $ symbol ":"
-  t <- introForAll <$> typeExpr
+  t <- quant <$> typeExpr
   return (Loc (start <> location t) $ DSig x t)
 
 fixityDecl :: (Monad m) => P m (LDecl 'Parsing)
@@ -447,7 +501,7 @@ opExpr =
     <$> funExpr
     <*> P.many ((\o e2 e1 -> lop o e1 e2) <$> (qop <* sp) <*> funExpr)
   where
-    lop o e1 e2 = Loc (location e1 <> location e2) $ Op o e1 e2
+    lop o e1 e2 = Loc (location e1 <> location e2) $ Op () o e1 e2
 
 funExpr :: (Monad m) => P m (LExp 'Parsing)
 funExpr =
@@ -496,10 +550,19 @@ funExpr =
 
 appExpr :: (Monad m) => P m (LExp 'Parsing)
 appExpr =
-  (\(f : fs) -> foldl lapp f fs) <$> P.some (withLoc simpleExpr)
+  foldl (\f (l, a) -> Loc (location f <> l) (App f a))
+    <$> withLoc simpleExpr
+    <*> P.many (withLoc argExpr)
+  where
+    argExpr startLoc =
+      ( do
+          e <- instBraces expr
+          return (startLoc <> location e, InstArg e)
+      )
+        <|> (\e -> (location e, ExplicitArg e)) <$> simpleExpr startLoc
 
 lapp :: Loc (Exp p) -> Loc (Exp p) -> Loc (Exp p)
-lapp e1 e2 = Loc (location e1 <> location e2) $ App e1 e2
+lapp e1 e2 = Loc (location e1 <> location e2) $ App e1 (ExplicitArg e2)
 
 simpleExpr :: (Monad m) => SrcSpan -> P m (LExp 'Parsing)
 simpleExpr startLoc =
@@ -513,7 +576,11 @@ simpleExpr startLoc =
     <|> tupleExpr
     <|> P.try wTupleExpr
     <|> P.try wProjExpr
+    <|> misplacedInstArg
   where
+    misplacedInstArg =
+      failAtSymbol "{{" "An instance argument {{e}} can be written only as an argument of an application, as in `f {{e}}` (not parenthesized)."
+
     withEnd t = do
       endLoc <- getSrcLoc
       return $ Loc (startLoc <> endLoc) t
@@ -631,12 +698,35 @@ withExpr :: (Monad m) => P m (LExp 'Parsing)
 withExpr = keyword "with" >> expr
 
 whereClause :: (Monad m) => P m (Decls 'Parsing (LDecl 'Parsing))
-whereClause = do
+whereClause = whereClauseWith introForAll
+
+-- | 'whereClause' whose signatures are quantified by the given function.
+whereClauseWith :: (Monad m) => (LTy 'Parsing -> LTy 'Parsing) -> P m (Decls 'Parsing (LDecl 'Parsing))
+whereClauseWith quant = do
   r <- P.optional $ do
     void $ keyword "where"
-    ds <- localDecls
+    ds <- Decls () <$> P.many (localDeclWith quant)
     void $ keyword "end"
     return ds
   case r of
     Just ds -> return ds
     Nothing -> return $ Decls () []
+
+-- class C a1 ... an [extends S1, ..., Sm] [where ... end]
+classDecl :: (Monad m) => P m (Loc (TopDecl 'Parsing))
+classDecl = loc $ do
+  void $ keyword "class"
+  c <- L.lexeme sp conName
+  bs <- P.many tyBinder
+  sups <- fromMaybe [] <$> P.optional (keyword "extends" *> appTy `P.sepBy1` comma)
+  d <- whereClauseWith (introForAllExcept (map tyBinderName bs))
+  return $ DClass c bs sups d
+
+-- instance [x :] {{S1}} -> ... -> C t1 ... tn [where ... end]
+instanceDecl :: (Monad m) => P m (Loc (TopDecl 'Parsing))
+instanceDecl = loc $ do
+  void $ keyword "instance"
+  x <- P.optional $ P.try (L.lexeme sp varName <* symbol ":")
+  ty <- introForAll <$> typeExpr
+  d <- whereClause
+  return $ DInst x ty d

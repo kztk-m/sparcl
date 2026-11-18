@@ -1,0 +1,24 @@
+-- A method whose type does not mention the class parameter: accepted, and
+-- usable when its instance is passed explicitly.
+
+data Nat = Z | S Nat
+
+class Sized a where
+    sig size : Int
+end
+
+instance sizedNat : Sized Nat where
+    def size = 1
+end
+
+instance sizedBool : Sized Bool where
+    def size = 2
+end
+
+def t1 = size {{sizedNat}}
+def t2 = size {{sizedBool}}
+
+-- Expected values
+
+def t1' = 1
+def t2' = 2

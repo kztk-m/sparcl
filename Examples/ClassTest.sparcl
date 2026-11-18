@@ -1,0 +1,33 @@
+class Eq a where
+sig (=) : a -> a -> Bool
+end
+
+class Ord a extends Eq a where
+    sig (<) : a -> a -> Bool
+end
+
+instance Eq Int where
+def (=) = eqInt
+end
+
+data List x = Nil | Cons x (List x)
+
+instance {{Eq a}} -> Eq (List a) where
+    def (=) Nil Nil = True
+            | Nil _ = False
+            | _ Nil = False
+            | (Cons h1 l1) (Cons h2 l2) =
+                case h1 = h2 of
+                    True -> l1 = l2
+                | False -> False
+                end
+end
+
+data NInt = NInt Int
+
+sig a : Int
+def a = t
+    where
+        sig t : Int
+        def t = 12
+    end

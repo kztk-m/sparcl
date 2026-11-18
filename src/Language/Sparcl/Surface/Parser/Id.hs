@@ -58,7 +58,8 @@ keyWords = ["local", "let", "let1", "in", "if", "then", "else", "where", "end",
             "case", "of", "with", "rev", "module", "import",
             "sig", "def", "data", "type", "fixity",
             "lift", "unlift", "pin",
-            "revdo" ]
+            "revdo", "class", "instance", "extends",
+            "Type", "Multiplicity" ]
 
 varName :: Monad m => P m SurfaceName
 varName = P.try (do x <- varidRaw
@@ -66,6 +67,12 @@ varName = P.try (do x <- varidRaw
                       P.unexpected $ P.Label $ NonEmpty.fromList $ "keyword " ++ show x
                     return $ Bare (User x))
           <?> "variable name"
+
+-- | Fails without consuming input if the name is a keyword.
+rejectKeyword :: Monad m => String -> P m ()
+rejectKeyword x =
+  when (x `elem` keyWords) $
+    P.unexpected $ P.Label $ NonEmpty.fromList $ "keyword " ++ show x
 
 varOpName :: Monad m => P m SurfaceName
 varOpName = varName <|> P.try (parens op)
@@ -89,16 +96,22 @@ conidRaw = (:) <$> P.upperChar <*> P.many P.alphaNumChar
            <?> "constructor name"
 
 conName :: Monad m => P m SurfaceName
-conName = Bare . User <$> conidRaw
+conName = do P.lookAhead conidRaw >>= rejectKeyword
+             Bare . User <$> conidRaw
 
 -- We have the special treatment for the case.
 qconName :: Monad m => P m SurfaceName
 qconName =
-  (do ms <- (:) <$> modElem <*> P.many (P.char '.' *> modElem)
+  (do P.lookAhead elems >>= \case
+        [m] -> rejectKeyword m
+        _   -> return ()
+      ms <- elems
       case ms of
         [m] -> return $ Bare (User m)
         _   -> return $ Qual (ModuleName $ concat $ init ms) (User $ last ms))
   <?> "qualified constructor name"
+  where
+    elems = (:) <$> modElem <*> P.many (P.char '.' *> modElem)
 
 
 lambda :: P m String

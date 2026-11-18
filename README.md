@@ -110,6 +110,8 @@ Notable Differences from the Paper (ICFP 2020)
 * The interpreter uses value environments (as usual) instead of substitutions. HOAS-like representations are adopted for values; particularly, function values are represented by `Value -> Eval Value` where `Eval` is a monad used for the (unidirectional) evaluation. This applies also to residuals, which are represented by pairs of functions implementing the forward and backward evaluations.
 * The forward evaluation ignores linearity.
 * The `Eval` monad mentioned above is used for providing fresh names of invertible variables, which essentially implements alpha renaming mentioned in Fig. 3.
+* Type classes with implicit instance arguments (`{{Eq a}} -> ...`) are supported; see [`notes/TypeClasses.md`](notes/TypeClasses.md).
+* Kinds are inferred and checked, and higher-kinded type variables and classes (e.g. `Functor`) are supported; see [`notes/Kinds.md`](notes/Kinds.md).
 
 Rough Explanation of Syntax
 --------------------------

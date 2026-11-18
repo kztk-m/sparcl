@@ -1,0 +1,35 @@
+-- Trailing instance arguments bound by `{{_}}`, so that `where` and `with`
+-- of the clause can use them.
+
+data Nat = Z | S Nat
+
+class Eq a where
+    sig (==) : a -> a -> Bool
+end
+
+instance eqNat : Eq Nat where
+    def (==) Z     Z     = True
+           | (S n) (S m) = n == m
+           | _     _     = False
+end
+
+-- used from `where`
+sig f : a -> {{Eq a}} -> Bool
+def f x {{_}} = go
+    where
+        def go = x == x
+    end
+
+-- used from `with`
+sig g : rev a -o {{Eq a}} -> rev a
+def g (rev x) {{_}} = x with (\y -> y == y)
+
+def fwd h = case unlift h of (y, _) -> y end
+
+def t1 = f (S Z)
+def t2 = fwd (\x -> g x) Z
+
+-- Expected values
+
+def t1' = True
+def t2' = Z

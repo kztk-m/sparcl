@@ -43,6 +43,23 @@ symForAll = symbol "forall" <|> symbol "∀"
 parens :: P m a -> P m a
 parens = P.between (symbol "(") (symbol ")")
 
+-- | {{ ... }}, used for instance arguments.
+instBraces :: P m a -> P m a
+instBraces = P.between (symbol "{{") (symbol "}}")
+
+-- | Consumes the symbol and fails with the message, reported at the start of the symbol.
+#if MIN_VERSION_megaparsec(7,0,0)
+failAtSymbol :: String -> String -> P m a
+failAtSymbol s msg = do
+  o <- P.getOffset
+  _ <- symbol s
+  P.setOffset o
+  fail msg
+#else
+failAtSymbol :: String -> String -> P m a
+failAtSymbol s msg = symbol s *> fail msg
+#endif
+
 getSrcLoc :: P m SrcSpan
 getSrcLoc =
   fmap (\(P.SourcePos fp l c) -> SrcSpan (Just fp) (P.unPos l) (P.unPos c) (P.unPos l) (P.unPos c))

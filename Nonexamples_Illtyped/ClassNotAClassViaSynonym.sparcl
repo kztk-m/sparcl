@@ -1,0 +1,7 @@
+-- It is intentional that this program causes a type error.
+-- `S Int` expands to `{{Int}} -> Int`, and `Int` is not a class.
+
+type S a = {{a}} -> Int
+
+sig h : S Int
+def h = h

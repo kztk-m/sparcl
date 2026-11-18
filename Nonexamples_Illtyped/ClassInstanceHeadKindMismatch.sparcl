@@ -1,0 +1,10 @@
+-- The parameter of Functor has kind Type -> Type, but Int has kind Type:
+-- the instance head is a kind error.
+
+class Functor f where
+    sig fmap : (a -> b) -> f a -> f b
+end
+
+instance Functor Int where
+    def fmap g x = x
+end

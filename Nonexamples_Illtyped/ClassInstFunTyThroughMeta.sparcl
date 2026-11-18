@@ -1,0 +1,21 @@
+-- It is intentional that this program causes a type error.
+-- The type of `g` is not known when `g Z Z` is checked, so no instance is
+-- passed to it (annotating the abstraction fixes this; ClassInstArgInList).
+
+data Nat = Z | S Nat
+data List a = Nil | Cons a (List a)
+
+class Eq a where
+    sig (==) : a -> a -> Bool
+end
+
+instance eqNat : Eq Nat where
+    def (==) Z     Z     = True
+           | (S n) (S m) = n == m
+           | _     _     = False
+end
+
+sig fs : List ({{Eq Nat}} -> Nat -> Nat -> Bool)
+def fs = Cons ((==) : {{Eq Nat}} -> Nat -> Nat -> Bool) Nil
+
+def t2 = (\xs -> case xs of Cons g _ -> g Z Z end) fs

@@ -1,0 +1,8 @@
+-- It is intentional that this program causes a type error.
+-- An instance pattern {{p}} must correspond to an instance argument
+-- {{C}} -> of the type; `g` takes an ordinary argument.
+
+data Nat = Z | S Nat
+
+sig g : Nat -> Bool
+def g {{d}} = True

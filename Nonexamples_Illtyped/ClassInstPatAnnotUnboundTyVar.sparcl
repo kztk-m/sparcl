@@ -1,0 +1,18 @@
+-- It is intentional that this program causes an error.
+-- Type variables in an expression annotation are not quantified implicitly,
+-- so `a` is unbound (`forall a.` is needed).
+
+data Nat = Z | S Nat
+
+class Eq a where
+    sig (==) : a -> a -> Bool
+end
+
+instance eqNat : Eq Nat where
+    def (==) Z     Z     = True
+           | (S n) (S m) = n == m
+           | _     _     = False
+end
+
+sig t : Bool
+def t = ((\{{d}} x -> x == x) : {{Eq a}} -> a -> Bool) Z

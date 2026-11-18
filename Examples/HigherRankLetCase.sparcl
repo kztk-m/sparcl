@@ -1,0 +1,42 @@
+-- Higher-rank values bound by `let` and matched by `case` keep their
+-- higher-rank types.
+
+sig ex0 : (forall x. x -> x) -> (Int, Bool)
+def ex0 f = (f 42, f True)
+
+def t1 = let g <- ex0 in g (\y -> y)
+
+def t3 = case ex0 of g -> g (\y -> y) end
+
+-- Parentheses around the head of an application.
+def t4 = (ex0) (\y -> y)
+
+-- An operator applied to an argument of polymorphic type
+fixity $$ 0 right
+sig ($$) : ((forall x. x -> x) -> (Int, Bool)) -> (forall x. x -> x) -> (Int, Bool)
+def ($$) f k = f k
+
+def t5 = ex0 $$ (\y -> y)
+
+-- A scrutinee and a bound expression that need a trailing instance argument
+data Box a = Box a
+
+class Default a where
+    sig dflt : a
+end
+
+instance dInt : Default Int where
+    def dflt = 0
+end
+
+sig pick : Int -> {{Default a}} -> Box a
+def pick _ = Box dflt
+
+def t6 = case pick 3 of Box n -> n + 1 end
+
+def t7 = let Box m <- pick 3 in m + 2
+
+-- Expected values
+
+def t6' = 1
+def t7' = 2

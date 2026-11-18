@@ -1,0 +1,10 @@
+-- A function type is not an application of a type constructor, so
+-- Int -> Int is not of the form f b.
+
+sig g : f b -> Int
+def g _ = 0
+
+sig inc : Int -> Int
+def inc x = x + 1
+
+def bad = g inc

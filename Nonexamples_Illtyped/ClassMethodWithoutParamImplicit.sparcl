@@ -1,0 +1,16 @@
+-- It is intentional that this program causes a type error.
+-- The type of `size` does not mention the class parameter, so its instance
+-- is ambiguous unless passed explicitly (`size {{sizedNat}}`).
+
+data Nat = Z | S Nat
+
+class Sized a where
+    sig size : Int
+end
+
+instance sizedNat : Sized Nat where
+    def size = 1
+end
+
+sig n : Int
+def n = size

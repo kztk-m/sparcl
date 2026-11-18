@@ -51,6 +51,7 @@ data WhenChecking
   | CheckingMoreGeneral !Ty !Ty
   | CheckingMultiplicities Name MCContext ![Ty] ![Ty]
   | CheckingType Name !Ty
+  | CheckingSuperclasses Name -- instance name
   | OtherContext !Doc
   | CheckingNone
 
@@ -69,6 +70,24 @@ data ErrorDetail
   | CannotHavePolyTy !PolyTy ![TyVar]
   | LessPolymorphic !PolyTy !PolyTy ![TyVar]
   | CannotUnifyPolyTy !MetaTyVar !PolyTy
+  | -- Type classes
+    NoInstance !Ty
+  | AmbiguousInstances !Ty ![Name]
+  | AmbiguousInstGoal !Ty -- metas left in a goal that can no longer be fixed
+  | CannotInferInstArg !Ty -- a polymorphic goal of a top-level definition without a signature
+  | InstSearchTooDeep !Ty
+  | NotInstArgPosition -- {{e}} / {{p}} where the type has an ordinary arrow
+  | InstArgUnknownFun -- {{e}} passed to a function of unknown type
+  | InstPatNeedsAnnotation
+  | NotAClass !Ty
+  | InstVarNotInHead !TyVar !Ty -- variable, instance head
+  | NotAMethod !Name !Name -- instance, definition
+  | MissingMethod !Name !Name -- instance, method
+  | -- Kinds
+    KindMismatch !Ty !Kind !Kind -- type-level expression, expected kind, actual kind
+  | NotAFunctionKind !Ty !Kind
+  | UnknownTypeName !Name
+  | BadConResult !Name !Name !Ty -- constructor, data type, written result type
   | Other !D.Doc
 
 instance Pretty TypeError where
@@ -132,6 +151,8 @@ instance Pretty TypeError where
           <> item (D.text "when checking" <+> d)
       pprWhenChecking (CheckingType n ty) =
         D.line <> item (D.text "when checking if" <+> ppr n <+> text "has type" <+> ppr ty)
+      pprWhenChecking (CheckingSuperclasses n) =
+        D.line <> item (D.text "when checking the superclasses of instance" <+> ppr n)
       pprWhenChecking CheckingNone = D.empty
 
       pprDetail = item . go
@@ -204,6 +225,68 @@ instance Pretty TypeError where
               , D.nest 2 (D.line <> D.align (ppr polyTy))
               , D.line <> D.text "with an unification variable" <+> ppr mv
               ]
+          go (NoInstance ty) =
+            D.text "No instance found for" <+> D.align (ppr ty)
+          go (AmbiguousInstances ty ns) =
+            D.vcat
+              [ D.text "Several instances match" <+> D.align (ppr ty) <> D.text ":"
+              , D.nest 2 (D.vcat (map ppr ns))
+              ]
+          go (AmbiguousInstGoal ty) =
+            D.vcat
+              [ D.text "Ambiguous instance argument:" <+> D.align (ppr ty)
+              , D.text "Its type cannot be determined; add a type annotation."
+              ]
+          go (CannotInferInstArg ty) =
+            D.vcat
+              [ D.text "Cannot infer the instance argument" <+> D.align (ppr ty)
+              , D.text "of a definition without a signature; add a signature."
+              ]
+          go (InstSearchTooDeep ty) =
+            D.text "Instance search for" <+> D.align (ppr ty)
+              <+> D.text "is too deep (possibly cyclic instances)."
+          go NotInstArgPosition =
+            D.text "An instance argument {{...}} is given where an ordinary argument is expected."
+          go InstArgUnknownFun =
+            D.text "An instance argument {{...}} cannot be passed to a function whose type is unknown; add a type annotation."
+          go InstPatNeedsAnnotation =
+            D.text "An instance pattern {{...}} needs a type annotation."
+          go (NotAClass ty) =
+            D.text "Not a class:" <+> D.align (ppr ty)
+          go (InstVarNotInHead x hd) =
+            D.hsep [D.text "Type variable", ppr x, D.text "does not occur in the instance head", D.align (ppr hd)]
+          go (KindMismatch t expected actual) =
+            D.text "Kinds do not match:"
+              <+> D.align (ppr t)
+              <> D.nest
+                2
+                ( D.line
+                    <> D.text "has kind"
+                    <+> D.align (ppr actual)
+                    <> D.comma
+                    <> D.line
+                    <> D.text "but kind"
+                    <+> D.align (ppr expected)
+                    <+> D.text "is expected."
+                )
+          go (NotAFunctionKind t k) =
+            D.text "Applied to arguments, but its kind is not of the form k1 -> k2:"
+              <+> D.align (ppr t)
+              <> D.nest 2 (D.line <> D.text "has kind" <+> D.align (ppr k) <> D.text ".")
+          go (UnknownTypeName n) =
+            D.text "Not a type constructor, a synonym or a class:" <+> ppr n
+          go (BadConResult c tn ty) =
+            D.hsep
+              [ D.text "The result type of constructor"
+              , ppr c
+              , D.text "must be an application of"
+              , ppr tn <> D.text ":"
+              , D.align (ppr ty)
+              ]
+          go (NotAMethod inst n) =
+            D.hsep [ppr n, D.text "is not a method of the class of instance", ppr inst <> D.text "."]
+          go (MissingMethod inst m) =
+            D.hsep [D.text "Instance", ppr inst, D.text "does not define method", ppr m, D.text "(which has no default)."]
           go (Other d) = d
 
       pprContexts [] = D.empty
@@ -219,6 +302,68 @@ instance Pretty TypeError where
 -- our principle; multiplicites are synthesized instead of checked.
 type TyEnv = Map Name Ty
 type ConEnv = Map Name ConTy
+
+data ClassInfo = ClassInfo
+  { ciParams :: ![TyVar]
+  , ciSupers :: ![Ty]
+  , ciMethods :: ![(Name, Ty)]
+  , ciDefaults :: ![Name] -- methods with a default implementation
+  }
+
+instance Pretty ClassInfo where
+  ppr (ClassInfo ps sups ms ds) =
+    D.braces $
+      D.align $
+        D.vsep
+          [ D.text "params:" <+> D.hsep (map ppr ps)
+          , D.text "supers:" <+> D.hsep (D.punctuate D.comma (map ppr sups))
+          , D.text "methods:" <+> D.align (D.vsep [ppr m <+> D.colon <+> ppr t | (m, t) <- ms])
+          , D.text "defaults:" <+> D.hsep (map ppr ds)
+          ]
+
+type ClassTable = Map Name ClassInfo
+
+-- | The global type of a method: @forall as bs. cs => {{C as}} -> t@.
+methodType :: Name -> [TyVar] -> Ty -> Ty
+methodType c params sigTy =
+  case sigTy of
+    TyForAll bs (TyQual cs t) -> TyForAll (params ++ bs) (TyQual cs (TyInstFun dict t))
+    t -> TyForAll params (TyQual [] (TyInstFun dict t))
+  where
+    dict = TyCon c (map TyVar params)
+
+-- | The type @forall as. C as -> Si@ of the projection to the i-th superclass.
+superProjType :: Name -> ClassInfo -> Int -> Ty
+superProjType c ci i =
+  let ps = ciParams ci
+  in  TyForAll ps $
+        TyQual [] $
+          TyFun (TyMult Omega) (TyCon c (map TyVar ps)) (ciSupers ci !! i)
+
+-- | Instances: class name -> instance name -> instance type.
+type InstTable = Map Name (Map Name Ty)
+
+mergeInstTable :: InstTable -> InstTable -> InstTable
+mergeInstTable = M.unionWith M.union
+
+type TypedClauses = [([S.LPat 'TypeCheck], S.Clause 'TypeCheck)]
+
+data TypedInstance = TypedInstance
+  { tiName :: !Name
+  , tiType :: !Ty
+  , tiClass :: !Name
+  , tiLocals :: ![(Name, Ty)] -- its instance arguments as local instances
+  , tiSupers :: ![S.LExp 'TypeCheck] -- superclass dictionaries, in terms of tiLocals
+  , tiMethods :: ![(Name, PolyTy, TypedClauses)] -- defined methods
+  , tiDefaulted :: ![Name] -- omitted methods, filled by their defaults
+  }
+
+data TypedDefault = TypedDefault
+  { tdMethod :: !Name
+  , tdClass :: !Name
+  , tdType :: !PolyTy -- the global type of the method
+  , tdClauses :: !TypedClauses
+  }
 
 dummyName :: Name
 dummyName = Original (ModuleName "") (User "") (Bare (User ""))
@@ -254,7 +399,7 @@ ty2mult = zonkType >=> go
     go (TyVar t) = pure $ MSingle (MulVarRigid t)
     go t = do
       reportError $ Other $ text "Expected multiplicity, but received" <+> ppr t
-      m <- newMetaTyVar
+      m <- newMetaTyVar multKi
       return $ MSingle (MulVar m)
 
 data Mul = MulConst !Multiplicity | MulVar !MetaTyVar | MulVarRigid !TyVar
@@ -372,6 +517,8 @@ data TypingContext
   , tcTyEnv :: !TyEnv -- Current typing environment
   , tcConEnv :: !ConEnv
   , tcSyn :: !SynTable -- Current type synonym table
+  , tcClassEnv :: !ClassTable -- classes (own and imported)
+  , tcInstEnv :: !InstTable -- global instances (own and imported)
   , tcContexts :: ![S.LExp 'Renaming] -- parent expressions
   , tcLoc :: !(Maybe SrcSpan) -- focused part
   , tcChecking :: !WhenChecking
@@ -379,7 +526,61 @@ data TypingContext
   , tcRefErrors :: !(IORef (Seq TypeError))
   , tcDeferredIC :: !(IORef [(TypeErrorContext, SuspendedCheck)])
   -- Type errors are accumulated for better error messages
+  , tcExpandLast :: !ExpandLast
+  , tcLocalInsts :: ![(Name, Ty)]
+  -- Local instances in scope, the innermost first.
+  , tcRefGenCount :: !(IORef Int)
+  -- Counter for names `Generated i TypeChecking`.
+  , tcInstGoals :: !(IORef [InstGoal])
+  -- Instance goals not solved yet.
   }
+
+-- | An instance goal.
+data InstGoal = InstGoal
+  { instGoalId :: !Name
+  , instGoalRef :: !(IORef (Maybe (S.LExp 'TypeCheck))) -- the hole in the AST
+  , instGoalTy :: !Ty -- the class type
+  , instGoalLocals :: ![(Name, Ty)] -- the local instances at creation
+  , instGoalLevel :: !TcLevel -- the level at creation
+  , instGoalLoc :: !(Maybe SrcSpan)
+  , instGoalCtx :: !TypeErrorContext
+  }
+
+newGenName :: TC Name
+newGenName = do
+  cref <- asks tcRefGenCount
+  cnt <- liftIO $ atomicModifyIORef' cref $ \cnt -> (cnt + 1, cnt)
+  pure $ Generated cnt TypeChecking
+
+withLocalInsts :: [(Name, Ty)] -> TC r -> TC r
+withLocalInsts xs = local (\tc -> tc{tcLocalInsts = xs ++ tcLocalInsts tc})
+
+addInstGoals :: [InstGoal] -> TC ()
+addInstGoals gs = do
+  ref <- asks tcInstGoals
+  liftIO $ modifyIORef ref (gs ++)
+
+gatherInstGoals :: TC a -> TC (a, [InstGoal])
+gatherInstGoals m = do
+  ref <- asks tcInstGoals
+  prev <- liftIO $ readIORef ref
+  liftIO $ writeIORef ref []
+  res <- m
+  gs <- liftIO $ readIORef ref
+  liftIO $ writeIORef ref prev
+  return (res, gs)
+
+-- | Runs a computation in the location and the error context where a goal was made.
+atInstGoal :: InstGoal -> TC r -> TC r
+atInstGoal g =
+  local (\tc -> tc{tcLoc = instGoalLoc g}) . restoreTypeErrorContext (instGoalCtx g)
+
+-- | Whether trailing instance arguments are inserted.
+data ExpandLast = ExpandLast | DontExpandLast
+  deriving (Eq, Show)
+
+withExpandLast :: ExpandLast -> TC r -> TC r
+withExpandLast e = local (\tc -> tc{tcExpandLast = e})
 
 data KeyTC
 
@@ -391,6 +592,8 @@ initTypingContext = do
   rc <- newIORef []
   ric <- newIORef []
   rbm <- newIORef M.empty
+  rgen <- newIORef 0
+  rgoals <- newIORef []
   return
     TypingContext
       { tcRefMvCount = r1
@@ -406,8 +609,14 @@ initTypingContext = do
       , tcConEnv = M.empty
       , tcTyEnv = M.empty
       , tcSyn = M.empty
+      , tcClassEnv = M.empty
+      , tcInstEnv = M.empty
       , tcBLog = rbm
       , tcDeferredIC = ric
+      , tcExpandLast = DontExpandLast
+      , tcLocalInsts = []
+      , tcRefGenCount = rgen
+      , tcInstGoals = rgoals
       }
 
 -- This function must be called before each session of type checking.
@@ -416,11 +625,17 @@ refreshTC tc = do
   r <- newIORef Seq.empty
   rc <- newIORef []
   ric <- newIORef []
+  rgoals <- newIORef []
   return $
     tc
-      { tcTyEnv = M.empty
+      { tcInstGoals = rgoals
+      , tcLocalInsts = []
+      , tcExpandLast = DontExpandLast
+      , tcTyEnv = M.empty
       , tcConEnv = M.empty
       , tcSyn = M.empty
+      , tcClassEnv = M.empty
+      , tcInstEnv = M.empty
       , tcLoc = Nothing
       , tcConstraint = rc
       , tcRefErrors = r
@@ -429,12 +644,14 @@ refreshTC tc = do
       , tcDeferredIC = ric
       }
 
-setEnvs :: TypingContext -> ConEnv -> TypeTable -> SynTable -> TypingContext
-setEnvs tc kenv tenv syn =
+setEnvs :: TypingContext -> ConEnv -> TypeTable -> SynTable -> ClassTable -> InstTable -> TypingContext
+setEnvs tc kenv tenv syn cenv ienv =
   tc
     { tcConEnv = kenv
     , tcTyEnv = tenv
     , tcSyn = syn
+    , tcClassEnv = cenv
+    , tcInstEnv = ienv
     }
 
 setDebugLevel :: TypingContext -> Int -> TypingContext
@@ -496,18 +713,29 @@ logBenchN key cnt comp = do
   where
     mrg (BenchInfo i m) (BenchInfo i' m') = BenchInfo (i + i') (m + m')
 
-runTCWith :: CTypeTable -> TypeTable -> SynTable -> TC a -> TC a
-runTCWith ctbl tytbl syntbl m = do
+runTCWith :: CTypeTable -> TypeTable -> SynTable -> ClassTable -> InstTable -> TC a -> TC a
+runTCWith ctbl tytbl syntbl clstbl insttbl m = do
   tc <- ask
   tc' <- liftIO $ refreshTC tc
-  local (\_ -> setEnvs tc' ctbl tytbl syntbl) $ runTC m
+  local (\_ -> setEnvs tc' ctbl tytbl syntbl clstbl insttbl) $ runTC m
 
-execTCWith :: TypingContext -> CTypeTable -> TypeTable -> SynTable -> TC a -> IO a
-execTCWith tc ctbl tytbl syntbl m | TC m' <- runTCWith ctbl tytbl syntbl m = runReaderT m' tc
+execTCWith :: TypingContext -> CTypeTable -> TypeTable -> SynTable -> ClassTable -> InstTable -> TC a -> IO a
+execTCWith tc ctbl tytbl syntbl clstbl insttbl m
+  | TC m' <- runTCWith ctbl tytbl syntbl clstbl insttbl m = runReaderT m' tc
+
+withClassesAndInstances :: ClassTable -> InstTable -> TC r -> TC r
+withClassesAndInstances cls insts =
+  local
+    ( \tc ->
+        tc
+          { tcClassEnv = M.union cls (tcClassEnv tc)
+          , tcInstEnv = mergeInstTable insts (tcInstEnv tc)
+          }
+    )
 
 tupleConTy :: Int -> ConTy
 tupleConTy n =
-  let tvs = map BoundTv [Alpha i (User $ 't' : show i) | i <- [1 .. n]]
+  let tvs = [BoundTv (Alpha i (User $ 't' : show i)) typeKi | i <- [1 .. n]]
       tys = map TyVar tvs
   in  -- ConTy tvs [] [] $ foldr (-@) (tupleTy tys) tys
       ConTy tvs [] [] [(t, one) | t <- tys] (tupleTy tys)
@@ -516,7 +744,7 @@ tupleConTy n =
 
 -- | Make a unifiable type varible
 arbitraryTy :: TC Ty
-arbitraryTy = TyMetaV <$> newMetaTyVar
+arbitraryTy = newMetaTy
 
 abortTyping :: TC a
 abortTyping = throwM AbortTyping
@@ -618,15 +846,15 @@ askType l n = do
           atLoc l (reportError $ Undefined n)
           arbitraryTy
 
-newMetaTyVar :: TC MetaTyVar
-newMetaTyVar = do
+newMetaTyVar :: Kind -> TC MetaTyVar
+newMetaTyVar k = do
   cref <- asks tcRefMvCount
   lv <- asks tcTcLevel
   ilv <- asks tcIcLevel
   cnt <- liftIO $ atomicModifyIORef' cref $ \cnt -> (cnt + 1, cnt)
   ref <- liftIO $ newIORef Nothing
   lref <- liftIO $ newIORef lv
-  return $ MetaTyVar cnt ref lref ilv
+  return $ MetaTyVar cnt ref lref ilv k
 
 readTyVar :: MetaTyVar -> TC (Maybe Ty)
 readTyVar mv =
@@ -687,17 +915,27 @@ resolveSyn ty = do
     go _synMap (TyMetaV m) = return (TyMetaV m)
     go synMap (TySyn origTy actualTy) =
       TySyn origTy <$> go synMap actualTy
-    go synMap orig@(TyCon c ts) =
+    go synMap orig@(TyConst c) = goSpine synMap orig c []
+    go synMap orig@(TyApp _ _) =
+      case splitTyApp orig of
+        (TyConst c, ts) -> goSpine synMap orig c ts
+        (h, ts) -> foldl TyApp <$> go synMap h <*> mapM (go synMap) ts
+    go synMap (TyFun m t1 t2) = TyFun <$> go synMap m <*> go synMap t1 <*> go synMap t2
+    go synMap (TyInstFun c t) = TyInstFun <$> go synMap c <*> go synMap t
+    go _ (TyMult m) = return $ TyMult m
+
+    goSpine synMap orig c ts =
       case M.lookup c synMap of
         Nothing ->
           TyCon c <$> mapM (go synMap) ts
         Just (ns, tyBody)
-          | length ns == length ts ->
-              TySyn orig <$> go synMap (substTy (zip ns ts) tyBody)
+          | length ns <= length ts ->
+              let (as, rest) = splitAt (length ns) ts
+              in  TySyn orig <$> go synMap (foldl TyApp (substTy (zip ns as) tyBody) rest)
+        -- unreachable: ty2ty rejects partial applications
         Just _ -> do
           reportError $ Other $ D.hsep [D.text "Type synonym", D.dquotes (ppr c), D.text "must be fully-applied."]
           abortTyping
-    go _ (TyMult m) = return $ TyMult m
 
 -- withVar x ty mult =
 --   local (\tc -> tc { tcTyEnv = M.insert x (ty, mult) (tcTyEnv tc) })
@@ -743,8 +981,18 @@ withSyn tv v = local (\tc -> tc{tcSyn = M.insert tv v (tcSyn tc)})
 withCon :: Name -> ConTy -> TC a -> TC a
 withCon c ty = local (\tc -> tc{tcConEnv = M.insert c ty (tcConEnv tc)})
 
+-- | A new meta of kind @Type@.
 newMetaTy :: TC Ty
-newMetaTy = TyMetaV <$> newMetaTyVar
+newMetaTy = newMetaTyWithKind typeKi
+
+newMetaMult :: TC Ty
+newMetaMult = newMetaTyWithKind multKi
+
+newMetaTyWithKind :: Kind -> TC Ty
+newMetaTyWithKind k = TyMetaV <$> newMetaTyVar k
+
+newMetaKind :: TC Kind
+newMetaKind = newMetaTyWithKind sortKi
 
 withVars :: [(Name, Ty)] -> TC r -> TC r
 withVars ns m = foldr (uncurry withVar) m ns
@@ -767,8 +1015,10 @@ zonkMetaTyVar mv = {- trace "zonk!" $ -} do
 
 zonkType :: Ty -> TC Ty
 zonkType (TyVar n) = return $ TyVar n
-zonkType (TyCon c ts) =
-  TyCon c <$> traverse zonkType ts
+zonkType (TyConst c) = return (TyConst c)
+zonkType (TyApp t1 t2) = TyApp <$> zonkType t1 <*> zonkType t2
+zonkType (TyFun m t1 t2) = TyFun <$> zonkType m <*> zonkType t1 <*> zonkType t2
+zonkType (TyInstFun c t) = TyInstFun <$> zonkType c <*> zonkType t
 zonkType (TyForAll ns t) =
   TyForAll ns <$> zonkTypeQ t
 zonkType (TyMetaV m) = zonkMetaTyVar m
@@ -804,6 +1054,7 @@ zonkWhenChecking (CheckingMultiplicities x mc ts1 ts2) =
   CheckingMultiplicities x mc <$> mapM zonkType ts1 <*> mapM zonkType ts2
 zonkWhenChecking (CheckingType n ty) =
   CheckingType n <$> zonkType ty
+zonkWhenChecking (CheckingSuperclasses n) = return (CheckingSuperclasses n)
 zonkWhenChecking (OtherContext d) = return (OtherContext d)
 zonkWhenChecking CheckingNone = return CheckingNone
 
@@ -827,11 +1078,24 @@ zonkErrorDetail (LessPolymorphic ty1@(TyMetaV mv) ty2 escaped) = do
       LessPolymorphic <$> zonkType ty1 <*> pure ty2' <*> pure escaped
   where
     containsForAll (TyForAll _ _) = True
-    containsForAll (TyCon _ ts) = any containsForAll ts
+    containsForAll (TyApp t1 t2) = containsForAll t1 || containsForAll t2
+    containsForAll (TyFun m t1 t2) = any containsForAll [m, t1, t2]
+    containsForAll (TyInstFun c t) = containsForAll c || containsForAll t
     containsForAll (TySyn _ t) = containsForAll t
-    containsForAll _ = False
+    containsForAll (TyConst _) = False
+    containsForAll (TyVar _) = False
+    containsForAll (TyMetaV _) = False
+    containsForAll (TyMult _) = False
 zonkErrorDetail (LessPolymorphic ty1 ty2 escaped) =
   LessPolymorphic <$> zonkType ty1 <*> zonkType ty2 <*> pure escaped
+zonkErrorDetail (NoInstance ty) = NoInstance <$> zonkType ty
+zonkErrorDetail (AmbiguousInstances ty ns) = AmbiguousInstances <$> zonkType ty <*> pure ns
+zonkErrorDetail (AmbiguousInstGoal ty) = AmbiguousInstGoal <$> zonkType ty
+zonkErrorDetail (CannotInferInstArg ty) = CannotInferInstArg <$> zonkType ty
+zonkErrorDetail (InstSearchTooDeep ty) = InstSearchTooDeep <$> zonkType ty
+zonkErrorDetail (NotAClass ty) = NotAClass <$> zonkType ty
+zonkErrorDetail (KindMismatch t k1 k2) = KindMismatch <$> zonkType t <*> zonkType k1 <*> zonkType k2
+zonkErrorDetail (NotAFunctionKind t k) = NotAFunctionKind <$> zonkType t <*> zonkType k
 zonkErrorDetail res = pure res
 
 skolemize :: PolyTy -> TC ([TyVar], QualTy)
@@ -839,9 +1103,9 @@ skolemize (TyForAll tvs ty) = do
   sks1 <- localIcLevel (const (-1)) $ mapM newSkolemTyVar tvs
   (sks2, TyQual cs2 ty2) <- skolemizeQ $ substTyQ (zip tvs $ map TyVar sks1) ty
   return (sks1 ++ sks2, TyQual cs2 ty2)
-skolemize (FunTy m argTy resTy) = do
+skolemize (TyFun m argTy resTy) = do
   (sks, TyQual cs resTy') <- skolemize resTy
-  pure (sks, TyQual cs (FunTy m argTy resTy'))
+  pure (sks, TyQual cs (TyFun m argTy resTy'))
 skolemize ty = return ([], TyQual [] ty)
 
 skolemizeQ :: QualTy -> TC ([TyVar], QualTy)
@@ -862,22 +1126,31 @@ unifyWork t1 (TySyn _ t2) = unifyWork t1 t2
 unifyWork (TyMetaV mv1) (TyMetaV mv2) | mv1 == mv2 = return ()
 unifyWork (TyMetaV mv) ty = unifyMetaTyVar mv ty
 unifyWork ty (TyMetaV mv) = unifyMetaTyVar mv ty
-unifyWork (TyCon c ts) (TyCon c' ts') | c == c' = do
-  when (length ts /= length ts') $
-    reportError $
-      Other $
-        D.hsep [D.text "Type construtor", ppr c, D.text "has different number of arguments."]
-  zipWithM_ unifyWork ts ts'
+unifyWork (TyConst c) (TyConst c') | c == c' = return ()
+unifyWork (TyApp t1 t2) (TyApp t1' t2') = do
+  unifyWork t1 t1'
+  unifyWork t2 t2'
+unifyWork (TyFun m t1 t2) (TyFun m' t1' t2') = do
+  unifyWork m m'
+  unifyWork t1 t1'
+  unifyWork t2 t2'
+unifyWork (TyInstFun c t) (TyInstFun c' t') = do
+  unifyWork c c'
+  unifyWork t t'
 unifyWork (TyMult m) (TyMult m') | m == m' = return ()
 unifyWork (TyVar x1) (TyVar x2) | x1 == x2 = return ()
 unifyWork (TyVar x) t = do
-  icLevel <- currentIcLevel
-  when (icLevel == 0) $ reportError $ UnMatchTy (TyVar x) t
-  addConstraint [TyEq (TyVar x) t]
+  ok <- checkBindKind (tyVarKind x) t
+  when ok $ do
+    icLevel <- currentIcLevel
+    when (icLevel == 0) $ reportError $ UnMatchTy (TyVar x) t
+    addConstraint [TyEq (TyVar x) t]
 unifyWork t (TyVar x) = do
-  icLevel <- currentIcLevel
-  when (icLevel == 0) $ reportError $ UnMatchTy (TyVar x) t
-  addConstraint [TyEq t (TyVar x)]
+  ok <- checkBindKind (tyVarKind x) t
+  when ok $ do
+    icLevel <- currentIcLevel
+    when (icLevel == 0) $ reportError $ UnMatchTy (TyVar x) t
+    addConstraint [TyEq t (TyVar x)]
 unifyWork pty1@(TyForAll tvs1 _) (TyForAll tvs2 qty2)
   | length tvs1 == length tvs2 = do
       (skVars, TyQual cs1 ty1) <- skolemize pty1
@@ -926,10 +1199,12 @@ unifyUnboundMetaTyVar mv (TyMetaV mv2) = do
     Nothing ->
       if
         | mv == mv2 -> return ()
-        | sw ->
-            substituteUnif cIcLevel mv2 (TyMetaV mv)
-        | otherwise ->
-            substituteUnif cIcLevel mv (TyMetaV mv2)
+        | otherwise -> do
+            ok <- checkBindKind (metaKind mv) (TyMetaV mv2)
+            when ok $
+              if sw
+                then substituteUnif cIcLevel mv2 (TyMetaV mv)
+                else substituteUnif cIcLevel mv (TyMetaV mv2)
     Just ty2' -> unifyUnboundMetaTyVar mv ty2'
 unifyUnboundMetaTyVar mv ty2 = do
   ty2' <- zonkType ty2
@@ -941,7 +1216,44 @@ unifyUnboundMetaTyVar mv ty2 = do
       -- We abort typing when occurrence check fails; otherwise, zonkType can diverge.
       abortTyping
     else do
-      substituteUnif cIcLevel mv ty2'
+      ok <- checkBindKind (metaKind mv) ty2'
+      when ok $ substituteUnif cIcLevel mv ty2'
+
+-- | Checks that a variable of kind @k@ may be bound to @ty@.
+checkBindKind :: Kind -> Ty -> TC Bool
+checkBindKind k ty
+  | k == sortKi = pure True
+  | otherwise = do
+      k' <- askKindOf ty
+      if k == k'
+        then pure True
+        else do
+          reportError $ KindMismatch ty k k'
+          pure False
+
+askKindOf :: Ty -> TC Kind
+askKindOf ty = do
+  tbl <- asks tcTyEnv
+  pure $ kindOf tbl ty
+
+-- | Unifies two kinds; the caller reports the failure.
+unifyKind :: Kind -> Kind -> TC Bool
+unifyKind k1 k2 = do
+  k1' <- zonkType k1
+  k2' <- zonkType k2
+  case (k1', k2') of
+    (TyMetaV m1, TyMetaV m2) | m1 == m2 -> pure True
+    (TyMetaV m, k) -> bind m k
+    (k, TyMetaV m) -> bind m k
+    (TyConst a, TyConst b) -> pure (a == b)
+    (TyApp a1 a2, TyApp b1 b2) -> do
+      ok <- unifyKind a1 b1
+      if ok then unifyKind a2 b2 else pure False
+    _ -> pure False
+  where
+    bind m k
+      | m `elem` metaTyVars k = pure False
+      | otherwise = writeTyVar m k >> pure True
 
 -- Assumption: ty is already zonked.
 substituteUnif :: IcLevel -> MetaTyVar -> MonoTy -> TC ()

@@ -1,0 +1,30 @@
+-- Functions with instance arguments stored in a list; annotations are
+-- needed where the function's type is not yet known.
+
+data Nat = Z | S Nat
+data List a = Nil | Cons a (List a)
+
+class Eq a where
+    sig (==) : a -> a -> Bool
+end
+
+instance eqNat : Eq Nat where
+    def (==) Z     Z     = True
+           | (S n) (S m) = n == m
+           | _     _     = False
+end
+
+sig fs : List ({{Eq Nat}} -> Nat -> Nat -> Bool)
+def fs = Cons ((==) : {{Eq Nat}} -> Nat -> Nat -> Bool) Nil
+
+-- OK: the pattern gives `g` its type before `g Z Z` is checked
+def t1 = case fs of Cons g _ -> g Z Z end
+
+-- Without the annotation this is an error (ClassInstFunTyThroughMeta)
+def t2 = ((\xs -> case xs of Cons g _ -> g Z Z end)
+            : List ({{Eq Nat}} -> Nat -> Nat -> Bool) -> Bool) fs
+
+-- Expected values
+
+def t1' = True
+def t2' = True

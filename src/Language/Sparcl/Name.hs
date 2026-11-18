@@ -23,21 +23,33 @@ data SystemName
     NWTuple !Int
   | -- | name for an arrow kind
     KArrow
-  | -- | name for function types (ternary)
-    NArrow
+  | -- | the sort of kinds (the 'metaKind' of kind metas)
+    KSort
   | -- | name for unrestricted type constructor (to be removed)
     NBang
   | -- | name for invertible type constructor
     NRev
+  | -- | generated name for an unnamed instance (numbered within a module)
+    NInstance !Int
+  | -- | dictionary constructor of a class
+    NDict !NameBase
+  | -- | projection of the i-th superclass dictionary of a class
+    NSuperProj !NameBase !Int
+  | -- | default implementation of a method
+    NDefault !NameBase
   deriving (Eq, Ord, Show)
 
 instance Pretty SystemName where
   ppr (NTuple n) = text "<Tup" <+> ppr n <> text ">"
   ppr (NWTuple n) = text "<&Tup" <+> ppr n <> text ">"
-  ppr NArrow = text "->" -- NB: ternary (Multiplicity -> Type -> Type -> Type) instead of binary
   ppr KArrow = text "->"
+  ppr KSort = text "<Sort>"
   ppr NBang = text "!" -- TODO: will be removed
   ppr NRev = text "rev"
+  ppr (NInstance k) = text "<instance #" <> ppr k <> text ">"
+  ppr (NDict c) = text "<dict" <+> ppr c <> text ">"
+  ppr (NSuperProj c i) = text "<super" <+> ppr c <+> text "#" <> ppr i <> text ">"
+  ppr (NDefault m) = text "<default" <+> ppr m <> text ">"
 
 data SurfaceName
   = Qual !ModuleName !NameBase
@@ -52,7 +64,7 @@ data Name
   | Generated !Int !Phase
   deriving Show
 
-data Phase = Desugaring | REPL deriving (Eq, Show, Ord)
+data Phase = Desugaring | REPL | TypeChecking deriving (Eq, Show, Ord)
 
 instance NFData Phase where
   rnf x = seq x ()
@@ -101,13 +113,44 @@ instance Pretty SurfaceName where
 -- Basically, the method pretty-print names as the original without additional
 -- information introduced in the system.
 instance Pretty Name where
-  ppr (Generated i p) = text "_" <> text (case p of Desugaring -> "d"; REPL -> "r") <> ppr i
+  ppr (Generated i p) = text "_" <> text (case p of Desugaring -> "d"; REPL -> "r"; TypeChecking -> "t") <> ppr i
   ppr (Alpha _i n) = ppr n
   ppr (Local n) = ppr n
   ppr (Original _ _ o) = ppr o
 
 moduleNameToStr :: ModuleName -> String
 moduleNameToStr (ModuleName ms) = ms
+
+-- Names generated for type classes
+
+-- | A 'System' name made from the base of a top-level name, in its module.
+systemNameAt :: String -> (NameBase -> SystemName) -> Name -> Name
+systemNameAt _ f (Original m base _) = let s = System (f base) in Original m s (Bare s)
+systemNameAt what _ n = error $ "Cannot happen: " ++ what ++ " must be a top-level name: " ++ show n
+
+-- | The dictionary constructor of a class.
+dictName :: Name -> Name
+dictName = systemNameAt "a class" NDict
+
+-- | The projection of the i-th superclass dictionary of a class.
+superProjName :: Name -> Int -> Name
+superProjName c i = systemNameAt "a class" (`NSuperProj` i) c
+
+-- | The default implementation of a method.
+defaultName :: Name -> Name
+defaultName = systemNameAt "a method" NDefault
+
+isDictName :: Name -> Bool
+isDictName (Original _ (System (NDict _)) _) = True
+isDictName _ = False
+
+isSuperProjName :: Name -> Bool
+isSuperProjName (Original _ (System (NSuperProj _ _)) _) = True
+isSuperProjName _ = False
+
+isDefaultName :: Name -> Bool
+isDefaultName (Original _ (System (NDefault _)) _) = True
+isDefaultName _ = False
 
 -- data QName = QName ModuleName Name -- qualified name (for global names)
 --            | BName Name            -- bare name
@@ -202,14 +245,14 @@ nameTyList = nameInBase (User "List")
 -- nameTyLArr :: Name
 -- nameTyLArr = nameInBase (System NLinearArrow)
 
-nameTyArr :: Name
-nameTyArr = nameInBase (System NArrow)
-
 nameKiArr :: Name
 nameKiArr = nameInBase (System KArrow)
 
+nameSort :: Name
+nameSort = nameInBase (System KSort)
+
 nameKindType :: Name
-nameKindType = nameInBase (User "Type")
+nameKindType = Original baseModule (User "Type") (Bare (User "Type"))
 
 nameKindMultiplicity :: Name
-nameKindMultiplicity = nameInBase (User "Multiplicity")
+nameKindMultiplicity = Original baseModule (User "Multiplicity") (Bare (User "Multiplicity"))

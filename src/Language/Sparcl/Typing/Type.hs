@@ -48,12 +48,18 @@ newtype IcLevel = IcLevel Int
   deriving newtype (Show, Pretty)
 
 data Ty
-  = -- | Type constructor
-    TyCon !Name ![Ty]
+  = -- | Type constructor (unapplied)
+    TyConst !Name
   | -- | Type variable
     TyVar !TyVar
   | -- | Metavariables (to be substituted in type inf.)
     TyMetaV !MetaTyVar
+  | -- | Application
+    TyApp !Ty !Ty
+  | -- | Function type @a # m -> b@
+    TyFun !MultTy !Ty !Ty
+  | -- | Instance-argument function type @{{c}} -> t@ (always unrestricted)
+    TyInstFun !Ty !Ty
   | -- | polymorphic types
     TyForAll ![TyVar] !QualTy
   | -- | type synonym (@TySym o u@ means @u@ but @o@ will be used for error messages)
@@ -62,10 +68,23 @@ data Ty
     TyMult !Multiplicity
   deriving (Eq, Ord, Show)
 
-pattern FunTy :: MultTy -> MonoTy -> MonoTy -> MonoTy
-pattern FunTy m argTy resTy <- TyCon ((== nameTyArr) -> True) [m, argTy, resTy]
+-- | A type constructor applied to arguments (possibly none or partially).
+pattern TyCon :: Name -> [Ty] -> Ty
+pattern TyCon c ts <- (splitTyCon -> Just (c, ts))
   where
-    FunTy m argTy resTy = TyCon nameTyArr [m, argTy, resTy]
+    TyCon c ts = foldl TyApp (TyConst c) ts
+
+splitTyCon :: Ty -> Maybe (Name, [Ty])
+splitTyCon t = case splitTyApp t of
+  (TyConst c, ts) -> Just (c, ts)
+  _ -> Nothing
+
+-- | @splitTyApp (h t1 ... tn) = (h, [t1, ..., tn])@.
+splitTyApp :: Ty -> (Ty, [Ty])
+splitTyApp = go []
+  where
+    go acc (TyApp t1 t2) = go (t2 : acc) t1
+    go acc t = (t, acc)
 
 isMonoTy :: Ty -> Bool
 isMonoTy = isJust . testMonoTy
@@ -110,7 +129,7 @@ instance Pretty ConTy where
 
 conTy2Ty :: ConTy -> Ty
 conTy2Ty (ConTy xs ys q argTy retTy) =
-  let t = foldr (\(s, m) r -> TyCon nameTyArr [m, s, r]) retTy argTy
+  let t = foldr (\(s, m) r -> TyFun m s r) retTy argTy
   in  TyForAll (xs ++ ys) (TyQual q t)
 
 instance MultiplicityLike Ty where
@@ -126,30 +145,39 @@ data TyConstraint
   | TyEq !Ty !Ty
   deriving (Eq, Ord, Show)
 
+type Kind = Ty
+
 data TyVar
-  = BoundTv !Name
+  = BoundTv !Name !Kind
   | SkolemTv !TyVar !Int !IcLevel
   -- used for checking of which type is more general.
   deriving Show
 
 instance Eq TyVar where
-  BoundTv n == BoundTv m = n == m
+  BoundTv n _ == BoundTv m _ = n == m
   SkolemTv _ i _ == SkolemTv _ j _ = i == j
   _ == _ = False
 
 instance Ord TyVar where
-  BoundTv n <= BoundTv m = n <= m
-  BoundTv _ <= _ = True
-  SkolemTv _ _ _ <= BoundTv _ = False
+  BoundTv n _ <= BoundTv m _ = n <= m
+  BoundTv _ _ <= _ = True
+  SkolemTv _ _ _ <= BoundTv _ _ = False
   SkolemTv _ i _ <= SkolemTv _ j _ = i <= j
 
+tyVarKind :: TyVar -> Kind
+tyVarKind (BoundTv _ k) = k
+tyVarKind (SkolemTv v _ _) = tyVarKind v
+
 instance Pretty TyVar where
-  ppr (BoundTv n) = ppr n
+  ppr (BoundTv n _) = ppr n
   ppr (SkolemTv n i lv) = ppr n D.<> D.text "_" D.<> ppr i D.<> D.text "@" D.<> ppr lv
 
 instance FreeTyVars Ty TyVar where
   -- Assumption: the input is already zonked.
-  foldMapVars f b (TyCon _ ts) = foldMapVars f b ts
+  foldMapVars _ _ (TyConst _) = mempty
+  foldMapVars f b (TyApp t1 t2) = foldMapVars f b t1 <> foldMapVars f b t2
+  foldMapVars f b (TyFun m t1 t2) = foldMapVars f b m <> foldMapVars f b t1 <> foldMapVars f b t2
+  foldMapVars f b (TyInstFun c t) = foldMapVars f b c <> foldMapVars f b t
   foldMapVars f _ (TyVar x) = f x
   foldMapVars _ _ (TyMetaV _) = mempty
   foldMapVars f b (TyForAll xs t) =
@@ -182,7 +210,10 @@ capLevel n = go
     goC (MSub t ts) = MSub <$> go t <*> traverse go ts
     goC (TyEq t1 t2) = TyEq <$> go t1 <*> go t2
 
-    go (TyCon c ts) = TyCon c <$> traverse go ts
+    go (TyConst c) = return $ TyConst c
+    go (TyApp t1 t2) = TyApp <$> go t1 <*> go t2
+    go (TyFun m t1 t2) = TyFun <$> go m <*> go t1 <*> go t2
+    go (TyInstFun c t) = TyInstFun <$> go c <*> go t
     go (TyVar x) = return $ TyVar x
     go (TyMetaV mv) = do
       lv <- readTcLevelMv mv
@@ -203,15 +234,24 @@ instance Pretty Ty where
         parensIf (k > 1) $ D.text "!" D.<> pprPrec 1 t
     | c == nameTyRev =
         parensIf (k > 1) $ D.text "rev" D.<+> pprPrec 2 t
-  pprPrec _ (TyCon c []) = ppr c
-  pprPrec k (TyCon c [m, a, b]) | c == nameTyArr = parensIf (k > 0) $
+  pprPrec k (TyCon c [k1, k2])
+    | c == nameKiArr =
+        parensIf (k > 0) $ pprPrec 1 k1 D.<+> D.text "->" D.<+> pprPrec 0 k2
+  pprPrec _ (TyConst c)
+    | c == nameTyRev = D.text "rev"
+    | otherwise = ppr c
+  pprPrec k (TyCon c ts) =
+    parensIf (k > 1) $
+      ppr c D.<+> D.align (D.hsep (map (pprPrec 2) ts))
+  pprPrec k (TyApp t1 t2) =
+    parensIf (k > 1) $ pprPrec 1 t1 D.<+> pprPrec 2 t2
+  pprPrec k (TyFun m a b) = parensIf (k > 0) $
     case m of
       TyMult One -> D.group (D.align (pprPrec 1 a) D.<$> D.text "-o" D.<+> pprPrec 0 b)
       TyMult Omega -> D.group (D.align (pprPrec 1 a) D.<$> D.text "->" D.<+> pprPrec 0 b)
       _ -> D.group (D.align (pprPrec 1 a) <+> D.text "#" <+> pprPrec 0 m D.<$> text "->" <+> pprPrec 0 b)
-  pprPrec k (TyCon c ts) =
-    parensIf (k > 1) $
-      ppr c D.<+> D.align (D.hsep (map (pprPrec 2) ts))
+  pprPrec k (TyInstFun cl b) = parensIf (k > 0) $
+    D.group (D.text "{{" <> pprPrec 0 cl <> D.text "}}" D.<$> D.text "->" D.<+> pprPrec 0 b)
   pprPrec _ (TyVar x) = ppr x
   pprPrec _ (TyMetaV m) = ppr m
   pprPrec k (TyForAll [] t) = pprPrec k t
@@ -251,12 +291,14 @@ data MetaTyVar = MetaTyVar
   , metaRef :: !TyRef
   , metaTcLevelRef :: !(IORef TcLevel)
   , metaIcLevel :: !IcLevel
+  , metaKind :: !Kind
+  -- ^ 'sortKi' for kind metas
   }
 
 type TyRef = IORef (Maybe MonoTy)
 
 instance Pretty MetaTyVar where
-  ppr (MetaTyVar i _ r ic) =
+  ppr (MetaTyVar i _ r ic _) =
     let l = unsafePerformIO (readIORef r)
     in  D.text $ "_" ++ show i ++ "[" ++ show l ++ "]@" ++ show ic
 
@@ -278,8 +320,10 @@ type MultTy = Ty
 substTy :: [(TyVar, Ty)] -> Ty -> Ty
 substTy tbl ty = case ty of
   TyVar n -> fromMaybe ty (Prelude.lookup n tbl)
-  TyCon c ts ->
-    TyCon c $ map (substTy tbl) ts
+  TyConst c -> TyConst c
+  TyApp t1 t2 -> TyApp (substTy tbl t1) (substTy tbl t2)
+  TyFun m t1 t2 -> TyFun (substTy tbl m) (substTy tbl t1) (substTy tbl t2)
+  TyInstFun c t -> TyInstFun (substTy tbl c) (substTy tbl t)
   TyMetaV m -> TyMetaV m
   TyForAll ns t ->
     let tbl' = filter (not . (`elem` ns) . fst) tbl
@@ -308,7 +352,10 @@ consec2simulMeta ((x, t) : xts) =
 substTyMeta :: [(MetaTyVar, Ty)] -> Ty -> Ty
 substTyMeta tbl ty = case ty of
   TyVar n -> TyVar n
-  TyCon c ts -> TyCon c (map (substTyMeta tbl) ts)
+  TyConst c -> TyConst c
+  TyApp t1 t2 -> TyApp (substTyMeta tbl t1) (substTyMeta tbl t2)
+  TyFun m t1 t2 -> TyFun (substTyMeta tbl m) (substTyMeta tbl t1) (substTyMeta tbl t2)
+  TyInstFun c t -> TyInstFun (substTyMeta tbl c) (substTyMeta tbl t)
   TyMetaV m -> fromMaybe ty (Prelude.lookup m tbl)
   TyForAll ns t -> TyForAll ns (substTyMetaQ tbl t)
   TySyn _ uTy -> substTyMeta tbl uTy
@@ -341,11 +388,15 @@ instance MetaTyVars MetaTyVar where
   metaTyVarsGen f = f
 
 instance MetaTyVars Ty where
-  metaTyVarsGen f (TyCon _ ts) = metaTyVarsGen f ts
+  metaTyVarsGen f (TyApp t1 t2) = metaTyVarsGen f (t1, t2)
+  metaTyVarsGen f (TyFun m t1 t2) = metaTyVarsGen f (m, t1, t2)
+  metaTyVarsGen f (TyInstFun c t) = metaTyVarsGen f (c, t)
   metaTyVarsGen f (TySyn _ t) = metaTyVarsGen f t
   metaTyVarsGen f (TyForAll _ t) = metaTyVarsGen f t
   metaTyVarsGen f (TyMetaV mv) = f mv
-  metaTyVarsGen _ _ = mempty
+  metaTyVarsGen _ (TyConst _) = mempty
+  metaTyVarsGen _ (TyVar _) = mempty
+  metaTyVarsGen _ (TyMult _) = mempty
 
 instance MetaTyVars QualTy where
   metaTyVarsGen f (TyQual q t) = metaTyVarsGen f (q, t)
@@ -364,12 +415,10 @@ revTy :: Ty -> Ty
 revTy ty = TyCon nameTyRev [ty]
 
 (-@) :: Ty -> Ty -> Ty
-t1 -@ t2 = TyCon nameTyArr [TyMult One, t1, t2]
+t1 -@ t2 = TyFun (TyMult One) t1 t2
 
 pattern (:-@) :: Ty -> Ty -> Ty
-pattern t1 :-@ t2 <- TyCon ((== nameTyArr) -> True) [TyMult One, t1, t2]
-  where
-    t1 :-@ t2 = TyCon nameTyArr [TyMult One, t1, t2]
+pattern t1 :-@ t2 = TyFun (TyMult One) t1 t2
 
 boolTy :: Ty
 boolTy = TyCon nameTyBool []
@@ -380,17 +429,70 @@ charTy = TyCon nameTyChar []
 tupleTy :: [Ty] -> Ty
 tupleTy ts = TyCon (nameTyTuple $ length ts) ts
 
-typeKi :: Ty
-typeKi = TyCon nameKindType []
+typeKi :: Kind
+typeKi = TyConst nameKindType
 
-arrKi :: Ty -> Ty -> Ty
+multKi :: Kind
+multKi = TyConst nameKindMultiplicity
+
+arrKi :: Kind -> Kind -> Kind
 arrKi k1 k2 = TyCon nameKiArr [k1, k2]
+
+-- | The marker kept as the 'metaKind' of kind metas.
+sortKi :: Ty
+sortKi = TyConst nameSort
+
+kindOfName :: TypeTable -> Name -> Maybe Kind
+kindOfName tbl c = case c of
+  Original _ (System (NTuple n)) _ -> Just (tupleKi n)
+  Original _ (System (NWTuple n)) _ -> Just (tupleKi n)
+  _ -> M.lookup c tbl
+  where
+    tupleKi n = foldr arrKi typeKi (replicate n typeKi)
+
+tyConNames :: Ty -> S.Set Name
+tyConNames = go
+  where
+    go (TyConst c) = S.singleton c
+    go (TyVar _) = S.empty
+    go (TyMetaV _) = S.empty
+    go (TyApp t1 t2) = go t1 <> go t2
+    go (TyFun m t1 t2) = go m <> go t1 <> go t2
+    go (TyInstFun c t) = go c <> go t
+    go (TyForAll _ (TyQual cs t)) = foldMap goC cs <> go t
+    go (TySyn o u) = go o <> go u
+    go (TyMult _) = S.empty
+    goC (MSub t ts) = foldMap go (t : ts)
+    goC (TyEq t1 t2) = go t1 <> go t2
+
+-- | Replaces the kind metas left in a zonked kind by @Type@.
+defaultKind :: Kind -> Kind
+defaultKind (TyMetaV _) = typeKi
+defaultKind (TyApp k1 k2) = TyApp (defaultKind k1) (defaultKind k2)
+defaultKind k = k
+
+-- | The kind of a well-kinded type-level expression.
+kindOf :: TypeTable -> Ty -> Kind
+kindOf tbl = go
+  where
+    go (TyConst c) =
+      fromMaybe (error $ "kindOf: no kind for " ++ show c) (kindOfName tbl c)
+    go (TyVar x) = tyVarKind x
+    go (TyMetaV m) = metaKind m
+    go (TyApp t1 _) = case go t1 of
+      TyCon a [_, k2] | a == nameKiArr -> k2
+      _ -> error "kindOf: applying a type-level expression of a non-arrow kind"
+    go (TyFun {}) = typeKi
+    go (TyInstFun {}) = typeKi
+    go (TyForAll {}) = typeKi
+    go (TySyn _ t) = go t
+    go (TyMult _) = multKi
 
 infixr 4 -@
 infixr 4 :-@
 
 (*->) :: Ty -> Ty -> Ty
-a *-> b = TyCon nameTyArr [TyMult Omega, a, b]
+a *-> b = TyFun (TyMult Omega) a b
 infixr 4 *->
 
 (*-@) :: Ty -> Ty -> Ty
@@ -398,7 +500,7 @@ a *-@ b = a -@ b
 infixr 4 *-@
 
 tyarr :: MultTy -> Ty -> Ty -> Ty
-tyarr m a b = TyCon nameTyArr [m, a, b]
+tyarr m a b = TyFun m a b
 
 type TypeTable = M.Map Name Ty
 type CTypeTable = M.Map Name ConTy

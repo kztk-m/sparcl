@@ -1,0 +1,5 @@
+-- A type variable used as a multiplicity (# p) cannot be the head of an
+-- application (p Int): a kind error.
+
+sig h : Int # p -> p Int
+def h x = x

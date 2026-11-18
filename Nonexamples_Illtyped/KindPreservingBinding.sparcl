@@ -1,0 +1,14 @@
+-- In g, f has kind (Type -> Type) -> Type (from f List), so f a cannot be
+-- Maybe Int: that would need f to be Maybe, of kind Type -> Type.
+
+data List a = Nil | Cons a (List a)
+
+data Maybe a = Nothing | Just a
+
+sig g : f a -> f List -> Int
+def g _ _ = 0
+
+sig mi : Maybe Int
+def mi = Just 1
+
+def bad = g mi

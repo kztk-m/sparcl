@@ -21,7 +21,7 @@ import           Data.Void
 import           Data.Graph                     as G
 import           Data.List                      (partition)
 
-import           Control.Monad                  (when, unless, forM, liftM2)
+import           Control.Monad                  (when, unless, forM, forM_, zipWithM)
 import           Control.Monad.Except
 import           Control.Monad.Reader
 import           Control.Monad.State
@@ -128,17 +128,21 @@ renameExp level localnames (Loc loc expr) = first (Loc loc) <$> go expr
 
     go (Lit l) = return (Lit l, S.empty)
 
-    go (App e1 e2) = do
+    go (App e1 a2) = do
       (e1', fv1) <- renameExp level localnames e1
-      (e2', fv2) <- renameExp level localnames e2
-      return (App e1' e2', S.union fv1 fv2)
+      (e2', fv2) <- renameExp level localnames (argExp a2)
+      return (App e1' (mapArg (const e2') a2), S.union fv1 fv2)
 
-    go (Abs ps e) =
+    go (InstHole v _ _) = absurd v
+
+    go (Abs ps e) = do
+      mapM_ checkInstPatArg ps
       renamePats level localnames S.empty ps $ \ps' level' localnames' bvP -> do
         (e', fv) <- renameExp level' localnames' e
         return (Abs ps' e', fv S.\\ bvP)
 
     go (Let1 p e1 e2) = do
+      checkNoInstPat p
       (e1', fv1) <- renameExp level localnames e1
       (p', e2', fv2) <- renamePat level localnames S.empty p $ \p' level' localnames' bvP -> do
         (e' , fv) <- renameExp level' localnames' e2
@@ -178,7 +182,7 @@ renameExp level localnames (Loc loc expr) = first (Loc loc) <$> go expr
       (e', fvE) <- renameExp level localnames e
       return (Parens e', fvE)
 
-    go (Op n e1 e2) = do
+    go (Op () n e1 e2) = do
       n' <- resolveName loc localnames n
       (e', fv) <- rearrangeOp loc level localnames n' e1 e2 -- adding n' to fv is responsibility of rearrangeOp
       return (unLoc e', fv)
@@ -203,6 +207,7 @@ renameExp level localnames (Loc loc expr) = first (Loc loc) <$> go expr
       (er', fvs) <- renameExp lv lns er
       return ([], er', fvs)
     goAs lv lns ((p,e):as) er = do
+      checkNoInstPat p
       (e', fvs1) <- renameExp lv lns e
       renamePat lv lns S.empty p $ \p' lv' lns' bvs' -> do
         (as', er', fvs2) <- goAs lv' lns' as er
@@ -249,7 +254,7 @@ rearrangeOp loc level localnames op exp1 exp2 = do
   (exp' , fv)  <- go loc exp1 op exp2'
   return (exp', S.union fv fv2)
     where
-      go l2 (Loc l1 (Op op1 e1 e2)) op2' e3' = do
+      go l2 (Loc l1 (Op () op1 e1 e2)) op2' e3' = do
         op1' <- resolveName loc localnames op1
         (k1, a1) <- lookupFixity op1'
         (k2, a2) <- lookupFixity op2'
@@ -274,13 +279,14 @@ rearrangeOp loc level localnames op exp1 exp2 = do
         (e1', fv1) <- renameExp level localnames e1
         return (opExp l op' e1' e2' , S.insert op' fv1)
 
-      opExp l opName e1 e2 = Loc l (Op opName e1 e2)
+      opExp l opName e1 e2 = Loc l (Op () opName e1 e2)
 
 
 
 renameAlt :: DBLevel -> LocalNames -> (LPat 'Parsing, Clause 'Parsing)
              -> Renaming ((LPat 'Renaming, Clause 'Renaming), FreeVars)
 renameAlt level localnames (p, c) = do
+  checkNoInstPat p
   when (not (hasRev $ unLoc p) && hasWith c) $
     throwError (location p, text "Unidirectional patterns cannot have `with'-clause")
   renamePat level localnames S.empty p $ \p' level' localnames' bvP -> do
@@ -330,18 +336,9 @@ renameLocalDeclsWork level' localnames currnames (Decls _ decls) cont = do
 
 
   deffvs <- forM defs $ \(loc, n, pcs) -> local (\c -> c { rnOpTable = M.union localOpTable (rnOpTable c) }) $ do
-    unless (checkEqualLengths (map fst pcs)) $
-      throwError (loc, text "Function" <+> ppr n <+> text "has different numbers of arguments.")
-
     let Just n' = M.lookup n currnames -- must succeed
-    (pcs', fvs) <- fmap unzip $ forM pcs $ \(ps, c) -> do
-      when (all (not . hasRev . unLoc) ps && hasWith c) $
-        throwError (loc, text "Unidirectional patterns cannot have `with'-clause")
-      renamePats level' localnames' S.empty ps $ \ps' level'' localnames'' fvP -> do
-        (c', fvc) <- renameClause level'' localnames'' c
-        return ((ps',c'), fvc S.\\ fvP)
-
-    return (Loc loc (DDef n' pcs'), S.unions fvs)
+    (pcs', fvs) <- renameDefClauses level' localnames' loc n pcs
+    return (Loc loc (DDef n' pcs'), fvs)
 
   let defss = insertSigs sigs' $ stratify deffvs
 
@@ -365,10 +362,54 @@ renameLocalDeclsWork level' localnames currnames (Decls _ decls) cont = do
 
         graph = [ (decl, n, S.toList fv) | (decl@(Loc _ (DDef n _)), fv) <- deffvs ]
 
+renameDefClauses :: DBLevel -> LocalNames -> SrcSpan -> NameBase -> [([LPat 'Parsing], Clause 'Parsing)]
+                    -> Renaming ([([LPat 'Renaming], Clause 'Renaming)], FreeVars)
+renameDefClauses level localnames loc n pcs = do
+    unless (checkEqualLengths (map fst pcs)) $
+      throwError (loc, text "Function" <+> ppr n <+> text "has different numbers of arguments.")
+    mapM_ checkInstPatArg (concatMap fst pcs)
+    unless (checkSameInstPositions (map fst pcs)) $
+      throwError (loc, text "Function" <+> ppr n <+> text "has instance patterns {{...}} at different argument positions.")
+
+    (pcs', fvs) <- fmap unzip $ forM pcs $ \(ps, c) -> do
+      when (all (not . hasRev . unLoc) ps && hasWith c) $
+        throwError (loc, text "Unidirectional patterns cannot have `with'-clause")
+      renamePats level localnames S.empty ps $ \ps' level' localnames' fvP -> do
+        (c', fvc) <- renameClause level' localnames' c
+        return ((ps',c'), fvc S.\\ fvP)
+
+    return (pcs', S.unions fvs)
+  where
     checkEqualLengths :: [[a]] -> Bool
     checkEqualLengths pss =
       let rs = map length pss
       in and $ zipWith (==) rs (tail rs)
+
+    checkSameInstPositions :: [[LPat 'Parsing]] -> Bool
+    checkSameInstPositions pss =
+      let rs = map (map isInstPat) pss
+      in and $ zipWith (==) rs (tail rs)
+
+    isInstPat (Loc _ (PInst _)) = True
+    isInstPat _                 = False
+
+
+-- | Checks an argument pattern, which may be an instance pattern @{{x}}@ or @{{_}}@.
+checkInstPatArg :: LPat 'Parsing -> Renaming ()
+checkInstPatArg (Loc loc (PInst p)) =
+  case unLoc p of
+    PVar _  -> return ()
+    PWild _ -> return ()
+    _       -> throwError (loc, text "An instance pattern {{...}} can only bind a variable or _.")
+checkInstPatArg p = checkNoInstPat p
+
+checkNoInstPat :: LPat 'Parsing -> Renaming ()
+checkNoInstPat (Loc loc pat) =
+  case pat of
+    PInst _   -> throwError (loc, text "An instance pattern {{...}} can only appear as an argument pattern of a function.")
+    PCon _ ps -> mapM_ checkNoInstPat ps
+    PREV p    -> checkNoInstPat p
+    _         -> return ()
 
 
 hasRev :: Pat p -> Bool
@@ -376,6 +417,7 @@ hasRev (PVar _)    = False
 hasRev (PREV _)    = True
 hasRev (PCon _ ps) = any (hasRev . unLoc) ps
 hasRev (PWild _)   = False
+hasRev (PInst p)   = hasRev (unLoc p)
 
 hasWith :: Clause p -> Bool
 hasWith (Clause _ _ (Just _)) = True
@@ -401,8 +443,10 @@ renameLocalDecls level localnames ds@(Decls _ decls) cont = do
 renameTopDecls ::
   ModuleName -> Decls 'Parsing (Loc (TopDecl 'Parsing))
   -> Renaming (Decls 'Renaming (Loc (Decl 'Renaming)),
-               [Loc (Name, [Name], [Loc (CDecl 'Renaming)])],
-               [Loc (Name, [Name], LTy 'Renaming)],
+               [Loc (Name, [TyBinder 'Renaming], [Loc (CDecl 'Renaming)])],
+               [Loc (Name, [TyBinder 'Renaming], LTy 'Renaming)],
+               [Loc ClassDeclR],
+               [Loc InstDeclR],
                BoundVars,
                OpTable)
 renameTopDecls _ (HDecls v _) = absurd v
@@ -410,21 +454,44 @@ renameTopDecls currentModule (Decls _ topdecls) = do
   let decls = [ Loc loc d | Loc loc (DDecl d) <- topdecls ]
   let defs = [ (loc, unBare n, pcs)  | Loc loc (DDef n pcs) <- decls ]
 
-  let dataDecls = [ (loc, unBare n, map unBare ns, cds) |
-                    Loc loc (DData n ns cds) <- topdecls ]
-  let typeDecls = [ (loc, unBare n, map unBare ns, ty) | Loc loc (DType n ns ty) <- topdecls ]
+  let dataDecls = [ (loc, unBare n, bs, cds) |
+                    Loc loc (DData n bs cds) <- topdecls ]
+  let typeDecls = [ (loc, unBare n, bs, ty) | Loc loc (DType n bs ty) <- topdecls ]
+
+  let classDecls = [ (loc, unBare c, xs, sups, declList cds) |
+                     Loc loc (DClass c xs sups cds) <- topdecls ]
+  let instDecls = [ (loc, maybe (System (NInstance k)) unBare mx, ty, declList ids) |
+                    (k, Loc loc (DInst mx ty ids)) <- zip [0..] [ d | d@(Loc _ DInst {}) <- topdecls ] ]
 
   let ns  = [ n | (_, n, _) <- defs ]
 
+  let methods = [ (l, unBare n) | (_, _, _, _, cds) <- classDecls, Loc l (DSig n _) <- cds ]
+  let namedInsts = [ (loc, unBare x) | Loc loc (DInst (Just x) _ _) <- topdecls ]
+
   let conName (NormalC c _)      = c
-      conName (GeneralC c _ _ _) = c
+      conName (GeneralC c _) = c
   let names = ns
               ++ [ n | (_, n, _, _) <- dataDecls ]
               ++ [ unBare n | (_, _, _, cds) <- dataDecls, n <- map (conName . unLoc) cds ]
               ++ [ n | (_, n, _, _) <- typeDecls ]
+              ++ [ c | (_, c, _, _, _) <- classDecls ]
+              ++ map snd methods
+              ++ [ n | (_, n, _, _) <- instDecls ]
   -- FIXME: check there is no overlaps in names.
+  -- For now, only methods and named instances are checked.
+  let valueNames = [ (loc, n) | (loc, n, _) <- defs ] ++ methods ++ namedInsts
+  forM_ (methods ++ namedInsts) $ \(loc, n) ->
+    when (length (filter ((== n) . snd) valueNames) > 1) $
+      throwError (loc, text "Duplicate definition of" <+> ppr n)
 
-  let toOrig n = Original currentModule n (Bare n)
+  -- fixity declarations in class bodies
+  classOpTable <- fmap (M.fromList . concat) $ forM classDecls $ \(_, c, _, _, cds) -> do
+    let ms = [ unBare n | Loc _ (DSig n _) <- cds ]
+    forM [ (l, unBare n, p, a) | Loc l (DFixity n p a) <- cds ] $ \(l, n, p, a) -> do
+      unless (n `elem` ms) $
+        throwError (l, text "Fixity declaration in class" <+> ppr c <+> text "is allowed only for its methods:" <+> ppr n)
+      return (toOrig n, (p, a))
+
   let nameTbl =
         M.fromListWith S.union $
           [ (Bare n, S.singleton (currentModule, n)) | n <- names ]
@@ -436,37 +503,105 @@ renameTopDecls currentModule (Decls _ topdecls) = do
   let currnames = foldr (uncurry M.insert) M.empty $ zip ns ns'
 
 
-  local (\rnEnv -> rnEnv { rnNameTable = M.unionWith S.union nameTbl (rnNameTable rnEnv) }) $ do
-    typeDecls' <- forM typeDecls $ \(loc, n, tyns, ty) -> do
+  local (\rnEnv -> rnEnv { rnNameTable = M.unionWith S.union nameTbl (rnNameTable rnEnv),
+                           rnOpTable   = M.union classOpTable (rnOpTable rnEnv) }) $ do
+    typeDecls' <- forM typeDecls $ \(loc, n, bs, ty) -> do
+      let tyns  = binderBases bs
       let tyns' = zipWith Alpha [0..] tyns
       ty' <- renameTy (length tyns) (M.fromList $ zip tyns tyns') ty
-      return $ Loc loc (toOrig n, tyns', ty')
+      bs' <- renameTyBinders bs tyns'
+      return $ Loc loc (toOrig n, bs', ty')
 
-    dataDecls' <- forM dataDecls $ \(loc, n, tyns, cdecls) -> do
+    dataDecls' <- forM dataDecls $ \(loc, n, bs, cdecls) -> do
+      let tyns  = binderBases bs
       let tyns' = zipWith Alpha [0..] tyns
+      bs' <- renameTyBinders bs tyns'
       let nm = M.fromList $ zip tyns tyns'
       cdecls' <- forM cdecls $ \case
         (Loc cloc (NormalC c tys)) -> do
           tys' <- mapM (renameTy (length tyns) nm) tys
           return $ Loc cloc (NormalC (toOrig $ unBare c) tys')
-        (Loc cloc (GeneralC c xs q ts)) -> do
-          let xs' = zipWith Alpha [length tyns..] $ map unBare xs
-          let lv  = length tyns + length xs
-          let nm' = foldr (uncurry M.insert) nm $ zip (map unBare xs) xs'
-          q'  <- mapM (renameTyC lv nm') q
-          ts' <- mapM (\(m,t) -> do
-                          m' <- renameTy lv nm' m
-                          t' <- renameTy lv nm' t
-                          return (m', t')) ts
-          return $ Loc cloc $ GeneralC (toOrig $ unBare c) xs' q' ts'
-      return $ Loc loc (toOrig n, tyns', cdecls')
+        (Loc cloc (GeneralC c ty)) -> do
+          ty' <- renameTy (length tyns) nm ty
+          return $ Loc cloc $ GeneralC (toOrig $ unBare c) ty'
+      return $ Loc loc (toOrig n, bs', cdecls')
 
     renameLocalDeclsWork level' M.empty currnames (Decls () decls) $ \ds' _ _ _boundVars _ opTable ->
-      return (ds',
-              dataDecls',
-              typeDecls',
-              S.fromList $ map toOrig names,
-              opTable)
+      local (\rnEnv -> rnEnv { rnOpTable = M.union opTable (rnOpTable rnEnv) }) $ do
+        classDecls' <- mapM renameClassDecl classDecls
+        instDecls'  <- mapM renameInstDecl instDecls
+        return (ds',
+                dataDecls',
+                typeDecls',
+                classDecls',
+                instDecls',
+                S.fromList $ map toOrig names,
+                M.union opTable classOpTable)
+  where
+    toOrig n = Original currentModule n (Bare n)
+
+    declList (Decls _ ds)  = ds
+    declList (HDecls v _) = absurd v
+
+    renameClassDecl (loc, c, bs, sups, cds) = do
+      let xs  = binderBases bs
+      let xs' = zipWith Alpha [0..] xs
+      bs' <- renameTyBinders bs xs'
+      let lv  = length xs
+      let nm  = M.fromList $ zip xs xs'
+
+      sups' <- forM sups $ renameTy lv nm
+
+      let sigs = [ (l, unBare n, t) | Loc l (DSig n t) <- cds ]
+      let ms   = [ n | (_, n, _) <- sigs ]
+      sigs' <- forM sigs $ \(l, n, t) -> do
+        t' <- renameTy lv nm t
+        return $ Loc l (toOrig n, t')
+
+      -- default methods
+      let dms = [ (l, unBare n, pcs) | Loc l (DDef n pcs) <- cds ]
+      dms' <- forM dms $ \(l, n, pcs) -> do
+        unless (n `elem` ms) $
+          throwError (l, text "Default method" <+> ppr n <+> text "is not a method of class" <+> ppr c)
+        when (length (filter (\(_, n', _) -> n' == n) dms) > 1) $
+          throwError (l, text "Duplicate default method" <+> ppr n <+> text "in class" <+> ppr c)
+        (pcs', _) <- renameDefClauses 0 M.empty l n pcs
+        return $ Loc l (DDef (toOrig n) pcs')
+
+      return $ Loc loc (toOrig c, bs', sups', sigs', dms')
+
+    renameInstDecl (loc, n, ty, ids) = do
+      ty' <- renameTy 0 M.empty ty
+
+      forM_ ids $ \case
+        Loc l (DSig _ _) ->
+          throwError (l, text "A signature declaration is not allowed in an instance declaration.")
+        Loc l DFixity {} ->
+          throwError (l, text "A fixity declaration is not allowed in an instance declaration.")
+        _ -> return ()
+
+      let ims = [ (l, unBare m, pcs) | Loc l (DDef m pcs) <- ids ]
+      ims' <- forM ims $ \(l, m, pcs) -> do
+        when (length (filter (\(_, m', _) -> m' == m) ims) > 1) $
+          throwError (l, text "Duplicate definition of method" <+> ppr m <+> text "in an instance declaration.")
+        m' <- resolveName l M.empty (Bare m)
+        (pcs', _) <- renameDefClauses 0 M.empty l m pcs
+        return $ Loc l (DDef m' pcs')
+
+      return $ Loc loc (toOrig n, ty', ims')
+
+-- | Renamed class: name, parameters, superclasses, method sigs, default methods.
+type ClassDeclR = (Name, [TyBinder 'Renaming], [LTy 'Renaming], [Loc (Name, LTy 'Renaming)], [LDecl 'Renaming])
+
+binderBases :: [TyBinder 'Parsing] -> [NameBase]
+binderBases = map (unBare . tyBinderName)
+
+renameTyBinders :: [TyBinder 'Parsing] -> [Name] -> Renaming [TyBinder 'Renaming]
+renameTyBinders = zipWithM $ \(TyBinder _ mk) n' -> TyBinder n' <$> traverse (renameTy 0 M.empty) mk
+
+-- | Renamed instance: name (generated if omitted), type, method definitions.
+type InstDeclR = (Name, LTy 'Renaming, [LDecl 'Renaming])
+
 
   -- where
   --   mapDecls f (Decls i ds)   = Decls  i (map f ds)
@@ -500,16 +635,39 @@ renameTy level localnames lty = go level localnames lty (\lty' _ _ -> return lty
         Just n  -> k (TVar n) lv nm
         Nothing -> throwError (loc, text "Unbound type variable:" <+> ppr x)
 
-    go' lv nm loc (TCon c ts) k = do
+    go' lv nm loc (TCon c) k = do
       c' <- resolveImportedName loc c
-      gos lv nm ts $ \ts' lv' nm' ->
-        k (TCon c' ts') lv' nm'
+      k (TCon c') lv nm
 
-    go' lv nm _loc (TForall x t) k = do
+    go' lv nm _loc (TApp t1 t2) k =
+      go lv  nm  t1 $ \t1' lv1 nm1 ->
+      go lv1 nm1 t2 $ \t2' lv2 nm2 ->
+      k (TApp t1' t2') lv2 nm2
+
+    go' lv nm _loc (TParens t) k =
+      go lv nm t $ \t' lv' nm' -> k (TParens t') lv' nm'
+
+    go' lv nm _loc (TArr m t1 t2) k =
+      go lv  nm  m  $ \m'  lv1 nm1 ->
+      go lv1 nm1 t1 $ \t1' lv2 nm2 ->
+      go lv2 nm2 t2 $ \t2' lv3 nm3 ->
+      k (TArr m' t1' t2') lv3 nm3
+
+    go' lv nm _loc (TInstArr c t) k =
+      go lv  nm  c $ \c' lv1 nm1 ->
+      go lv1 nm1 t $ \t' lv2 nm2 ->
+      k (TInstArr c' t') lv2 nm2
+
+    go' lv nm _loc (TForall (TyBinder x mk) t) k = do
       let bn = unBare x
       let x'  = Alpha lv bn
       let nm' = M.insert bn x' nm
-      go (lv+1) nm' t $ \t' lv'' nm'' -> k (TForall x' t') lv'' nm''
+      mk' <- traverse (renameTy 0 M.empty) mk
+      go (lv+1) nm' t $ \t' lv'' nm'' -> k (TForall (TyBinder x' mk') t') lv'' nm''
+
+    go' lv nm _loc (TKind t kd) k = do
+      kd' <- renameTy 0 M.empty kd
+      go lv nm t $ \t' lv' nm' -> k (TKind t' kd') lv' nm'
 
     go' lv nm _loc (TMult m) k = k (TMult m) lv nm
     go' lv nm _loc (TQual cs t) k =
@@ -580,6 +738,9 @@ renamePat1 level localnames boundVars (Loc loc pat) cont =
     --     k (PBang <$> p') queue level' localnames' boundVars'
     go (PREV p) k =
       k (PREV <$> fillLater) [p] level localnames boundVars
+    go (PInst p) k =
+      renamePat1 level localnames boundVars p $ \p' queue level' localnames' boundVars' ->
+        k (PInst <$> p') queue level' localnames' boundVars'
 
     fillLater = do
       ~(n:ns) <- get -- lazy pattern to avoid requiring MonadFail Identity.

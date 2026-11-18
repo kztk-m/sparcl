@@ -41,6 +41,8 @@ type ValueTable = M.Map Name Value
 type Env = M.Map Name Value
 
 instance NFData Value where
+  -- NB: dictionaries may be cyclic, so their fields are forced only to WHNF.
+  rnf (VCon c vs) | isDictName c = foldr seq () vs
   rnf (VCon c vs) = rnf (c, vs)
   rnf (VLit l) = rnf l
   rnf (VFun _) = ()
@@ -53,6 +55,7 @@ instance Pretty Value where
   pprPrec _ (VCon c vs)
     | Just _ <- checkNameWTuple c =
         text "&" <> D.tupled (map (pprPrec 0) vs)
+  pprPrec _ (VCon c _) | isDictName c = ppr c
   pprPrec _ (VCon c []) = ppr c
   pprPrec k (VCon c vs) =
     parensIf (k > 9) $

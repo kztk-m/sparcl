@@ -1,0 +1,11 @@
+-- It is intentional that this program causes a type error.
+-- An instance pattern {{p}} needs a known type: an abstraction binding one
+-- needs an annotation.
+
+data Nat = Z | S Nat
+
+class Eq a where
+    sig eq : a -> a -> Bool
+end
+
+def g = (\{{d}} x -> eq {{d}} x x) Z

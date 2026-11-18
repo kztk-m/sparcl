@@ -1,0 +1,16 @@
+-- Classes and instances across modules (2/3): the import and export lists
+-- name neither the instances nor `eq`.
+
+module Examples.ClassModB (Nat, Z, S, leqAndNeq, neqViaOrd) where
+
+import Examples.ClassModA (Nat, Z, S, Eq, neq, Ord, leq)
+
+-- `neq` from the superclass `Eq a` of `Ord a`
+sig neqViaOrd : {{Ord a}} -> a -> a -> Bool
+def neqViaOrd x y = neq x y
+
+sig leqAndNeq : {{Ord a}} -> a -> a -> Bool
+def leqAndNeq x y = case leq x y of
+                      True  -> neq x y
+                    | False -> False
+                    end
