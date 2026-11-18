@@ -578,15 +578,8 @@ simpleExpr startLoc =
     <|> P.try wProjExpr
     <|> misplacedInstArg
   where
-    misplacedInstArg = do
-#if MIN_VERSION_megaparsec(7,0,0)
-      o <- P.getOffset
-      void $ symbol "{{"
-      P.setOffset o
-#else
-      void $ symbol "{{"
-#endif
-      fail "An instance argument {{e}} can be written only as an argument of an application, as in `f {{e}}` (not parenthesized)."
+    misplacedInstArg =
+      failAtSymbol "{{" "An instance argument {{e}} can be written only as an argument of an application, as in `f {{e}}` (not parenthesized)."
 
     withEnd t = do
       endLoc <- getSrcLoc
