@@ -73,7 +73,7 @@ data ErrorDetail
   | -- Type classes
     NoInstance !Ty
   | AmbiguousInstances !Ty ![Name]
-  | AmbiguousGoal !Ty -- metas left in a goal that can no longer be fixed
+  | AmbiguousInstGoal !Ty -- metas left in a goal that can no longer be fixed
   | CannotInferInstArg !Ty -- a polymorphic goal of a top-level definition without a signature
   | InstSearchTooDeep !Ty
   | NotInstArgPosition -- {{e}} / {{p}} where the type has an ordinary arrow
@@ -232,7 +232,7 @@ instance Pretty TypeError where
               [ D.text "Several instances match" <+> D.align (ppr ty) <> D.text ":"
               , D.nest 2 (D.vcat (map ppr ns))
               ]
-          go (AmbiguousGoal ty) =
+          go (AmbiguousInstGoal ty) =
             D.vcat
               [ D.text "Ambiguous instance argument:" <+> D.align (ppr ty)
               , D.text "Its type cannot be determined; add a type annotation."
@@ -531,19 +531,19 @@ data TypingContext
   -- Local instances in scope, the innermost first.
   , tcRefGenCount :: !(IORef Int)
   -- Counter for names `Generated i TypeChecking`.
-  , tcGoals :: !(IORef [Goal])
+  , tcInstGoals :: !(IORef [InstGoal])
   -- Instance goals not solved yet.
   }
 
 -- | An instance goal.
-data Goal = Goal
-  { goalId :: !Name
-  , goalRef :: !(IORef (Maybe (S.LExp 'TypeCheck))) -- the hole in the AST
-  , goalTy :: !Ty -- the class type
-  , goalLocals :: ![(Name, Ty)] -- the local instances at creation
-  , goalLevel :: !TcLevel -- the level at creation
-  , goalLoc :: !(Maybe SrcSpan)
-  , goalCtx :: !TypeErrorContext
+data InstGoal = InstGoal
+  { instGoalId :: !Name
+  , instGoalRef :: !(IORef (Maybe (S.LExp 'TypeCheck))) -- the hole in the AST
+  , instGoalTy :: !Ty -- the class type
+  , instGoalLocals :: ![(Name, Ty)] -- the local instances at creation
+  , instGoalLevel :: !TcLevel -- the level at creation
+  , instGoalLoc :: !(Maybe SrcSpan)
+  , instGoalCtx :: !TypeErrorContext
   }
 
 newGenName :: TC Name
@@ -555,14 +555,14 @@ newGenName = do
 withLocalInsts :: [(Name, Ty)] -> TC r -> TC r
 withLocalInsts xs = local (\tc -> tc{tcLocalInsts = xs ++ tcLocalInsts tc})
 
-addGoals :: [Goal] -> TC ()
-addGoals gs = do
-  ref <- asks tcGoals
+addInstGoals :: [InstGoal] -> TC ()
+addInstGoals gs = do
+  ref <- asks tcInstGoals
   liftIO $ modifyIORef ref (gs ++)
 
-gatherGoals :: TC a -> TC (a, [Goal])
-gatherGoals m = do
-  ref <- asks tcGoals
+gatherInstGoals :: TC a -> TC (a, [InstGoal])
+gatherInstGoals m = do
+  ref <- asks tcInstGoals
   prev <- liftIO $ readIORef ref
   liftIO $ writeIORef ref []
   res <- m
@@ -571,9 +571,9 @@ gatherGoals m = do
   return (res, gs)
 
 -- | Runs a computation in the location and the error context where a goal was made.
-atGoal :: Goal -> TC r -> TC r
-atGoal g =
-  local (\tc -> tc{tcLoc = goalLoc g}) . restoreTypeErrorContext (goalCtx g)
+atInstGoal :: InstGoal -> TC r -> TC r
+atInstGoal g =
+  local (\tc -> tc{tcLoc = instGoalLoc g}) . restoreTypeErrorContext (instGoalCtx g)
 
 -- | Whether trailing instance arguments are inserted.
 data ExpandLast = ExpandLast | DontExpandLast
@@ -616,7 +616,7 @@ initTypingContext = do
       , tcExpandLast = DontExpandLast
       , tcLocalInsts = []
       , tcRefGenCount = rgen
-      , tcGoals = rgoals
+      , tcInstGoals = rgoals
       }
 
 -- This function must be called before each session of type checking.
@@ -628,7 +628,7 @@ refreshTC tc = do
   rgoals <- newIORef []
   return $
     tc
-      { tcGoals = rgoals
+      { tcInstGoals = rgoals
       , tcLocalInsts = []
       , tcExpandLast = DontExpandLast
       , tcTyEnv = M.empty
@@ -1090,7 +1090,7 @@ zonkErrorDetail (LessPolymorphic ty1 ty2 escaped) =
   LessPolymorphic <$> zonkType ty1 <*> zonkType ty2 <*> pure escaped
 zonkErrorDetail (NoInstance ty) = NoInstance <$> zonkType ty
 zonkErrorDetail (AmbiguousInstances ty ns) = AmbiguousInstances <$> zonkType ty <*> pure ns
-zonkErrorDetail (AmbiguousGoal ty) = AmbiguousGoal <$> zonkType ty
+zonkErrorDetail (AmbiguousInstGoal ty) = AmbiguousInstGoal <$> zonkType ty
 zonkErrorDetail (CannotInferInstArg ty) = CannotInferInstArg <$> zonkType ty
 zonkErrorDetail (InstSearchTooDeep ty) = InstSearchTooDeep <$> zonkType ty
 zonkErrorDetail (NotAClass ty) = NotAClass <$> zonkType ty

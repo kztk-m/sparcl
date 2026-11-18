@@ -677,7 +677,7 @@ checkSpine hd args expectedTy = do
             goArgs (Loc l (App f a)) (Loc l (App f' (InstArg e'))) t as
           pure (res, rTy, mergeUseMap umapE umapR)
         (TyInstFun c t, ExplicitArg _) -> do
-          hole <- atExp f $ atLoc (location f) $ newGoal c
+          hole <- atExp f $ atLoc (location f) $ newInstGoal c
           goArgs f (Loc (location f) (App f' (InstArg hole))) t (a : as)
         (TyMetaV _, InstArg e) -> atExp f $ atLoc (location e) $ do
           reportError InstArgUnknownFun
@@ -703,28 +703,28 @@ checkSpine hd args expectedTy = do
           ty' <- instantiate shape
           insertTrailing f' ty'
         TyInstFun c t -> do
-          hole <- atLoc (location f') $ newGoal c
+          hole <- atLoc (location f') $ newInstGoal c
           insertTrailing (Loc (location f') (App f' (InstArg hole))) t
         _ -> pure (f', ty)
 
 -- | Makes a goal for an instance argument and returns its hole.
-newGoal :: Ty -> TC (LExp 'TypeCheck)
-newGoal c = do
+newInstGoal :: Ty -> TC (LExp 'TypeCheck)
+newInstGoal c = do
   g <- newGenName
   ref <- liftIO $ newIORef Nothing
   locals <- asks tcLocalInsts
   lv <- askCurrentTcLevel
   l <- asks tcLoc
   ctx <- currentTypeErrorContext
-  addGoals
-    [ Goal
-        { goalId = g
-        , goalRef = ref
-        , goalTy = c
-        , goalLocals = locals
-        , goalLevel = lv
-        , goalLoc = l
-        , goalCtx = ctx
+  addInstGoals
+    [ InstGoal
+        { instGoalId = g
+        , instGoalRef = ref
+        , instGoalTy = c
+        , instGoalLocals = locals
+        , instGoalLevel = lv
+        , instGoalLoc = l
+        , instGoalCtx = ctx
         }
     ]
   pure $ Loc (fromMaybe NoLoc l) (InstHole () (g, c) ref)
@@ -1079,9 +1079,9 @@ generalizeTy ty_ um = do
 
 inferPolyTy :: Bool -> LExp 'Renaming -> TC (LExp 'TypeCheck, PolyTy, UseMap)
 inferPolyTy isMultipleUse expr = do
-  ((expr', ty, umap), goals) <- gatherGoals $ pushLevel $ inferTy expr
+  ((expr', ty, umap), goals) <- gatherInstGoals $ pushLevel $ inferTy expr
 
-  solveGoals (ReportAtTopLevel False) goals
+  solveInstGoals (ReportAtTopLevel False) goals
 
   -- (umapM, csM) <- if isMultipleUse then raiseUse (TyMult Omega) umap
   --                 else return (umap, [])
@@ -1102,7 +1102,7 @@ inferExp expr = do
   -- polyTy <- quantify (mvs \\ envMetaVars) ty'
   -- trace (prettyShow ty' ++ " --> " ++ prettyShow polyTy) $ return (expr', polyTy)
   (expr', polyTy, _) <- inferPolyTy True expr
-  reportLeftoverGoals
+  reportLeftoverInstGoals
   return (expr', polyTy)
 
 checkAltsTy ::
@@ -1316,7 +1316,7 @@ inferTopDecls decls dataDecls typeDecls classDecls instDecls0 = do
                       }
               pure (typedDefaults, typedInsts)
 
-            reportLeftoverGoals
+            reportLeftoverInstGoals
             return
               ( decls'
               , nts
@@ -1377,9 +1377,9 @@ inferTopDecls decls dataDecls typeDecls classDecls instDecls0 = do
       dicts <- case hd of
         TyCon c ts | Just ci <- M.lookup c cenv ->
           forM (ciSupers ci) $ \s -> do
-            g <- makeGoal locals (substTy (zip (ciParams ci) ts) s)
-            solveGoals (ReportAtTopLevel True) [g]
-            liftIO $ readIORef (goalRef g)
+            g <- makeInstGoal locals (substTy (zip (ciParams ci) ts) s)
+            solveInstGoals (ReportAtTopLevel True) [g]
+            liftIO $ readIORef (instGoalRef g)
         _ -> pure []
       pure (locals, catMaybes dicts)
 
@@ -1575,7 +1575,7 @@ inferMutual isTopLevel decls = do
       Nothing -> newMetaTy
 
     fmap gatherU $ withVars (zip names tys) $ forM defs $ \(loc, n, pcs) -> atLoc loc $ do
-      ((entry, umap), goals) <- gatherGoals $
+      ((entry, umap), goals) <- gatherInstGoals $
         case M.lookup n sigMap of
           Nothing -> do
             bodyTy <- newMetaTy
@@ -1591,7 +1591,7 @@ inferMutual isTopLevel decls = do
   let (nts0, goalss) = unzip nts0g
 
   forM_ (zip nts0 goalss) $ \((_, _, tt, _), goals) ->
-    solveGoals
+    solveInstGoals
       ( if isTopLevel
           then ReportAtTopLevel (either (const False) (const True) tt)
           else PostponeOutward
@@ -1764,8 +1764,8 @@ checkSigDef ::
   -> [([LPat 'Renaming], Clause 'Renaming)]
   -> TC TypedClauses
 checkSigDef loc n polyTy pcs = atLoc loc $ do
-  ((pcs', _, (_, given, cs)), goals) <- pushLevel $ gatherGoals $ checkSigDefBody loc polyTy pcs
-  solveGoals (ReportAtTopLevel True) goals
+  ((pcs', _, (_, given, cs)), goals) <- pushLevel $ gatherInstGoals $ checkSigDefBody loc polyTy pcs
+  solveInstGoals (ReportAtTopLevel True) goals
   finishSigDef True n polyTy given cs
   pure pcs'
 

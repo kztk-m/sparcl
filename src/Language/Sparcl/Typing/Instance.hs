@@ -3,11 +3,11 @@
 -- | Instance search and the solving of instance goals (see notes/TypeClasses.md).
 module Language.Sparcl.Typing.Instance (
   SearchResult (..),
-  searchGoal,
+  searchInstGoal,
   Unsolved (..),
-  solveGoals,
-  reportLeftoverGoals,
-  makeGoal,
+  solveInstGoals,
+  reportLeftoverInstGoals,
+  makeInstGoal,
   normTy,
   maxSearchDepth,
   -- for the unit tests
@@ -36,7 +36,7 @@ maxSearchDepth = 32
 
 data SearchResult
   = -- | the dictionary and the postponed subgoals
-    SFound !(LExp 'TypeCheck) ![Goal]
+    SFound !(LExp 'TypeCheck) ![InstGoal]
   | -- | undecided because of metas
     SStuck
   | SNoInstance !Ty
@@ -168,14 +168,14 @@ splitInstTy t = ([], [], t)
 
 -- * Search
 
-searchGoal :: Goal -> TC SearchResult
-searchGoal g = normTy (goalTy g) >>= searchTy g 0
+searchInstGoal :: InstGoal -> TC SearchResult
+searchInstGoal g = normTy (instGoalTy g) >>= searchTy g 0
 
-searchTy :: Goal -> Int -> Ty -> TC SearchResult
+searchTy :: InstGoal -> Int -> Ty -> TC SearchResult
 searchTy _ depth ty
   | depth > maxSearchDepth = pure (STooDeep ty)
 searchTy g depth ty@(TyCon c _) = do
-  (locals, cut) <- localCandidates (maxSearchDepth - depth) (goalLocals g)
+  (locals, cut) <- localCandidates (maxSearchDepth - depth) (instGoalLocals g)
   tbl <- asks tcTyEnv
   let matching = [e | (lt, e) <- locals, isJust (unifyPure tbl [] False lt ty)]
       unifiable = [() | (lt, _) <- locals, isJust (unifyPure tbl [] True lt ty)]
@@ -207,14 +207,14 @@ searchTy g depth ty@(TyCon c _) = do
         r <- searchTy g (depth + 1) h'
         case r of
           SStuck -> do
-            sub <- makeGoalLike g h'
-            pure (Right (goalHole sub, [sub]))
+            sub <- makeInstGoalLike g h'
+            pure (Right (instGoalHole sub, [sub]))
           SFound e gs -> pure (Right (e, gs))
           err -> pure (Left err)
       case [err | Left err <- rs] of
         err : _ -> pure err
         [] -> do
-          let l = fromMaybe NoLoc (goalLoc g)
+          let l = fromMaybe NoLoc (instGoalLoc g)
               args = [e | Right (e, _) <- rs]
               dict = foldl (\f a -> Loc l (App f (InstArg a))) (Loc l (Var (x, ity))) args
           pure (SFound dict (concat [gs | Right (_, gs) <- rs]))
@@ -223,33 +223,33 @@ searchTy _ _ _ = pure SStuck
 -- * Goals
 
 -- | Makes a goal without adding it to the list of goals.
-makeGoal :: [(Name, Ty)] -> Ty -> TC Goal
-makeGoal locals c = do
+makeInstGoal :: [(Name, Ty)] -> Ty -> TC InstGoal
+makeInstGoal locals c = do
   g <- newGenName
   ref <- liftIO $ newIORef Nothing
   lv <- askCurrentTcLevel
   l <- asks tcLoc
   ctx <- currentTypeErrorContext
   pure
-    Goal
-      { goalId = g
-      , goalRef = ref
-      , goalTy = c
-      , goalLocals = locals
-      , goalLevel = lv
-      , goalLoc = l
-      , goalCtx = ctx
+    InstGoal
+      { instGoalId = g
+      , instGoalRef = ref
+      , instGoalTy = c
+      , instGoalLocals = locals
+      , instGoalLevel = lv
+      , instGoalLoc = l
+      , instGoalCtx = ctx
       }
 
 -- | A goal for a subgoal, in the scope of the given goal.
-makeGoalLike :: Goal -> Ty -> TC Goal
-makeGoalLike g c = do
+makeInstGoalLike :: InstGoal -> Ty -> TC InstGoal
+makeInstGoalLike g c = do
   n <- newGenName
   ref <- liftIO $ newIORef Nothing
-  pure g{goalId = n, goalRef = ref, goalTy = c}
+  pure g{instGoalId = n, instGoalRef = ref, instGoalTy = c}
 
-goalHole :: Goal -> LExp 'TypeCheck
-goalHole g = Loc (fromMaybe NoLoc (goalLoc g)) (InstHole () (goalId g, goalTy g) (goalRef g))
+instGoalHole :: InstGoal -> LExp 'TypeCheck
+instGoalHole g = Loc (fromMaybe NoLoc (instGoalLoc g)) (InstHole () (instGoalId g, instGoalTy g) (instGoalRef g))
 
 -- | What to do with goals that cannot be decided.
 data Unsolved
@@ -258,46 +258,46 @@ data Unsolved
   | -- | report as errors (the flag: the definition has a signature)
     ReportAtTopLevel Bool
 
-solveGoals :: Unsolved -> [Goal] -> TC ()
-solveGoals policy = mapM_ solveOne
+solveInstGoals :: Unsolved -> [InstGoal] -> TC ()
+solveInstGoals policy = mapM_ solveOne
   where
     solveOne g = do
-      r <- searchGoal g
+      r <- searchInstGoal g
       case r of
         SFound e gs -> do
-          liftIO $ writeIORef (goalRef g) (Just e)
+          liftIO $ writeIORef (instGoalRef g) (Just e)
           mapM_ unsolved gs
         SStuck -> unsolved g
         SNoInstance ty -> do
           gen <- wouldBeGeneralized ty
-          atGoal g $
+          atInstGoal g $
             reportError $
               case policy of
                 ReportAtTopLevel False | gen -> CannotInferInstArg ty
                 _ -> NoInstance ty
-        SAmbiguous ty ns -> atGoal g $ reportError (AmbiguousInstances ty ns)
-        STooDeep ty -> atGoal g $ reportError (InstSearchTooDeep ty)
+        SAmbiguous ty ns -> atInstGoal g $ reportError (AmbiguousInstances ty ns)
+        STooDeep ty -> atInstGoal g $ reportError (InstSearchTooDeep ty)
 
     unsolved g = case policy of
-      PostponeOutward -> addGoals [g]
+      PostponeOutward -> addInstGoals [g]
       ReportAtTopLevel hasSig -> do
-        ty <- normTy (goalTy g)
+        ty <- normTy (instGoalTy g)
         generalizable <- wouldBeGeneralized ty
-        atGoal g $
+        atInstGoal g $
           reportError $
             if not hasSig && generalizable
               then CannotInferInstArg ty
-              else AmbiguousGoal ty
+              else AmbiguousInstGoal ty
 
     wouldBeGeneralized ty = do
       lv <- askCurrentTcLevel
       lvs <- mapM readTcLevelMv (nub (metaTyVars ty))
       pure (any (> lv) lvs)
 
-reportLeftoverGoals :: TC ()
-reportLeftoverGoals = do
-  ref <- asks tcGoals
+reportLeftoverInstGoals :: TC ()
+reportLeftoverInstGoals = do
+  ref <- asks tcInstGoals
   gs <- liftIO $ readIORef ref
   liftIO $ writeIORef ref []
   unless (null gs) $
-    mapM_ (\g -> normTy (goalTy g) >>= atGoal g . reportError . AmbiguousGoal) gs
+    mapM_ (\g -> normTy (instGoalTy g) >>= atInstGoal g . reportError . AmbiguousInstGoal) gs
