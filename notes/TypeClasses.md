@@ -1,6 +1,8 @@
 Type Classes in Sparcl
 =====================
 
+Author: Claude (Anthropic)
+
 This note describes the type-class extension of Sparcl (branch
 `type-class`, with higher-kinded classes on branch `higher-kinded`): what
 can be written, how it is checked and executed, and its current

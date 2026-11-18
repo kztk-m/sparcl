@@ -1,6 +1,8 @@
 Kinds and Higher-Kinded Types in Sparcl
 =======================================
 
+Author: Claude (Anthropic)
+
 This note describes the kind system of Sparcl (branch `higher-kinded`):
 type-level expressions may be applied to arguments whatever their head
 is, every type-level expression has a kind, and kinds are inferred and
